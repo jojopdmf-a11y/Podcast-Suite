@@ -89,6 +89,10 @@ struct ChannelProcessor {
     var dspBypass: Bool = false
     var eqGains: [Float] = Array(repeating: 0, count: 10)
     var eqBypass: Bool = false
+    var paraFreqHz: Float = 1_000
+    var paraGainDb: Float = 0
+    var paraWidth: ParaEQWidth = .narrow
+    var paraBypass: Bool = false
 
     var deVerbAmount: Float = 0
     var deVerbBypass: Bool = false
@@ -101,6 +105,7 @@ struct ChannelProcessor {
 
     private var eqL = GraphicEQ()
     private var eqR = GraphicEQ()
+    private var para = ParaEQDSP()
     private var deVerb = DeVerbDSP()
     private var wetter = WetterDSP()
     private var leveler = LevelerDSP()
@@ -117,6 +122,11 @@ struct ChannelProcessor {
         eqL.configure(sampleRate: sampleRate, gainsDb: eqGains)
         eqR.configure(sampleRate: sampleRate, gainsDb: eqGains)
         if hasVoiceFX {
+            para.freqHz = paraFreqHz
+            para.gainDb = paraGainDb
+            para.width = paraWidth
+            para.bypass = paraBypass || dspBypass
+            para.configure(sampleRate: sampleRate)
             deVerb.configure(sampleRate: sampleRate)
             wetter.configure(sampleRate: sampleRate)
             deVerb.amount = deVerbAmount
@@ -132,6 +142,7 @@ struct ChannelProcessor {
     mutating func reset() {
         eqL.reset()
         eqR.reset()
+        para.reset()
         deVerb.reset()
         wetter.reset()
         leveler.reset()
@@ -149,6 +160,7 @@ struct ChannelProcessor {
             switch slot {
             case .eq:
                 if !eqBypass { y = eqL.process(y) }
+                if hasVoiceFX && !paraBypass { y = para.process(y) }
             case .deVerb:
                 if hasVoiceFX { y = deVerb.process(y, sampleRate: sampleRate) }
             case .wetter:

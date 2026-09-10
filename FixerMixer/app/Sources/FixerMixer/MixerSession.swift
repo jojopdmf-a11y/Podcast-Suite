@@ -45,6 +45,68 @@ struct ChannelEQ: Equatable {
     }
 }
 
+/// How fast bandwidth collapses as |gain| grows. Notch is the most surgical.
+enum ParaEQWidth: String, CaseIterable, Identifiable, Hashable {
+    case notch
+    case narrow
+    case wide
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .notch: return "NOTCH"
+        case .narrow: return "NARROW"
+        case .wide: return "WIDE"
+        }
+    }
+
+    /// Octave bandwidth at this gain. Shrinks as you boost or cut.
+    func bandwidthOctaves(gainDb: Float) -> Float {
+        let g = abs(gainDb)
+        let bw0: Float
+        let k: Float
+        switch self {
+        case .notch:
+            bw0 = 0.38
+            k = 0.30
+        case .narrow:
+            bw0 = 0.90
+            k = 0.14
+        case .wide:
+            bw0 = 1.70
+            k = 0.055
+        }
+        return bw0 / (1 + k * g)
+    }
+
+    func q(gainDb: Float) -> Float {
+        let bw = Double(max(0.02, bandwidthOctaves(gainDb: gainDb)))
+        let q = 1.0 / (2.0 * sinh(log(2.0) / 2.0 * bw))
+        return Float(min(40, max(0.3, q)))
+    }
+}
+
+/// Single speaker-only parametric band. Music / master never get one.
+struct ChannelParaEQ: Equatable {
+    static let minHz: Float = 40
+    static let maxHz: Float = 12_000
+    static let minGainDb: Float = -18
+    static let maxGainDb: Float = 18
+
+    var freqHz: Float = 1_000
+    var gainDb: Float = 0
+    var width: ParaEQWidth = .narrow
+    var bypass: Bool = false
+
+    var isActive: Bool { abs(gainDb) > 0.05 }
+
+    mutating func clamp() {
+        freqHz = min(Self.maxHz, max(Self.minHz, freqHz))
+        gainDb = min(Self.maxGainDb, max(Self.minGainDb, gainDb))
+    }
+}
+
 struct VoiceFX: Equatable {
     var deVerb: Float = 0
     var deVerbBypass: Bool = false
@@ -111,6 +173,7 @@ struct ChannelStripState: Identifiable, Equatable {
     var autoBiasDb: Float = 0
     var pan: Float = 0
     var eq = ChannelEQ()
+    var para = ChannelParaEQ()
     var voice = VoiceFX()
     /// Signal flow order for this channel’s processors.
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault

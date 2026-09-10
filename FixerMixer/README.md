@@ -2,7 +2,7 @@
 
 Mac mixer for Podcast Stripper exports: **5 mono speaker channels** + **1 stereo Music/SFX** channel.
 
-Native DSP (inspired by, not affiliated with): De-verb, Wetter, Leveler, graphic EQ.
+Native DSP (inspired by, not affiliated with): De-verb, Wetter, Leveler, graphic EQ, plus a speaker-only proportional-Q parametric band (Notch / Narrow / Wide).
 
 ## Build
 

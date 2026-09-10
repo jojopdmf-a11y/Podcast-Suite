@@ -106,3 +106,51 @@ struct GraphicEQ {
         return y
     }
 }
+
+/// Speaker-only proportional-Q peaking band. Bandwidth narrows as |gain| grows.
+struct ParaEQDSP {
+    var freqHz: Float = 1_000
+    var gainDb: Float = 0
+    var width: ParaEQWidth = .narrow
+    var bypass: Bool = false
+
+    private var filter = Biquad()
+    private var sampleRate: Double = 44_100
+    private var lastFreq: Float = -1
+    private var lastGain: Float = 999
+    private var lastWidth: ParaEQWidth = .narrow
+    private var lastRate: Double = 0
+
+    mutating func configure(sampleRate: Double) {
+        let rateChanged = abs(self.sampleRate - sampleRate) > 0.5
+        self.sampleRate = sampleRate
+        if rateChanged
+            || abs(freqHz - lastFreq) > 0.05
+            || abs(gainDb - lastGain) > 0.01
+            || width != lastWidth
+            || abs(lastRate - sampleRate) > 0.5
+        {
+            let nyquist = Float(sampleRate * 0.45)
+            let f = min(max(freqHz, ChannelParaEQ.minHz), min(ChannelParaEQ.maxHz, nyquist))
+            filter.setPeaking(
+                sampleRate: sampleRate,
+                freq: Double(f),
+                gainDb: gainDb,
+                q: width.q(gainDb: gainDb)
+            )
+            lastFreq = freqHz
+            lastGain = gainDb
+            lastWidth = width
+            lastRate = sampleRate
+        }
+    }
+
+    mutating func reset() {
+        filter.reset()
+    }
+
+    mutating func process(_ x: Float) -> Float {
+        if bypass || abs(gainDb) < 0.01 { return x }
+        return filter.process(x)
+    }
+}

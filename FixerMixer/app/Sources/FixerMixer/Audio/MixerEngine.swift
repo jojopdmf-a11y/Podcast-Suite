@@ -272,6 +272,10 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].dspBypass = voices[i].dspBypass
             processors[i].eqGains = voices[i].eq.gains
             processors[i].eqBypass = voices[i].eq.bypass
+            processors[i].paraFreqHz = voices[i].para.freqHz
+            processors[i].paraGainDb = voices[i].para.gainDb
+            processors[i].paraWidth = voices[i].para.width
+            processors[i].paraBypass = voices[i].para.bypass
             processors[i].deVerbAmount = voices[i].voice.deVerb
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
