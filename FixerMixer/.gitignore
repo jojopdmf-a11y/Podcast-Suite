@@ -1,0 +1,9 @@
+# FixerMixer
+.DS_Store
+.venv
+__pycache__/
+app/.build/
+app/.swiftpm/
+dist/
+*.xcuserstate
+xcuserdata/

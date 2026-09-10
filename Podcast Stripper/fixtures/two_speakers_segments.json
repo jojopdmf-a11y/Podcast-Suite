@@ -1,0 +1,14 @@
+{
+  "segments": [
+    {
+      "start": 0.0,
+      "end": 5.807,
+      "speaker": "SPEAKER_00"
+    },
+    {
+      "start": 6.407,
+      "end": 12.278,
+      "speaker": "SPEAKER_01"
+    }
+  ]
+}
