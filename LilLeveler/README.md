@@ -4,6 +4,10 @@ Mac loudness finisher for podcast finals: drop a mix → pick a platform target 
 
 Companion to **Podcast Stripper** and **Fixer Mixer**. Same dark cyan neon look.
 
+## Test an update
+
+In the Podcast Suite folder, double-click **`Update Lil Leveler.command`**. That pulls GitHub, rebuilds, and launches the app.
+
 ## Build
 
 ```bash

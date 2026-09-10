@@ -17,4 +17,6 @@ cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
 # Finder shows the display name from Info.plist; keep the binary name space-free.
 chmod +x "$APP/Contents/MacOS/PodcastStripper"
 echo "Built $APP"
-open -R "$APP"
+if [[ "${SKIP_REVEAL:-}" != "1" ]]; then
+  open -R "$APP"
+fi

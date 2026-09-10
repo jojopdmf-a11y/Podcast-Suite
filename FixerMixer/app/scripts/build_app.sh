@@ -19,4 +19,6 @@ if [[ -f "$ICON_SRC" ]]; then
 fi
 chmod +x "$APP/Contents/MacOS/FixerMixer"
 echo "Built $APP"
-open -R "$APP"
+if [[ "${SKIP_REVEAL:-}" != "1" ]]; then
+  open -R "$APP"
+fi

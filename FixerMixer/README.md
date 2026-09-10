@@ -4,14 +4,9 @@ Mac mixer for Podcast Stripper exports: **5 mono speaker channels** + **1 stereo
 
 Native DSP (inspired by, not affiliated with): De-verb, Wetter, Leveler, graphic EQ, plus a speaker-only proportional-Q parametric band (Notch / Narrow / Wide).
 
-## Build
+## Test an update
 
-```bash
-chmod +x app/scripts/build_app.sh
-./app/scripts/build_app.sh
-```
-
-Opens `dist/Fixer Mixer.app`. Keep the app inside this project folder.
+In the Podcast Suite folder, double-click **`Update Fixer Mixer.command`**. That pulls GitHub, rebuilds, and launches the app.
 
 ## Use
 

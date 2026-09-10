@@ -8,6 +8,10 @@ This is version 1. It does not transcribe, name speakers, or unmix two people ta
 
 Speaker detection uses [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) on the original mix. Set **Speakers** to the real headcount when you know it — that is the main control if voices land wrong.
 
+## Test an update
+
+In the Podcast Suite folder, double-click **`Update Podcast Stripper.command`**. That pulls GitHub, rebuilds, and launches the app.
+
 ## What you need
 
 - A Mac with Apple Silicon (M1 or newer) is strongly preferred
