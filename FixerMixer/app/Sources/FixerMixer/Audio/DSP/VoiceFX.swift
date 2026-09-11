@@ -4,7 +4,7 @@ import Foundation
 /// (No wet/dry blend — Drive is correction strength + how hard you push into the ceiling.)
 struct LevelerDSP {
     var drive: Float = 0
-    var targetDb: Float = -18
+    var targetDb: Float = -6
     var bypass: Bool = false
     private var env: Float = 0
     private var gain: Float = 1
@@ -80,10 +80,11 @@ struct LevelerDSP {
     }
 }
 
-/// Drum-room reverb: bright, punchy early reflections + short lively decay.
+/// Small-space voice reverb. Three tones, all short of a hall — just air for dry podcast mics.
 struct WetterDSP {
     var amount: Float = 0
     var bypass: Bool = false
+    var room: WetterRoom = .drumRoom
     private var combBufs: [[Float]] = []
     private var combPos: [Int] = []
     private var combDamp: [Float] = []
@@ -92,24 +93,77 @@ struct WetterDSP {
     private var earlyBuf: [Float] = []
     private var earlyPos: Int = 0
     private var configuredRate: Double = 0
+    private var configuredRoom: WetterRoom?
 
     mutating func configure(sampleRate: Double) {
-        guard abs(configuredRate - sampleRate) > 0.5 else { return }
+        let rateChanged = abs(configuredRate - sampleRate) > 0.5
+        let roomChanged = configuredRoom != room
+        guard rateChanged || roomChanged || combBufs.isEmpty else { return }
         configuredRate = sampleRate
+        configuredRoom = room
         rebuildCombs(sampleRate: sampleRate)
     }
 
+    private struct Tone {
+        var combMs: [Double]
+        var apMs: [Double]
+        var earlyMs: Double
+        var feedback: Float
+        var dampCoeff: Float
+        var combGain: Float
+        var earlyGain: Float
+        var apGain: Float
+    }
+
+    private var tone: Tone {
+        switch room {
+        case .drumRoom:
+            // Original Wetter: bright, punchy, still short.
+            return Tone(
+                combMs: [17.9, 22.3, 26.1, 29.7, 33.3],
+                apMs: [4.7, 2.3, 1.1],
+                earlyMs: 12,
+                feedback: 0.58,
+                dampCoeff: 0.12,
+                combGain: 0.72,
+                earlyGain: 0.45,
+                apGain: 0.62
+            )
+        case .studio:
+            // Treated booth / control-room air. Tighter, warmer, less slap.
+            return Tone(
+                combMs: [11.3, 13.9, 16.7, 19.1, 21.8],
+                apMs: [3.1, 1.7, 0.9],
+                earlyMs: 7,
+                feedback: 0.38,
+                dampCoeff: 0.38,
+                combGain: 0.88,
+                earlyGain: 0.20,
+                apGain: 0.52
+            )
+        case .stage:
+            // Small live floor / club talker. A little more space, not a hall.
+            return Tone(
+                combMs: [23.1, 28.4, 34.2, 39.6, 44.8],
+                apMs: [6.8, 3.4, 1.8],
+                earlyMs: 18,
+                feedback: 0.44,
+                dampCoeff: 0.24,
+                combGain: 0.78,
+                earlyGain: 0.34,
+                apGain: 0.58
+            )
+        }
+    }
+
     private mutating func rebuildCombs(sampleRate: Double) {
-        // Drum booth denseness — slightly longer than studio air, still short of a hall
-        let combMs: [Double] = [17.9, 22.3, 26.1, 29.7, 33.3]
-        combBufs = combMs.map { Array(repeating: 0, count: max(1, Int(sampleRate * $0 / 1000.0))) }
+        let t = tone
+        combBufs = t.combMs.map { Array(repeating: 0, count: max(1, Int(sampleRate * $0 / 1000.0))) }
         combPos = Array(repeating: 0, count: combBufs.count)
         combDamp = Array(repeating: 0, count: combBufs.count)
-        let apMs: [Double] = [4.7, 2.3, 1.1]
-        apBufs = apMs.map { Array(repeating: 0, count: max(1, Int(sampleRate * $0 / 1000.0))) }
+        apBufs = t.apMs.map { Array(repeating: 0, count: max(1, Int(sampleRate * $0 / 1000.0))) }
         allpassPos = Array(repeating: 0, count: apBufs.count)
-        // Early slap (~12 ms) for room punch
-        earlyBuf = Array(repeating: 0, count: max(1, Int(sampleRate * 0.012)))
+        earlyBuf = Array(repeating: 0, count: max(1, Int(sampleRate * t.earlyMs / 1000.0)))
         earlyPos = 0
     }
 
@@ -128,7 +182,7 @@ struct WetterDSP {
         if bypass || amount < 0.001 { return x }
         if combBufs.isEmpty { rebuildCombs(sampleRate: sampleRate) }
 
-        // Bright early reflection
+        let t = tone
         let early = earlyBuf.isEmpty ? 0 : earlyBuf[earlyPos]
         if !earlyBuf.isEmpty {
             earlyBuf[earlyPos] = x
@@ -137,15 +191,12 @@ struct WetterDSP {
         }
 
         var sum: Float = 0
-        // Livlier decay than studio air; light damp keeps it bright (drum room)
-        let feedback: Float = 0.58
-        let dampCoeff: Float = 0.12
         for i in combBufs.indices {
             let n = combBufs[i].count
             var p = combPos[i]
             let delayed = combBufs[i][p]
-            combDamp[i] = delayed + (combDamp[i] - delayed) * dampCoeff
-            let y = x + combDamp[i] * feedback
+            combDamp[i] = delayed + (combDamp[i] - delayed) * t.dampCoeff
+            let y = x + combDamp[i] * t.feedback
             combBufs[i][p] = y
             p += 1
             if p >= n { p = 0 }
@@ -153,20 +204,20 @@ struct WetterDSP {
             sum += delayed
         }
         var wet = sum / Float(max(1, combBufs.count))
-        wet = wet * 0.72 + early * 0.45
-        let apGain: Float = 0.62
+        wet = wet * t.combGain + early * t.earlyGain
         for i in apBufs.indices {
             let n = apBufs[i].count
             var p = allpassPos[i]
             let buf = apBufs[i][p]
             let y = -wet + buf
-            apBufs[i][p] = wet + buf * apGain
+            apBufs[i][p] = wet + buf * t.apGain
             p += 1
             if p >= n { p = 0 }
             allpassPos[i] = p
             wet = y
         }
-        let wetMix = amount * 0.38
+        // 30% less than the original full-wet mix (0.38 → 0.266).
+        let wetMix = amount * 0.266
         return x * (1 - wetMix) + wet * wetMix
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Hardware-inspired chrome (original — not affiliated with Waves/API)
@@ -67,6 +68,8 @@ struct HardwareKnob: View {
     var diameter: CGFloat = 56
     var stops: [Float]? = nil
     var defaultValue: Float = 0
+    /// 1 = original speed. Para EQ uses a lower value so frequency sweeps stay controllable.
+    var dragSensitivity: Float = 1
 
     enum KnobStyle {
         case metal
@@ -220,7 +223,8 @@ struct HardwareKnob: View {
                         if g.translation == .zero {
                             dragStartValue = value
                         }
-                        let delta = -Float(g.translation.height) * 0.012
+                        let fine: Float = NSEvent.modifierFlags.contains(.option) ? 0.22 : 1
+                        let delta = -Float(g.translation.height) * 0.012 * dragSensitivity * fine
                         if let stops, stops.count > 1 {
                             let startIdx = Float(
                                 stops.enumerated().min(by: {
@@ -249,7 +253,7 @@ struct HardwareKnob: View {
                 .tracking(0.5)
                 .foregroundStyle(APILook.label)
         }
-        .help("Double-click to reset")
+        .help("Double-click to reset · Option-drag for fine")
     }
 }
 

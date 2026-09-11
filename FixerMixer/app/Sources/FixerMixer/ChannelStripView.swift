@@ -696,9 +696,15 @@ struct TimelineWaveformView: View {
                                     onSeek(start + tVis * window)
                                 }
                         )
+                        .overlay {
+                            WaveformPointerZoom { event in
+                                handlePointerZoom(event, width: w)
+                            }
+                        }
                 }
             }
             .frame(height: 88)
+            .help("Scroll or pinch to zoom · − / + / RESET also work")
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
@@ -716,10 +722,34 @@ struct TimelineWaveformView: View {
     }
 
     private func zoomAroundPlayhead(_ newZoom: Double) {
+        zoomAroundAnchor(newZoom, anchor: playhead, fractionInWindow: 0.5)
+    }
+
+    private func zoomAroundAnchor(_ newZoom: Double, anchor: Double, fractionInWindow: Double) {
         let z = min(16, max(1, newZoom))
         let nextWindow = 1 / z
-        start = min(max(0, playhead - nextWindow / 2), max(0, 1 - nextWindow))
+        let frac = max(0, min(1, fractionInWindow))
+        start = min(max(0, anchor - frac * nextWindow), max(0, 1 - nextWindow))
         zoom = z
+    }
+
+    private func handlePointerZoom(_ event: NSEvent, width: CGFloat) {
+        let tVis = pointerFraction(width: width)
+        let anchor = start + tVis * window
+        let factor: Double
+        if event.type == .magnify {
+            factor = max(0.5, 1 + Double(event.magnification) * 1.35)
+        } else {
+            let dy = Double(event.scrollingDeltaY)
+            let unit = event.hasPreciseScrollingDeltas ? dy / 90.0 : dy * 0.18
+            factor = pow(2.0, unit)
+        }
+        zoomAroundAnchor(zoom * factor, anchor: anchor, fractionInWindow: tVis)
+    }
+
+    private func pointerFraction(width: CGFloat) -> Double {
+        let x = WaveformPointerZoom.lastLocalX ?? (width / 2)
+        return max(0, min(1, Double(x / max(width, 1))))
     }
 
     private func keepPlayheadVisible(_ p: Double) {
@@ -729,5 +759,63 @@ struct TimelineWaveformView: View {
         } else if p > start + w {
             start = min(1 - w, p - w * 0.92)
         }
+    }
+}
+
+/// Scroll-wheel / trackpad pinch zoom without stealing click-drag seek.
+private struct WaveformPointerZoom: NSViewRepresentable {
+    static var lastLocalX: CGFloat?
+
+    var onEvent: (NSEvent) -> Void
+
+    func makeNSView(context: Context) -> MonitorView {
+        let v = MonitorView()
+        v.onEvent = onEvent
+        return v
+    }
+
+    func updateNSView(_ nsView: MonitorView, context: Context) {
+        nsView.onEvent = onEvent
+    }
+
+    final class MonitorView: NSView {
+        var onEvent: ((NSEvent) -> Void)?
+        private var monitor: Any?
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                install()
+            } else {
+                remove()
+            }
+        }
+
+        private func install() {
+            remove()
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { [weak self] event in
+                guard let self, self.window != nil else { return event }
+                let loc = self.convert(event.locationInWindow, from: nil)
+                guard self.bounds.contains(loc) else { return event }
+                if event.type == .scrollWheel,
+                   abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+                    return event
+                }
+                WaveformPointerZoom.lastLocalX = loc.x
+                self.onEvent?(event)
+                return nil
+            }
+        }
+
+        private func remove() {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+            monitor = nil
+        }
+
+        deinit { remove() }
     }
 }

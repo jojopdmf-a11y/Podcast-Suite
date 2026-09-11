@@ -141,12 +141,19 @@ struct SelectedChannelPanel: View {
             }
         case .wetter:
             dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.wetterBypass) {
-                MixerLabeledSlider(title: "AMOUNT", value: $channel.voice.wetter, range: 0...1, asPercent: true, defaultValue: 0)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 4) {
+                        ForEach(WetterRoom.allCases) { mode in
+                            wetterRoomButton(mode)
+                        }
+                    }
+                    MixerLabeledSlider(title: "AMOUNT", value: $channel.voice.wetter, range: 0...1, asPercent: true, defaultValue: 0)
+                }
             }
         case .leveler:
             dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.levelerBypass) {
                 VStack(spacing: 8) {
-                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...(-6), asPercent: false, defaultValue: -18)
+                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...(-6), asPercent: false, defaultValue: -6)
                     MixerLabeledSlider(title: "DRIVE", value: $channel.voice.levelerDrive, range: 0...1, asPercent: true, defaultValue: 0)
                 }
             }
@@ -186,6 +193,41 @@ struct SelectedChannelPanel: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(APILook.border, lineWidth: 1)
         )
+    }
+
+    private func wetterRoomButton(_ mode: WetterRoom) -> some View {
+        let on = channel.voice.wetterRoom == mode
+        return Button {
+            channel.voice.wetterRoom = mode
+        } label: {
+            VStack(spacing: 4) {
+                LEDDot(on: on, color: APILook.ledGreen)
+                Text(mode.title)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.3)
+                    .foregroundStyle(APILook.label)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: on
+                                ? [Color(white: 0.22), Color(white: 0.14)]
+                                : [Color(white: 0.18), Color(white: 0.10)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(on ? APILook.accentBlue.opacity(0.7) : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(mode.help)
     }
 }
 
@@ -263,7 +305,8 @@ struct ParaEQView: View {
                     label: "FREQ",
                     valueText: { Self.freqLabel(hz: exp2($0)) },
                     diameter: 52,
-                    defaultValue: log2(Float(1_000))
+                    defaultValue: log2(Float(1_000)),
+                    dragSensitivity: 0.32
                 )
                 HardwareKnob(
                     value: Binding(
@@ -277,7 +320,8 @@ struct ParaEQView: View {
                     label: "GAIN",
                     valueText: { abs($0) < 0.05 ? "0.0 dB" : String(format: "%+.1f dB", $0) },
                     diameter: 52,
-                    defaultValue: 0
+                    defaultValue: 0,
+                    dragSensitivity: 0.45
                 )
                 VStack(alignment: .leading, spacing: 6) {
                     Text("WIDTH")
@@ -295,7 +339,7 @@ struct ParaEQView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            Text("Bandwidth shrinks as |gain| grows. Double-click a knob to reset.")
+            Text("Bandwidth shrinks as |gain| grows. Double-click a knob to reset. Option-drag for extra-fine.")
                 .font(.system(size: 8, weight: .medium, design: .rounded))
                 .foregroundStyle(APILook.labelDim)
         }

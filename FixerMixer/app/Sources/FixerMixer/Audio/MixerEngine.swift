@@ -307,6 +307,7 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
             processors[i].wetterBypass = voices[i].voice.wetterBypass
+            processors[i].wetterRoom = voices[i].voice.wetterRoom
             processors[i].levelerDrive = voices[i].voice.levelerDrive
             processors[i].levelerBypass = voices[i].voice.levelerBypass
             processors[i].levelerTargetDb = voices[i].voice.levelerTargetDb

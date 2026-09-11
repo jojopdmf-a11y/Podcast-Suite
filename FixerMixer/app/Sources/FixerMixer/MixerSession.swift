@@ -107,15 +107,40 @@ struct ChannelParaEQ: Equatable {
     }
 }
 
+enum WetterRoom: String, CaseIterable, Identifiable, Hashable {
+    case drumRoom
+    case studio
+    case stage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .drumRoom: return "DRUM"
+        case .studio: return "STUDIO"
+        case .stage: return "STAGE"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .drumRoom: return "Drum room — bright, short punch"
+        case .studio: return "Studio — tight treated-booth air"
+        case .stage: return "Stage — small live floor, not a hall"
+        }
+    }
+}
+
 struct VoiceFX: Equatable {
     var deVerb: Float = 0
     var deVerbBypass: Bool = false
     var wetter: Float = 0
     var wetterBypass: Bool = false
+    var wetterRoom: WetterRoom = .drumRoom
     /// 0…1 — correction strength / how hard to push into soft limit at Target
     var levelerDrive: Float = 0
     var levelerBypass: Bool = false
-    var levelerTargetDb: Float = -18
+    var levelerTargetDb: Float = -6
 }
 
 /// Per-channel DSP chain order (independent per strip).
@@ -149,7 +174,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
         switch self {
         case .eq: return "10-band graphic · 560 curves · finer ±4 dB"
         case .deVerb: return "Dry room / ambience"
-        case .wetter: return "Drum room"
+        case .wetter: return "Small spaces for dry voices"
         case .leveler: return "Drive into target · soft compress + limit"
         }
     }
