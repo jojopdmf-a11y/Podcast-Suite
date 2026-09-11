@@ -23,7 +23,7 @@ You also need:
 - A free [Hugging Face](https://huggingface.co/join) account (speaker detection)
 - About 2 GB of disk for Python packages and the speaker model
 
-The suite README has the full Mac table (8 GB Air, Intel, etc.).
+The suite README has the full Mac table (8 GB Air, Intel, etc.). In the app, **YOUR MAC** (next to Settings) is the short version. The website copy lives in `docs/cougarcalc-system-requirements.md`.
 
 ## How long a split takes
 

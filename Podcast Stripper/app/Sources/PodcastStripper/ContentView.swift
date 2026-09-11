@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var outputFolder: URL?
     @State private var speakerCount: SpeakerCountChoice = .two
     @State private var showSettings = false
+    @State private var showMacNeeds = false
     @State private var isDropTargeted = false
 
     var body: some View {
@@ -48,6 +49,9 @@ struct ContentView: View {
                 runner.refreshSetup()
             }
         }
+        .sheet(isPresented: $showMacNeeds) {
+            MacNeedsView()
+        }
     }
 
     private var header: some View {
@@ -67,16 +71,29 @@ struct ContentView: View {
                     .foregroundStyle(StripperTheme.lime)
             }
             Spacer()
-            Button {
-                showSettings = true
-            } label: {
-                Label("SETTINGS", systemImage: "gearshape.fill")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .tracking(0.8)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
+            HStack(spacing: 8) {
+                Button {
+                    showMacNeeds = true
+                } label: {
+                    Label("YOUR MAC", systemImage: "laptopcomputer")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .tracking(0.8)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(StripperGhostButtonStyle())
+                .help("macOS floor, recommended Macs, and how long a split usually takes")
+                Button {
+                    showSettings = true
+                } label: {
+                    Label("SETTINGS", systemImage: "gearshape.fill")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .tracking(0.8)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(StripperGhostButtonStyle())
             }
-            .buttonStyle(StripperGhostButtonStyle())
         }
     }
 
