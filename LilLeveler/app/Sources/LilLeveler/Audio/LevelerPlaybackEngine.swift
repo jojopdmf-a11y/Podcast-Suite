@@ -7,7 +7,7 @@ import Foundation
 /// wrote samples as if the buffer were non-interleaved (`dst[channel][frame]`).
 /// For interleaved float, `floatChannelData` is typically nil, so nothing was copied
 /// and Play was silent.
-final class LevelerPlaybackEngine {
+final class LevelerPlaybackEngine: @unchecked Sendable {
     private let lock = NSLock()
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
@@ -180,14 +180,14 @@ final class LevelerPlaybackEngine {
             let emitHead = ended ? 0 : head
             self.lock.unlock()
 
+            // Same hop as Fixer Mixer (`MixerEngine`): playhead callback from
+            // the render thread (session hops to MainActor). The class is
+            // `@unchecked Sendable` so the ended teardown may run on main.
             if shouldEmit || ended {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onPlayhead?(emitHead)
-                }
+                self.onPlayhead?(emitHead)
             }
             if ended {
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
+                DispatchQueue.main.async {
                     self.lock.lock()
                     let stillStopped = !self.playing
                     self.lock.unlock()
