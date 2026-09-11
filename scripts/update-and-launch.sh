@@ -72,8 +72,11 @@ SKIP_REVEAL=1 "$BUILD_SCRIPT"
 
 echo ""
 echo "==> Launching $DISPLAY_NAME…"
-open "$APP_PATH"
-osascript -e "display notification \"$DISPLAY_NAME is ready to test\" with title \"Podcast Suite\"" >/dev/null 2>&1 || true
+# -n forces THIS built copy. Plain `open` can reuse an older Podcast Stripper
+# already registered with macOS (same name, leftover from another folder).
+open -n "$APP_PATH"
+echo "Opened: $APP_PATH"
+echo "The window should say Version 1.0.1 (3) under the title."
 
 echo ""
 echo "Done. You can close this window."
