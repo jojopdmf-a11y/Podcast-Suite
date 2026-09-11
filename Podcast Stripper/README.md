@@ -14,9 +14,34 @@ In the Podcast Suite folder, double-click **`Update Podcast Stripper.command`**.
 
 ## What you need
 
-- A Mac with Apple Silicon (M1 or newer) is strongly preferred
-- A free [Hugging Face](https://huggingface.co/join) account
+**macOS 14 Sonoma or newer** — the app will not launch on older systems.
+
+**We highly recommend** an Apple Silicon Mac (M1 or newer) with **16 GB of RAM**. A Mac mini M4 is a comfortable machine for weekly shows. Intel Macs are not recommended: the app may still open, but splits can take many times longer.
+
+You also need:
+
+- A free [Hugging Face](https://huggingface.co/join) account (speaker detection)
 - About 2 GB of disk for Python packages and the speaker model
+
+The suite README has the full Mac table (8 GB Air, Intel, etc.).
+
+## How long a split takes
+
+The window shows a live clock and the current step (preparing audio, pulling music, who spoke when, writing tracks). When it finishes, that total stays on screen.
+
+Timed on a **Mac mini M4**, **2 speakers**, **31-minute** episode: **9 minutes 23 seconds**. That is about **18 seconds of wait per minute of show**.
+
+On that same class of Mac, 2 voices, ballpark:
+
+| Episode | About this long to strip |
+|---|---|
+| 15 minutes | ~4–5 minutes |
+| 30 minutes | ~9 minutes |
+| 60 minutes | ~18 minutes |
+| 90 minutes | ~27 minutes |
+| 2 hours | ~35–40 minutes |
+
+First run on a new Mac can be slower while models download (once). An M1 or M2 is often about 1.5–2× these times. More speakers add a little; music separation is most of the wait.
 
 ## First-time setup
 
@@ -88,7 +113,7 @@ You do not need the full Xcode app from the App Store for this. The Mac command-
 1. Drop an `.mp3`, `.m4a`, `.wav`, `.aiff`, or `.flac` file onto the window
 2. If you know how many people are talking, choose that number (2 is right for most interviews)
 3. Click **Split into tracks**
-4. Wait. A one-hour episode can take several minutes the first time, plus a large model download
+4. Wait. The status line says what it is doing and how long it has been running. A one-hour episode is often around 15–20 minutes on a Mac mini M4; the first time on a new Mac also downloads a large model.
 5. Click **Show in Finder**
 
 You will get:
