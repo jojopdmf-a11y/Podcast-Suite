@@ -62,6 +62,9 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .tracking(0.6)
                     .foregroundStyle(StripperTheme.textSecondary)
+                Text("Version \(appVersion)")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(StripperTheme.lime)
             }
             Spacer()
             Button {
