@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct EnginePaths {
@@ -144,6 +145,9 @@ final class EngineRunner: ObservableObject {
 
     private var process: Process?
     private var lineBuffer = ""
+    private var userCancelled = false
+    private var outputDirForJob: URL?
+    private var outputDirExisted = false
 
     func refreshSetup() {
         Task {
@@ -173,10 +177,14 @@ final class EngineRunner: ObservableObject {
     }
 
     func cancel() {
-        process?.terminate()
+        userCancelled = true
+        if let running = process {
+            forceStop(running)
+        }
         process = nil
         isRunning = false
         message = "Cancelled."
+        removeEmptyOutputDirIfNeeded()
     }
 
     func split(input: URL, outputDir: URL, speakerCount: SpeakerCountChoice) {
@@ -185,12 +193,14 @@ final class EngineRunner: ObservableObject {
         isRunning = true
         percent = 1
         lineBuffer = ""
+        userCancelled = false
+        outputDirForJob = outputDir
+        outputDirExisted = FileManager.default.fileExists(atPath: outputDir.path)
         message = "Starting…"
 
         Task {
             do {
                 let paths = try EnginePaths.resolve()
-                outputDir.createDirectoryIfNeeded()
                 var arguments = [
                     input.path,
                     "-o",
@@ -201,7 +211,10 @@ final class EngineRunner: ObservableObject {
                     arguments += ["--num-speakers", String(count)]
                 }
                 let output = try await runTool(paths: paths, arguments: arguments, streaming: true)
-                if let done = lastEvent(from: output, named: "done"),
+                if userCancelled {
+                    message = "Cancelled."
+                    removeEmptyOutputDirIfNeeded()
+                } else if let done = lastEvent(from: output, named: "done"),
                    let dir = done["output_dir"] as? String
                 {
                     let tracks = (done["tracks"] as? [String] ?? []).map { URL(fileURLWithPath: $0) }
@@ -217,8 +230,15 @@ final class EngineRunner: ObservableObject {
                     throw EngineError.failed(failed["message"] as? String ?? "Something went wrong.")
                 }
             } catch {
-                errorMessage = error.localizedDescription
-                message = "Could not split this file."
+                if userCancelled {
+                    message = "Cancelled."
+                    errorMessage = nil
+                    removeEmptyOutputDirIfNeeded()
+                } else {
+                    errorMessage = error.localizedDescription
+                    message = "Could not split this file."
+                    removeEmptyOutputDirIfNeeded()
+                }
             }
             isRunning = false
             process = nil
@@ -266,6 +286,7 @@ final class EngineRunner: ObservableObject {
             ]
             environment["PATH"] = extraPath.joined(separator: ":") + ":" + (environment["PATH"] ?? "")
             environment["PYANNOTE_METRICS_ENABLED"] = "0"
+            environment["PYTHONUNBUFFERED"] = "1"
             process.environment = environment
 
             let stdout = Pipe()
@@ -340,6 +361,31 @@ final class EngineRunner: ObservableObject {
             }
         }
     }
+
+    private func forceStop(_ process: Process) {
+        let pid = process.processIdentifier
+        process.terminate()
+        let pkill = Process()
+        pkill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        pkill.arguments = ["-TERM", "-P", String(pid)]
+        try? pkill.run()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1.5) {
+            kill(pid, SIGKILL)
+            let killKids = Process()
+            killKids.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            killKids.arguments = ["-KILL", "-P", String(pid)]
+            try? killKids.run()
+        }
+    }
+
+    private func removeEmptyOutputDirIfNeeded() {
+        guard let outputDirForJob, !outputDirExisted else { return }
+        let manager = FileManager.default
+        guard manager.fileExists(atPath: outputDirForJob.path) else { return }
+        if let items = try? manager.contentsOfDirectory(atPath: outputDirForJob.path), items.isEmpty {
+            try? manager.removeItem(at: outputDirForJob)
+        }
+    }
 }
 
 private final class OutputCollector: @unchecked Sendable {
@@ -385,8 +431,3 @@ private final class OnceResume<T: Sendable>: @unchecked Sendable {
     }
 }
 
-private extension URL {
-    func createDirectoryIfNeeded() {
-        try? FileManager.default.createDirectory(at: self, withIntermediateDirectories: true)
-    }
-}

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import inspect
+import os
+import sys
+import threading
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -17,13 +23,98 @@ class SeparationError(RuntimeError):
 
 
 def _pick_device():
+    """Choose a Demucs device that actually finishes on a Mac.
+
+    Apple Silicon MPS + Demucs often hangs inside Metal with no error, which is
+    what made the app look frozen at "Pulling music…". CPU is slower but it
+    returns. Override with PODCAST_STRIPPER_DEMUCS_DEVICE=cpu|mps|cuda.
+    """
     import torch
 
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
+    override = os.environ.get("PODCAST_STRIPPER_DEMUCS_DEVICE", "").strip().lower()
+    if override in {"cpu", "mps", "cuda"}:
+        if override == "mps" and not torch.backends.mps.is_available():
+            return torch.device("cpu")
+        if override == "cuda" and not torch.cuda.is_available():
+            return torch.device("cpu")
+        return torch.device(override)
+
+    if sys.platform == "darwin":
+        return torch.device("cpu")
     if torch.cuda.is_available():
         return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("cpu")
     return torch.device("cpu")
+
+
+def _apply_model_kwargs(apply_model, device) -> dict:
+    """Demucs 4.x accepts num_workers; keep it at 0 so Mac never deadlocks a pool."""
+    kwargs: dict = {
+        "device": device,
+        "split": True,
+        "overlap": 0.25,
+        "progress": False,
+    }
+    try:
+        params = inspect.signature(apply_model).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if "num_workers" in params:
+        kwargs["num_workers"] = 0
+    if "shifts" in params:
+        kwargs["shifts"] = 1
+    return kwargs
+
+
+def _format_elapsed(seconds: float) -> str:
+    elapsed = max(0, int(seconds))
+    minutes, secs = divmod(elapsed, 60)
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+@contextmanager
+def _heartbeat(
+    on_progress: ProgressFn | None,
+    *,
+    stage: str,
+    start_percent: float,
+    cap_percent: float,
+    interval: float = 8.0,
+) -> Iterator[None]:
+    """Keep the Mac app moving while Demucs has no per-chunk callback."""
+    if on_progress is None or interval <= 0:
+        yield
+        return
+
+    stop = threading.Event()
+    started = time.monotonic()
+    lock = threading.Lock()
+
+    def beat() -> None:
+        while not stop.wait(interval):
+            elapsed = time.monotonic() - started
+            crawled = min(cap_percent, start_percent + elapsed / 45.0)
+            clock = _format_elapsed(elapsed)
+            with lock:
+                on_progress(
+                    stage,
+                    crawled,
+                    (
+                        f"Still pulling music and sound effects off the voices… {clock}. "
+                        "Long episodes can take 5–15 minutes."
+                    ),
+                )
+
+    thread = threading.Thread(target=beat, name="demucs-heartbeat", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1.0)
 
 
 def _align_channels(audio: np.ndarray, channels: int) -> np.ndarray:
@@ -57,9 +148,9 @@ def separate_vocals(
     work_dir: Path,
     *,
     on_progress: ProgressFn | None = None,
+    heartbeat_interval: float = 8.0,
 ) -> tuple[Path, Path]:
     """Split a mix into vocals and everything else (music, beds, sound effects)."""
-    import os
     import torch
 
     try:
@@ -80,7 +171,11 @@ def separate_vocals(
         ) from exc
 
     if on_progress:
-        on_progress("separate", 16, "Loading the music separator…")
+        on_progress(
+            "separate",
+            16,
+            "Loading the music separator (first run may download a model)…",
+        )
 
     original, sample_rate = load_wav(original_wav)
     channels = original.shape[1]
@@ -97,20 +192,25 @@ def separate_vocals(
 
     mix = convert_audio(mix, sample_rate, model.samplerate, model.audio_channels)
     if on_progress:
-        on_progress("separate", 22, "Pulling music and sound effects off the voices…")
+        on_progress(
+            "separate",
+            22,
+            "Pulling music and sound effects off the voices. This can take several minutes…",
+        )
 
     names = list(model.sources)
     model_rate = int(model.samplerate)
+    apply_kwargs = _apply_model_kwargs(apply_model, device)
     try:
         with torch.no_grad():
-            sources = apply_model(
-                model,
-                mix[None],
-                device=device,
-                split=True,
-                overlap=0.25,
-                progress=False,
-            )[0]
+            with _heartbeat(
+                on_progress,
+                stage="separate",
+                start_percent=22,
+                cap_percent=40,
+                interval=heartbeat_interval,
+            ):
+                sources = apply_model(model, mix[None], **apply_kwargs)[0]
     except Exception as exc:
         raise SeparationError(f"Music separation failed: {exc}") from exc
     finally:
@@ -120,7 +220,10 @@ def separate_vocals(
             pass
         del model
         if str(device) == "mps":
-            torch.mps.empty_cache()
+            try:
+                torch.mps.empty_cache()
+            except Exception:
+                pass
 
     vocals_index = names.index("vocals")
     vocals = sources[vocals_index]
