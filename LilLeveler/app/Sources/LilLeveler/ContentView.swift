@@ -206,30 +206,74 @@ struct ContentView: View {
     }
 
     private var transportRow: some View {
-        HStack(spacing: 10) {
-            Button(session.isPlaying && !session.playAfter ? "STOP SOURCE" : "PLAY SOURCE") {
-                session.togglePlay(after: false)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button(session.isPlaying ? "PAUSE" : "PLAY") {
+                    session.togglePlayback()
+                }
+                .buttonStyle(LevelerPrimaryButtonStyle())
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(session.sourceURL == nil)
+                .help("Spacebar toggles play/pause")
+
+                Text(LevelerSession.formatTime(seconds: session.playheadSeconds))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LevelerTheme.cyan)
+                    .frame(minWidth: 44, alignment: .trailing)
+
+                Slider(
+                    value: Binding(
+                        get: { session.playheadSeconds },
+                        set: { session.scrub(to: $0) }
+                    ),
+                    in: 0...max(0.001, session.durationSeconds)
+                ) { editing in
+                    if editing {
+                        session.isScrubbing = true
+                    } else {
+                        session.endScrub()
+                    }
+                }
+                .tint(LevelerTheme.cyan)
+                .disabled(session.sourceURL == nil || session.durationSeconds <= 0)
+
+                Text(LevelerSession.formatTime(seconds: session.durationSeconds))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LevelerTheme.textSecondary)
+                    .frame(minWidth: 44, alignment: .leading)
             }
-            .buttonStyle(LevelerGhostButtonStyle())
-            .disabled(session.sourceURL == nil || session.isBusy)
 
-            Button(session.isPlaying && session.playAfter ? "STOP LEVELED" : "PLAY LEVELED") {
-                session.togglePlay(after: true)
+            HStack(spacing: 10) {
+                Text("A/B")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1)
+                    .foregroundStyle(LevelerTheme.cyanDim)
+
+                Picker("A/B", selection: Binding(
+                    get: { session.playAfter },
+                    set: { session.setListenPost($0) }
+                )) {
+                    Text("PRE").tag(false)
+                    Text("POST").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 150)
+                .disabled(!session.hasResult)
+                .help("PRE is the file you dropped. POST is after leveling. Time stays put when you flip.")
+
+                Button("RE-LEVEL") { session.process() }
+                    .buttonStyle(LevelerGhostButtonStyle())
+                    .disabled(session.sourceURL == nil || session.isBusy)
+
+                Spacer()
+
+                Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED") {
+                    session.exportLeveled()
+                }
+                .buttonStyle(LevelerPrimaryButtonStyle())
+                .disabled(!session.hasResult || session.isBusy)
             }
-            .buttonStyle(LevelerGhostButtonStyle())
-            .disabled(!session.hasResult || session.isBusy)
-
-            Button("RE-LEVEL") { session.process() }
-                .buttonStyle(LevelerGhostButtonStyle())
-                .disabled(session.sourceURL == nil || session.isBusy)
-
-            Spacer()
-
-            Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED") {
-                session.exportLeveled()
-            }
-            .buttonStyle(LevelerPrimaryButtonStyle())
-            .disabled(!session.hasResult || session.isBusy)
         }
         .padding(12)
         .levelerPanel()
