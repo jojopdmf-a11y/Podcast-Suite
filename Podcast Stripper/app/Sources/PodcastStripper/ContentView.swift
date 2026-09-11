@@ -198,6 +198,7 @@ struct ContentView: View {
                         )
                         .frame(width: max(8, geo.size.width * CGFloat(progressValue)))
                         .shadow(color: StripperTheme.cyan.opacity(0.55), radius: 6)
+                        .animation(.linear(duration: 1.0), value: progressValue)
                 }
             }
             .frame(height: 8)
@@ -207,7 +208,7 @@ struct ContentView: View {
                 .tracking(0.6)
                 .foregroundStyle(StripperTheme.textPrimary)
             if runner.isRunning {
-                Text("This step can take several minutes on a full episode. Cancel still works.")
+                Text(processingHint)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
             } else {
@@ -225,6 +226,16 @@ struct ContentView: View {
             return min(1, max(0.02, runner.percent / 100))
         }
         return runner.result == nil ? 0 : 1
+    }
+
+    private var processingHint: String {
+        let minutes = runner.elapsedSeconds / 60
+        let seconds = runner.elapsedSeconds % 60
+        let clock = minutes > 0 ? "\(minutes)m \(String(format: "%02d", seconds))s" : "\(seconds)s"
+        if runner.engineProgressStale {
+            return "No new progress for a while (\(clock)). You can cancel if this looks stuck."
+        }
+        return "Still working… \(clock). Long episodes can take several minutes."
     }
 
     private func resultRow(_ result: EngineResult) -> some View {
@@ -292,6 +303,9 @@ struct ContentView: View {
                 .tracking(0.8)
                 .foregroundStyle(StripperTheme.textSecondary)
             Spacer()
+            Text("Version \(appVersion)")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(StripperTheme.textSecondary)
         }
         .padding(.top, 4)
     }
@@ -357,6 +371,12 @@ struct ContentView: View {
 
     private func defaultOutput(for input: URL) -> URL {
         input.deletingLastPathComponent().appendingPathComponent("\(input.deletingPathExtension().lastPathComponent)_speakers")
+    }
+
+    private var appVersion: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(version) (\(build))"
     }
 
     private func restoreOutputFolder() {

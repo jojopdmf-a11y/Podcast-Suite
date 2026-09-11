@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from podcast_stripper.diarize import (
     DIARIZE_PROFILE,
+    DiarizeProgressHook,
     reassign_short_interruptions,
     resolve_speaker_count_kwargs,
 )
@@ -40,3 +41,15 @@ def test_short_interruption_keep_when_disabled():
         (2.3, 4.0, "A"),
     ]
     assert reassign_short_interruptions(segments, max_seconds=0.0) == segments
+
+
+def test_progress_hook_maps_chunks_into_percent():
+    events: list[tuple[str, float, str]] = []
+    hook = DiarizeProgressHook(lambda stage, percent, message: events.append((stage, percent, message)), start=32, end=78)
+    hook("segmentation", None, total=10, completed=5)
+    assert events
+    stage, percent, message = events[-1]
+    assert stage == "diarize"
+    assert percent == 55.0
+    assert "segmentation" in message
+    assert "5/10" in message

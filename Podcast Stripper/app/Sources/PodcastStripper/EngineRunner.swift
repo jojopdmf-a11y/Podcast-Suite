@@ -142,21 +142,32 @@ final class EngineRunner: ObservableObject {
     @Published var message = "Drop a podcast file to start."
     @Published var errorMessage: String?
     @Published var result: EngineResult?
+    @Published var elapsedSeconds = 0
+    @Published var engineProgressStale = false
 
     private var process: Process?
     private var lineBuffer = ""
     private var userCancelled = false
     private var outputDirForJob: URL?
     private var outputDirExisted = false
+    private var pulseTimer: Timer?
+    private var lastEngineProgressAt = Date()
 
     func refreshSetup() {
+        if isRunning {
+            return
+        }
         Task {
             do {
                 let paths = try EnginePaths.resolve()
                 let output = try await runTool(
                     paths: paths,
-                    arguments: ["--check-setup", "--json-progress"]
+                    arguments: ["--check-setup", "--json-progress"],
+                    trackAsJob: false
                 )
+                if isRunning {
+                    return
+                }
                 if let line = output.split(separator: "\n").last,
                    let data = String(line).data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -171,6 +182,9 @@ final class EngineRunner: ObservableObject {
                     )
                 }
             } catch {
+                if isRunning {
+                    return
+                }
                 setup = EngineSetup(message: error.localizedDescription)
             }
         }
@@ -183,7 +197,9 @@ final class EngineRunner: ObservableObject {
         }
         process = nil
         isRunning = false
+        stopPulseTimer()
         message = "Cancelled."
+        restoreIdleSetupMessage()
         removeEmptyOutputDirIfNeeded()
     }
 
@@ -197,6 +213,11 @@ final class EngineRunner: ObservableObject {
         outputDirForJob = outputDir
         outputDirExisted = FileManager.default.fileExists(atPath: outputDir.path)
         message = "Starting…"
+        setup.message = "Still working. Long episodes can take several minutes."
+        elapsedSeconds = 0
+        engineProgressStale = false
+        lastEngineProgressAt = Date()
+        startPulseTimer()
 
         Task {
             do {
@@ -242,6 +263,8 @@ final class EngineRunner: ObservableObject {
             }
             isRunning = false
             process = nil
+            stopPulseTimer()
+            restoreIdleSetupMessage()
         }
     }
 
@@ -270,7 +293,7 @@ final class EngineRunner: ObservableObject {
         return nil
     }
 
-    private func runTool(paths: EnginePaths, arguments: [String], streaming: Bool = false) async throws -> String {
+    private func runTool(paths: EnginePaths, arguments: [String], streaming: Bool = false, trackAsJob: Bool = true) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = paths.uvBinary
@@ -321,7 +344,7 @@ final class EngineRunner: ObservableObject {
                 }
             }
 
-            self.process = process
+            self.process = trackAsJob ? process : self.process
             do {
                 try process.run()
             } catch {
@@ -352,14 +375,49 @@ final class EngineRunner: ObservableObject {
                   json["event"] as? String == "status"
             else { continue }
             if let value = json["percent"] as? Double {
-                percent = value
+                percent = max(percent, value)
             } else if let value = json["percent"] as? Int {
-                percent = Double(value)
+                percent = max(percent, Double(value))
             }
             if let message = json["message"] as? String {
                 self.message = message
             }
+            lastEngineProgressAt = Date()
+            engineProgressStale = false
         }
+    }
+
+    private func startPulseTimer() {
+        stopPulseTimer()
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.tickWhileRunning()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pulseTimer = timer
+    }
+
+    private func stopPulseTimer() {
+        pulseTimer?.invalidate()
+        pulseTimer = nil
+    }
+
+    private func tickWhileRunning() {
+        guard isRunning else {
+            stopPulseTimer()
+            return
+        }
+        elapsedSeconds += 1
+        let silent = Date().timeIntervalSince(lastEngineProgressAt)
+        engineProgressStale = silent >= 40
+        if !engineProgressStale {
+            percent = min(99, percent + 0.2)
+        }
+    }
+
+    private func restoreIdleSetupMessage() {
+        setup.message = summary(ffmpegOK: setup.ffmpegOK, tokenOK: setup.tokenOK)
     }
 
     private func forceStop(_ process: Process) {

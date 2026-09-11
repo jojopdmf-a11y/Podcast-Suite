@@ -3,15 +3,13 @@ from __future__ import annotations
 import inspect
 import os
 import sys
-import threading
-import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Callable
 
 import numpy as np
 
 from podcast_stripper.export import load_wav, save_wav
+from podcast_stripper.progress import heartbeat
 
 ProgressFn = Callable[[str, float, str], None]
 
@@ -67,56 +65,6 @@ def _apply_model_kwargs(apply_model, device) -> dict:
     return kwargs
 
 
-def _format_elapsed(seconds: float) -> str:
-    elapsed = max(0, int(seconds))
-    minutes, secs = divmod(elapsed, 60)
-    if minutes:
-        return f"{minutes}m {secs:02d}s"
-    return f"{secs}s"
-
-
-@contextmanager
-def _heartbeat(
-    on_progress: ProgressFn | None,
-    *,
-    stage: str,
-    start_percent: float,
-    cap_percent: float,
-    interval: float = 8.0,
-) -> Iterator[None]:
-    """Keep the Mac app moving while Demucs has no per-chunk callback."""
-    if on_progress is None or interval <= 0:
-        yield
-        return
-
-    stop = threading.Event()
-    started = time.monotonic()
-    lock = threading.Lock()
-
-    def beat() -> None:
-        while not stop.wait(interval):
-            elapsed = time.monotonic() - started
-            crawled = min(cap_percent, start_percent + elapsed / 45.0)
-            clock = _format_elapsed(elapsed)
-            with lock:
-                on_progress(
-                    stage,
-                    crawled,
-                    (
-                        f"Still pulling music and sound effects off the voices… {clock}. "
-                        "Long episodes can take 5–15 minutes."
-                    ),
-                )
-
-    thread = threading.Thread(target=beat, name="demucs-heartbeat", daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join(timeout=1.0)
-
-
 def _align_channels(audio: np.ndarray, channels: int) -> np.ndarray:
     if audio.ndim == 1:
         audio = audio.reshape(-1, 1)
@@ -148,7 +96,7 @@ def separate_vocals(
     work_dir: Path,
     *,
     on_progress: ProgressFn | None = None,
-    heartbeat_interval: float = 8.0,
+    heartbeat_interval: float = 3.0,
 ) -> tuple[Path, Path]:
     """Split a mix into vocals and everything else (music, beds, sound effects)."""
     import torch
@@ -203,12 +151,13 @@ def separate_vocals(
     apply_kwargs = _apply_model_kwargs(apply_model, device)
     try:
         with torch.no_grad():
-            with _heartbeat(
+            with heartbeat(
                 on_progress,
                 stage="separate",
                 start_percent=22,
                 cap_percent=40,
                 interval=heartbeat_interval,
+                message="Still pulling music and sound effects off the voices…",
             ):
                 sources = apply_model(model, mix[None], **apply_kwargs)[0]
     except Exception as exc:
