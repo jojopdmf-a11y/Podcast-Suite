@@ -1,9 +1,16 @@
+import AVFoundation
 import SwiftUI
 
 /// Short in-app version of the suite Mac notes. Full copy for cougarcalc.com lives in
 /// `docs/cougarcalc-system-requirements.md`.
 struct MacNeedsView: View {
+    var inputFile: URL? = nil
+
     @Environment(\.dismiss) private var dismiss
+    @State private var mac = ThisMac.snapshot()
+    @State private var episodeMinutes: Double?
+
+    private let sampleEpisodeMinutes: [Double] = [15, 30, 60, 90, 120]
 
     var body: some View {
         ZStack {
@@ -14,7 +21,14 @@ struct MacNeedsView: View {
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyan)
                     .shadow(color: StripperTheme.cyan.opacity(0.35), radius: 8)
-                Text("Brief notes so you know if this Mac is a fit, and about how long a split will take.")
+                Text("\(mac.chip)  ·  \(mac.ramGB) GB  ·  \(mac.osLabel)")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .foregroundStyle(StripperTheme.lime)
+                Text(mac.fitTitle)
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(mac.isIntel ? StripperTheme.danger : StripperTheme.cyan)
+                Text(mac.fitDetail)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
 
@@ -23,22 +37,32 @@ struct MacNeedsView: View {
                         needBlock(title: "IT ONLY RUNS ON", body: "macOS 14 Sonoma or newer. Ventura and older will not launch the apps.")
                         needBlock(
                             title: "WE HIGHLY RECOMMEND",
-                            body: "Apple Silicon (M1 or newer) with 16 GB of RAM. A Mac mini M4 is a comfortable weekly machine. Intel Macs are not recommended — same buttons, much slower."
+                            body: "Apple Silicon (M1 or newer) with 16 GB of RAM. A Mac mini M4 is a comfortable weekly machine."
                         )
+
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("HOW LONG STRIPPER TAKES")
+                            Text("ESTIMATE ON THIS MAC")
                                 .font(.system(size: 11, weight: .bold, design: .rounded))
                                 .tracking(1.0)
                                 .foregroundStyle(StripperTheme.cyanDim)
-                            Text("Timed on a Mac mini M4, 2 speakers, 31-minute episode: 9 minutes 23 seconds. About 18 seconds of wait per minute of show. The status line tells you the current step; the lime clock is the total when it finishes.")
+                            if let episodeMinutes, episodeMinutes > 0.4 {
+                                Text("Dropped file · \(Self.formatEpisode(episodeMinutes))")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(StripperTheme.textPrimary)
+                                Text("About \(ThisMac.formatWait(mac.waitSeconds(forEpisodeMinutes: episodeMinutes)))")
+                                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                                    .foregroundStyle(StripperTheme.lime)
+                            }
+                            Text("Ballpark wait for a 2-speaker split. Scaled from a 31-minute episode that took 9m 23s on a Mac mini M4. The lime clock during a real split is the truth.")
                                 .font(.system(size: 13, weight: .medium, design: .rounded))
                                 .foregroundStyle(StripperTheme.textPrimary)
-                            timingRow("15 min episode", "~4–5 min")
-                            timingRow("30 min episode", "~9 min")
-                            timingRow("60 min episode", "~18 min")
-                            timingRow("90 min episode", "~27 min")
-                            timingRow("2 hour episode", "~35–40 min")
-                            Text("First split on a new Mac can add a one-time model download. M1/M2 is often 1.5–2× these times. Mixer and Leveler stay light.")
+                            ForEach(sampleEpisodeMinutes, id: \.self) { minutes in
+                                timingRow(
+                                    Self.formatEpisode(minutes),
+                                    "~\(ThisMac.formatWait(mac.waitSeconds(forEpisodeMinutes: minutes)))"
+                                )
+                            }
+                            Text("First split on a new Mac can add a one-time model download. Mixer and Leveler stay light.")
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(StripperTheme.textSecondary)
                         }
@@ -54,8 +78,11 @@ struct MacNeedsView: View {
             }
             .padding(24)
         }
-        .frame(width: 540, height: 520)
+        .frame(width: 540, height: 560)
         .preferredColorScheme(.dark)
+        .task(id: inputFile?.path) {
+            episodeMinutes = await Self.loadEpisodeMinutes(inputFile)
+        }
     }
 
     private func needBlock(title: String, body: String) -> some View {
@@ -81,5 +108,26 @@ struct MacNeedsView: View {
                 .foregroundStyle(StripperTheme.lime)
         }
         .padding(.vertical, 2)
+    }
+
+    private static func formatEpisode(_ minutes: Double) -> String {
+        if minutes >= 119 {
+            return "2 hour episode"
+        }
+        let whole = Int(minutes.rounded())
+        return "\(whole) min episode"
+    }
+
+    private static func loadEpisodeMinutes(_ url: URL?) async -> Double? {
+        guard let url else { return nil }
+        let asset = AVURLAsset(url: url)
+        do {
+            let duration = try await asset.load(.duration)
+            let seconds = CMTimeGetSeconds(duration)
+            guard seconds.isFinite, seconds > 1 else { return nil }
+            return seconds / 60.0
+        } catch {
+            return nil
+        }
     }
 }
