@@ -2,7 +2,7 @@
 
 This is the **full public copy** for [cougarcalc.com](https://cougarcalc.com). Website edits happen in the CougarCalc repo / that chat. Keep this file as the source of truth and port it over.
 
-The **short** version also lives in Podcast Stripper: **YOUR MAC** (next to Settings).
+The **short** version also lives in Podcast Stripper: **YOUR MAC** (next to Settings). That panel **reads this Mac’s chip and RAM** and scales the wait table from the M4 Mini timing. If a file is already dropped in, it estimates that episode too.
 
 ---
 

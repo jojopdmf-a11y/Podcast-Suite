@@ -50,7 +50,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showMacNeeds) {
-            MacNeedsView()
+            MacNeedsView(inputFile: inputFile)
         }
     }
 
@@ -82,7 +82,7 @@ struct ContentView: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(StripperGhostButtonStyle())
-                .help("macOS floor, recommended Macs, and how long a split usually takes")
+                .help("This Mac’s chip, RAM, and a scaled wait estimate")
                 Button {
                     showSettings = true
                 } label: {
