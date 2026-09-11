@@ -104,9 +104,9 @@ struct ContentView: View {
                 Text("Stripper stems → polish → bounce")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
-                Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary.opacity(0.85))
+                Text(CougarCalcBrand.versionLabel)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.lime)
             }
             Spacer()
             Button("ABOUT") { showAbout = true }
