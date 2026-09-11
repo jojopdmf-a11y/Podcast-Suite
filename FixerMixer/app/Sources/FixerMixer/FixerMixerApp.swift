@@ -9,9 +9,9 @@ struct FixerMixerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 1280, minHeight: 760)
                 .preferredColorScheme(.dark)
         }
+        .defaultSize(width: 980, height: 820)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}

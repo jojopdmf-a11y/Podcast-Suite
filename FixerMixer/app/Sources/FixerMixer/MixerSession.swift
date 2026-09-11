@@ -138,7 +138,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
 
     var panelTitle: String {
         switch self {
-        case .eq: return "EQ 560"
+        case .eq: return "EQ 2520"
         case .deVerb: return "DE-VERB"
         case .wetter: return "WETTER"
         case .leveler: return "LEVELER"
@@ -147,7 +147,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
 
     var panelSubtitle: String {
         switch self {
-        case .eq: return "10-band graphic · ±12 dB · dbl-click band to zero"
+        case .eq: return "10-band graphic · 560 curves · finer ±4 dB"
         case .deVerb: return "Dry room / ambience"
         case .wetter: return "Drum room"
         case .leveler: return "Drive into target · soft compress + limit"
@@ -182,6 +182,23 @@ struct ChannelStripState: Identifiable, Equatable {
 
     static let musicID = 1000
     static let masterID = 2000
+
+    static func == (lhs: ChannelStripState, rhs: ChannelStripState) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.isStereo == rhs.isStereo
+            && lhs.speakerNumber == rhs.speakerNumber
+            && lhs.fileURL == rhs.fileURL
+            && lhs.mute == rhs.mute
+            && lhs.dspBypass == rhs.dspBypass
+            && lhs.faderDb == rhs.faderDb
+            && lhs.autoBiasDb == rhs.autoBiasDb
+            && lhs.pan == rhs.pan
+            && lhs.eq == rhs.eq
+            && lhs.para == rhs.para
+            && lhs.voice == rhs.voice
+            && lhs.dspOrder == rhs.dspOrder
+    }
 
     static func voice(slot: Int, speakerNumber: Int) -> ChannelStripState {
         ChannelStripState(

@@ -232,9 +232,9 @@ struct GraphicEQView: View {
                         .foregroundStyle(abs(eq[band]) < 0.05 ? MixerTheme.cyanDim : MixerTheme.lime)
                         .frame(width: 28)
                     Slider(value: Binding(
-                        get: { Double(eq[band]) },
-                        set: { eq[band] = Float($0) }
-                    ), in: -12...12)
+                        get: { Double(Graphic2520.normalized(fromGainDb: eq[band])) },
+                        set: { eq[band] = Graphic2520.gainDb(fromNormalized: Float($0)) }
+                    ), in: 0...1)
                     .rotationEffect(.degrees(-90))
                     .frame(width: 120, height: 16)
                     .frame(width: 16, height: 120)
@@ -611,6 +611,19 @@ struct TimelineWaveformView: View {
     var duration: String
     var onSeek: (Double) -> Void
 
+    @State private var zoom: Double = 1
+    @State private var start: Double = 0
+
+    private var window: Double { 1 / max(1, zoom) }
+
+    private var visiblePeaks: [Float] {
+        guard peaks.count > 1, zoom > 1.001 else { return peaks }
+        let last = Double(peaks.count - 1)
+        let i0 = max(0, Int((start * last).rounded(.down)))
+        let i1 = min(peaks.count - 1, max(i0 + 1, Int(((start + window) * last).rounded(.up))))
+        return Array(peaks[i0...i1])
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -622,18 +635,36 @@ struct TimelineWaveformView: View {
                 Text("\(currentTime)  /  \(duration)")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(MixerTheme.cyan)
+                Text(zoom <= 1.01 ? "1×" : String(format: "%.0f×", zoom))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                    .frame(minWidth: 22)
+                Button("−") { nudgeZoom(0.5) }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .disabled(zoom <= 1.01)
+                    .help("Zoom out")
+                Button("+") { nudgeZoom(2) }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .disabled(zoom >= 15.9)
+                    .help("Zoom in")
+                Button("RESET") { zoom = 1; start = 0 }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .disabled(zoom <= 1.01)
+                    .help("Show the whole file")
             }
 
             GeometryReader { geo in
                 let w = geo.size.width
+                let localPlayhead = (playhead - start) / window
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(MixerTheme.panelRaised)
 
                     Canvas { context, size in
-                        let count = max(peaks.count, 1)
+                        let display = visiblePeaks
+                        let count = max(display.count, 1)
                         let mid = size.height / 2
-                        for (i, peak) in peaks.enumerated() {
+                        for (i, peak) in display.enumerated() {
                             let x = size.width * CGFloat(i) / CGFloat(count)
                             let amp = CGFloat(peak) * (size.height * 0.42)
                             var path = Path()
@@ -648,19 +679,21 @@ struct TimelineWaveformView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
-                    Rectangle()
-                        .fill(MixerTheme.lime)
-                        .frame(width: 2)
-                        .shadow(color: MixerTheme.lime.opacity(0.7), radius: 4)
-                        .offset(x: CGFloat(playhead) * (w - 2))
+                    if localPlayhead >= 0, localPlayhead <= 1 {
+                        Rectangle()
+                            .fill(MixerTheme.lime)
+                            .frame(width: 2)
+                            .shadow(color: MixerTheme.lime.opacity(0.7), radius: 4)
+                            .offset(x: CGFloat(localPlayhead) * (w - 2))
+                    }
 
                     Color.clear
                         .contentShape(Rectangle())
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
-                                    let t = max(0, min(1, value.location.x / max(w, 1)))
-                                    onSeek(Double(t))
+                                    let tVis = max(0, min(1, value.location.x / max(w, 1)))
+                                    onSeek(start + tVis * window)
                                 }
                         )
                 }
@@ -670,8 +703,31 @@ struct TimelineWaveformView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
             )
+            .onChange(of: playhead) { _, p in
+                keepPlayheadVisible(p)
+            }
         }
         .padding(12)
         .mixerPanel()
+    }
+
+    private func nudgeZoom(_ factor: Double) {
+        zoomAroundPlayhead(zoom * factor)
+    }
+
+    private func zoomAroundPlayhead(_ newZoom: Double) {
+        let z = min(16, max(1, newZoom))
+        let nextWindow = 1 / z
+        start = min(max(0, playhead - nextWindow / 2), max(0, 1 - nextWindow))
+        zoom = z
+    }
+
+    private func keepPlayheadVisible(_ p: Double) {
+        let w = window
+        if p < start {
+            start = max(0, p - w * 0.08)
+        } else if p > start + w {
+            start = min(1 - w, p - w * 0.92)
+        }
     }
 }
