@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.output
         else input_path.parent / f"{input_path.stem}_speakers"
     )
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_existed = output_dir.exists()
 
     try:
         find_ffmpeg()
@@ -70,13 +70,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     except TokenError as exc:
         error(str(exc), exc.code, json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
         return 2
     except FFmpegError as exc:
         error(str(exc), exc.code, json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
         return 2
     except Exception as exc:
         code = getattr(exc, "code", "failed")
         error(str(exc), str(code), json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
         return 1
 
     done(
@@ -161,6 +164,17 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     report("export", 100, "Done.")
     return manifest
+
+
+def _remove_empty_output_dir(output_dir: Path, *, created: bool) -> None:
+    """If a job dies mid-run, don't leave an empty output folder."""
+    if not created:
+        return
+    try:
+        if output_dir.is_dir() and not any(output_dir.iterdir()):
+            output_dir.rmdir()
+    except OSError:
+        pass
 
 
 def _speaker_bounds(args: argparse.Namespace) -> dict[str, int | None]:

@@ -206,9 +206,15 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
                 .tracking(0.6)
                 .foregroundStyle(StripperTheme.textPrimary)
-            Text(runner.setup.message)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(StripperTheme.textSecondary)
+            if runner.isRunning {
+                Text("This step can take several minutes on a full episode. Cancel still works.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+            } else {
+                Text(runner.setup.message)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+            }
         }
         .padding(16)
         .stripperPanel()
