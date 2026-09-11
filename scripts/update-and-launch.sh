@@ -45,13 +45,15 @@ echo "==> $DISPLAY_NAME"
 echo "Repo: $ROOT"
 echo ""
 
-echo "==> Pulling latest from GitHub…"
+echo "==> Pulling latest from GitHub (main)…"
 git fetch origin
-if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-  git pull --ff-only
-else
-  echo "No upstream branch set; skipped pull. (You're still on $(git branch --show-current).)"
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  echo "This folder has unsaved edits, so the updater stopped."
+  echo "If you did not mean to change any files, tell Cursor and we can sort it out."
+  exit 1
 fi
+git checkout main
+git pull --ff-only origin main
 echo "On $(git branch --show-current) @ $(git log -1 --oneline)"
 echo ""
 

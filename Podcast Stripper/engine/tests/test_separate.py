@@ -10,10 +10,9 @@ import numpy as np
 import pytest
 
 from podcast_stripper.export import save_wav
+from podcast_stripper.progress import format_elapsed, heartbeat
 from podcast_stripper.separate import (
     _apply_model_kwargs,
-    _format_elapsed,
-    _heartbeat,
     _pick_device,
     separate_vocals,
 )
@@ -31,8 +30,8 @@ def _write_wav(path: Path, chunks: list[np.ndarray], sample_rate: int) -> None:
 
 
 def test_format_elapsed():
-    assert _format_elapsed(7) == "7s"
-    assert _format_elapsed(65) == "1m 05s"
+    assert format_elapsed(7) == "7s"
+    assert format_elapsed(65) == "1m 05s"
 
 
 def test_heartbeat_keeps_status_moving():
@@ -41,12 +40,13 @@ def test_heartbeat_keeps_status_moving():
     def on_progress(stage: str, percent: float, message: str) -> None:
         events.append((stage, percent, message))
 
-    with _heartbeat(
+    with heartbeat(
         on_progress,
         stage="separate",
         start_percent=22,
         cap_percent=40,
         interval=0.05,
+        message="Still pulling music and sound effects off the voices…",
     ):
         time.sleep(0.18)
 

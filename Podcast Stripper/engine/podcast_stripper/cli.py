@@ -10,7 +10,7 @@ from podcast_stripper import __version__
 from podcast_stripper.convert import convert_for_diarization, convert_for_export, is_supported_audio
 from podcast_stripper.export import export_speaker_tracks
 from podcast_stripper.ffmpeg_bin import FFmpegError, find_ffmpeg
-from podcast_stripper.progress import done, error, status
+from podcast_stripper.progress import done, error, heartbeat, status
 from podcast_stripper.token_store import TokenError, resolve_token, save_token, token_is_set
 
 
@@ -108,7 +108,14 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
         music_wav = None
 
         report("convert", 6, "Preparing a working copy of your audio…")
-        convert_for_export(input_path, original_wav)
+        with heartbeat(
+            report,
+            stage="convert",
+            start_percent=6,
+            cap_percent=14,
+            message="Still preparing a working copy of your audio…",
+        ):
+            convert_for_export(input_path, original_wav)
 
         skip_separate = args.from_segments or args.skip_separate
         if not skip_separate:
@@ -133,7 +140,14 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
                 music_wav = None
 
         report("convert", 46, "Preparing audio for speaker detection…")
-        convert_for_diarization(original_wav, diarize_wav)
+        with heartbeat(
+            report,
+            stage="convert",
+            start_percent=46,
+            cap_percent=54,
+            message="Still preparing audio for speaker detection…",
+        ):
+            convert_for_diarization(original_wav, diarize_wav)
 
         if args.from_segments:
             segments = _load_segments(Path(args.from_segments))
@@ -151,14 +165,21 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
             )
 
         report("export", 88, "Writing speaker tracks and a music/SFX track…")
-        manifest = export_speaker_tracks(
-            input_path,
-            output_dir,
-            segments,
-            work_wav=original_wav,
-            voice_wav=voice_wav,
-            music_wav=music_wav,
-        )
+        with heartbeat(
+            report,
+            stage="export",
+            start_percent=88,
+            cap_percent=96,
+            message="Still writing speaker tracks and a music/SFX track…",
+        ):
+            manifest = export_speaker_tracks(
+                input_path,
+                output_dir,
+                segments,
+                work_wav=original_wav,
+                voice_wav=voice_wav,
+                music_wav=music_wav,
+            )
 
     manifest_path = output_dir / "speakers.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

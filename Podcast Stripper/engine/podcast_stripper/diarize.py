@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import threading
 from pathlib import Path
 from typing import Callable
 
+from podcast_stripper.progress import heartbeat
 from podcast_stripper.token_store import resolve_token
 
 MODEL_ID = "pyannote/speaker-diarization-community-1"
@@ -216,6 +218,30 @@ def extract_segments(output) -> list[Segment]:
     return segments
 
 
+class DiarizeProgressHook:
+    """Forward pyannote step updates to the Mac app so the bar keeps moving."""
+
+    def __init__(self, on_progress: ProgressFn | None, *, start: float = 32.0, end: float = 78.0) -> None:
+        self.on_progress = on_progress
+        self.start = start
+        self.end = end
+        self._lock = threading.Lock()
+
+    def __call__(self, step_name, step_artifact, file=None, total=None, completed=None, **kwargs) -> None:
+        if self.on_progress is None:
+            return
+        label = str(step_name or "speakers").replace("_", " ")
+        if total:
+            frac = max(0.0, min(1.0, float(completed or 0) / float(total)))
+            extra = f" {int(completed or 0)}/{int(total)}"
+        else:
+            frac = 0.0
+            extra = ""
+        percent = self.start + frac * (self.end - self.start)
+        with self._lock:
+            self.on_progress("diarize", percent, f"Detecting who spoke when ({label}{extra})…")
+
+
 def run_diarization(
     wav_path: Path,
     *,
@@ -229,7 +255,14 @@ def run_diarization(
     if on_progress:
         on_progress("diarize", 18, "Loading speaker model…")
     try:
-        pipeline, _device = load_pipeline(resolved)
+        with heartbeat(
+            on_progress,
+            stage="diarize",
+            start_percent=18,
+            cap_percent=28,
+            message="Still loading the speaker model…",
+        ):
+            pipeline, _device = load_pipeline(resolved)
     except Exception as exc:
         message = str(exc)
         if "401" in message or "gated" in message.lower() or "restricted" in message.lower():
@@ -241,9 +274,6 @@ def run_diarization(
             ) from exc
         raise DiarizationError(f"Could not load the speaker model: {exc}") from exc
 
-    if on_progress:
-        on_progress("diarize", 30, "Detecting who spoke when…")
-
     kwargs = resolve_speaker_count_kwargs(
         num_speakers=num_speakers,
         min_speakers=min_speakers,
@@ -251,13 +281,32 @@ def run_diarization(
     )
 
     audio_file = load_waveform(wav_path)
-    try:
-        from pyannote.audio.pipelines.utils.hook import ProgressHook
+    samples = int(audio_file["waveform"].shape[-1])
+    minutes = max(1, int(round(samples / float(audio_file["sample_rate"]) / 60.0)))
+    auto_note = ""
+    if min_speakers is not None and max_speakers is not None:
+        auto_note = " Auto is slower than picking 2 or 3."
+    if on_progress:
+        on_progress(
+            "diarize",
+            30,
+            f"Detecting who spoke when on a {minutes}-minute episode.{auto_note}",
+        )
 
-        with ProgressHook() as hook:
-            output = pipeline(audio_file, hook=hook, **kwargs)
-    except TypeError:
-        output = pipeline(audio_file, **kwargs)
+    hook = DiarizeProgressHook(on_progress)
+    try:
+        with heartbeat(
+            on_progress,
+            stage="diarize",
+            start_percent=30,
+            cap_percent=78,
+            interval=3.0,
+            message="Still detecting who spoke when…",
+        ):
+            try:
+                output = pipeline(audio_file, hook=hook, **kwargs)
+            except TypeError:
+                output = pipeline(audio_file, **kwargs)
     except Exception as exc:
         raise DiarizationError(_friendly_failure(exc)) from exc
 
