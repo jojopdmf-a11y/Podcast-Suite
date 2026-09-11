@@ -54,6 +54,8 @@ The first split on a new Mac can add extra time while models download (a couple 
 
 Fixer Mixer and Lil Leveler are light: mix and level in real time on any Apple Silicon Mac that meets the macOS 14 floor. Mixer loads the whole episode into memory, so long shows with several speaker tracks are happier with 16 GB.
 
+The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requirements.md`](docs/cougarcalc-system-requirements.md). Stripper also has a short **YOUR MAC** panel next to Settings.
+
 ## Build
 
 Each app has `app/scripts/build_app.sh`. Run it from that app folder. Built `.app` bundles land in `dist/` and are not committed.
