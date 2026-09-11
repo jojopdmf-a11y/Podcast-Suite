@@ -75,6 +75,49 @@ struct Biquad {
     }
 }
 
+/// 560-style proportional-Q curves for the 10-band graphic (named EQ 2520 in the UI).
+/// Wide at small boost/cut, tighter toward ±12 dB. Extra fader travel in the ±4 dB region.
+enum Graphic2520 {
+    static func bandwidthOctaves(gainDb: Float) -> Float {
+        let g = abs(gainDb)
+        // ~1.7 oct at 2 dB (smooth overlap), ~0.55 oct at 12 dB (~12 dB/oct slope).
+        let bw0: Float = 2.92
+        let k: Float = 0.359
+        return max(0.35, bw0 / (1 + k * g))
+    }
+
+    static func q(gainDb: Float) -> Float {
+        let bw = Double(max(0.35, bandwidthOctaves(gainDb: gainDb)))
+        let q = 1.0 / (2.0 * sinh(log(2.0) / 2.0 * bw))
+        return Float(min(8, max(0.4, q)))
+    }
+
+    /// 0 = −12 dB (bottom), 1 = +12 dB (top). Inner half of travel is ±4 dB.
+    static func gainDb(fromNormalized t: Float) -> Float {
+        let x = max(0, min(1, t))
+        let db: Float
+        if x < 0.25 {
+            db = -12 + (x / 0.25) * 8
+        } else if x <= 0.75 {
+            db = -4 + ((x - 0.25) / 0.5) * 8
+        } else {
+            db = 4 + ((x - 0.75) / 0.25) * 8
+        }
+        return max(-12, min(12, db))
+    }
+
+    static func normalized(fromGainDb db: Float) -> Float {
+        let g = max(-12, min(12, db))
+        if g < -4 {
+            return 0.25 * (g + 12) / 8
+        }
+        if g <= 4 {
+            return 0.25 + 0.5 * (g + 4) / 8
+        }
+        return 0.75 + 0.25 * (g - 4) / 8
+    }
+}
+
 struct GraphicEQ {
     private var bands: [Biquad] = Array(repeating: Biquad(), count: 10)
     private var sampleRate: Double = 44100
@@ -88,7 +131,12 @@ struct GraphicEQ {
             let g = gainsDb[i]
             // Only rewrite coeffs when needed — never resets filter memory
             if rateChanged || abs(g - lastGains[i]) > 0.001 {
-                bands[i].setPeaking(sampleRate: sampleRate, freq: freqs[i], gainDb: g)
+                bands[i].setPeaking(
+                    sampleRate: sampleRate,
+                    freq: freqs[i],
+                    gainDb: g,
+                    q: Graphic2520.q(gainDb: g)
+                )
                 lastGains[i] = g
             }
         }

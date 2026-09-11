@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Hardware-inspired chrome (original — not affiliated with Waves/API)
@@ -67,6 +68,8 @@ struct HardwareKnob: View {
     var diameter: CGFloat = 56
     var stops: [Float]? = nil
     var defaultValue: Float = 0
+    /// 1 = original speed. Para EQ uses a lower value so frequency sweeps stay controllable.
+    var dragSensitivity: Float = 1
 
     enum KnobStyle {
         case metal
@@ -220,7 +223,8 @@ struct HardwareKnob: View {
                         if g.translation == .zero {
                             dragStartValue = value
                         }
-                        let delta = -Float(g.translation.height) * 0.012
+                        let fine: Float = NSEvent.modifierFlags.contains(.option) ? 0.22 : 1
+                        let delta = -Float(g.translation.height) * 0.012 * dragSensitivity * fine
                         if let stops, stops.count > 1 {
                             let startIdx = Float(
                                 stops.enumerated().min(by: {
@@ -249,7 +253,7 @@ struct HardwareKnob: View {
                 .tracking(0.5)
                 .foregroundStyle(APILook.label)
         }
-        .help("Double-click to reset")
+        .help("Double-click to reset · Option-drag for fine")
     }
 }
 
@@ -523,16 +527,15 @@ struct LEDDot: View {
     }
 }
 
-/// API 560–inspired 10-band graphic EQ (look + feel; original artwork).
+/// 10-band graphic with 560-style proportional Q (EQ 2520 in the UI).
 struct API560EQView: View {
     @Binding var eq: ChannelEQ
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(alignment: .bottom, spacing: 4) {
-                // dB scale rail
                 VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(["+12", "+6", "0", "-6", "-12"], id: \.self) { t in
+                    ForEach(["+12", "+4", "0", "−4", "−12"], id: \.self) { t in
                         Text(t)
                             .font(.system(size: 7, weight: .bold, design: .monospaced))
                             .foregroundStyle(t == "0" ? APILook.accentBlue : APILook.labelDim)
@@ -569,8 +572,7 @@ private struct API560BandFader: View {
     private let trackH: CGFloat = 120
 
     private var yNorm: CGFloat {
-        // +12 at top, -12 at bottom
-        CGFloat((12 - value) / 24)
+        CGFloat(1 - Graphic2520.normalized(fromGainDb: value))
     }
 
     var body: some View {
@@ -594,6 +596,15 @@ private struct API560BandFader: View {
                         .fill(APILook.accentBlue.opacity(0.55))
                         .frame(height: 1)
                         .offset(y: trackH * 0.5)
+                    // ±4 dB — edges of the finer center region
+                    Rectangle()
+                        .fill(APILook.accentBlue.opacity(0.22))
+                        .frame(height: 1)
+                        .offset(y: trackH * 0.25)
+                    Rectangle()
+                        .fill(APILook.accentBlue.opacity(0.22))
+                        .frame(height: 1)
+                        .offset(y: trackH * 0.75)
 
                     // Cap
                     RoundedRectangle(cornerRadius: 2)
@@ -614,7 +625,7 @@ private struct API560BandFader: View {
                         .onChanged { g in
                             let y = max(0, min(trackH, g.location.y))
                             let n = Float(y / trackH)
-                            value = max(-12, min(12, 12 - n * 24))
+                            value = Graphic2520.gainDb(fromNormalized: 1 - n)
                         }
                 )
                 .onTapGesture(count: 2) { value = 0 }
@@ -626,7 +637,7 @@ private struct API560BandFader: View {
                 .foregroundStyle(APILook.label)
         }
         .frame(maxWidth: .infinity)
-        .help("Double-click to zero")
+        .help("Double-click to zero · extra travel in ±4 dB")
     }
 }
 

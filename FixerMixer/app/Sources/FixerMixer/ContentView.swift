@@ -32,6 +32,7 @@ struct ContentView: View {
                         duration: formatTime(session.frameCount),
                         onSeek: { session.seekNormalized($0) }
                     )
+                    .id(session.sourceFolder?.path ?? "empty")
                     mixerRow
                     transport
                 }
@@ -39,6 +40,7 @@ struct ContentView: View {
             }
             .padding(18)
         }
+        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: session.frameCount == 0 ? 620 : 760)
         .preferredColorScheme(.dark)
         .onAppear {
             session.bindEngine()
@@ -102,9 +104,9 @@ struct ContentView: View {
                 Text("Stripper stems → polish → bounce")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
-                Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary.opacity(0.85))
+                Text(CougarCalcBrand.versionLabel)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.lime)
             }
             Spacer()
             Button("ABOUT") { showAbout = true }
@@ -148,36 +150,57 @@ struct ContentView: View {
     }
 
     private var mixerRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: true) {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(Array(session.voices.indices), id: \.self) { index in
-                        ChannelStripView(
-                            channel: $session.voices[index],
-                            faderDb: session.voiceFaderBinding(at: index),
-                            autoDriven: session.autoBalanceEnabled,
-                            isSelected: session.selectedChannelID == session.voices[index].id,
-                            onSelect: { session.selectChannel(session.voices[index].id) },
-                            onChange: { session.syncParamsToEngine() }
-                        )
+        let cluster = mixerClusterWidth
+        return GeometryReader { geo in
+            let selectedW: CGFloat = 460
+            let gap: CGFloat = 10
+            let available = max(156, geo.size.width - selectedW - gap)
+            HStack(alignment: .top, spacing: gap) {
+                ScrollView(.horizontal, showsIndicators: cluster > available + 1) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(Array(session.voices.indices), id: \.self) { index in
+                            ChannelStripView(
+                                channel: $session.voices[index],
+                                faderDb: session.voiceFaderBinding(at: index),
+                                autoDriven: session.autoBalanceEnabled,
+                                isSelected: session.selectedChannelID == session.voices[index].id,
+                                onSelect: { session.selectChannel(session.voices[index].id) },
+                                onChange: { session.syncParamsToEngine() }
+                            )
+                        }
+                        if session.hasMusic {
+                            ChannelStripView(
+                                channel: $session.music,
+                                faderDb: $session.music.faderDb,
+                                autoDriven: false,
+                                isSelected: session.selectedChannelID == session.music.id,
+                                onSelect: { session.selectChannel(session.music.id) },
+                                onChange: { session.syncParamsToEngine() }
+                            )
+                        }
+                        masterStrip
                     }
-                    if session.hasMusic {
-                        ChannelStripView(
-                            channel: $session.music,
-                            faderDb: $session.music.faderDb,
-                            autoDriven: false,
-                            isSelected: session.selectedChannelID == session.music.id,
-                            onSelect: { session.selectChannel(session.music.id) },
-                            onChange: { session.syncParamsToEngine() }
-                        )
-                    }
-                    masterStrip
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+                .frame(width: min(cluster, available), alignment: .leading)
+                Spacer(minLength: 0)
+                selectedChannelPane
             }
-
-            selectedChannelPane
         }
+        .frame(height: ChannelStripView.stripHeight + 8)
+    }
+
+    /// Speaker + music strips are 156pt; master is 110pt.
+    private var mixerClusterWidth: CGFloat {
+        let channels = session.voices.count + (session.hasMusic ? 1 : 0)
+        let gaps = CGFloat(max(0, channels)) * 10 // between channels, and before master
+        return CGFloat(channels) * 156 + 110 + gaps
+    }
+
+    private var mixerMinWidth: CGFloat {
+        if session.frameCount == 0 { return 720 }
+        // padding 18×2 + selected pane 460 + gap 10
+        return mixerClusterWidth + 460 + 10 + 36
     }
 
     @ViewBuilder

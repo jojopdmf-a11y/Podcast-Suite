@@ -72,11 +72,18 @@ SKIP_REVEAL=1 "$BUILD_SCRIPT"
 
 echo ""
 echo "==> Launching $DISPLAY_NAME…"
-# -n forces THIS built copy. Plain `open` can reuse an older Podcast Stripper
+# -n forces THIS built copy. Plain `open` can reuse an older app
 # already registered with macOS (same name, leftover from another folder).
 open -n "$APP_PATH"
 echo "Opened: $APP_PATH"
-echo "The window should say Version 1.0.1 (3) under the title."
+PLIST="$APP_PATH/Contents/Info.plist"
+if [[ -f "$PLIST" ]]; then
+  VER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST" 2>/dev/null || true)"
+  BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST" 2>/dev/null || true)"
+  if [[ -n "$VER" && -n "$BUILD" ]]; then
+    echo "This copy is Version $VER ($BUILD). Look for that lime line under the title."
+  fi
+fi
 
 echo ""
 echo "Done. You can close this window."

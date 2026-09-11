@@ -98,8 +98,9 @@ struct ChannelProcessor {
     var deVerbBypass: Bool = false
     var wetterAmount: Float = 0
     var wetterBypass: Bool = false
+    var wetterRoom: WetterRoom = .drumRoom
     var levelerDrive: Float = 0
-    var levelerTargetDb: Float = -18
+    var levelerTargetDb: Float = -6
     var levelerBypass: Bool = false
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
 
@@ -128,6 +129,7 @@ struct ChannelProcessor {
             para.bypass = paraBypass || dspBypass
             para.configure(sampleRate: sampleRate)
             deVerb.configure(sampleRate: sampleRate)
+            wetter.room = wetterRoom
             wetter.configure(sampleRate: sampleRate)
             deVerb.amount = deVerbAmount
             deVerb.bypass = deVerbBypass || dspBypass

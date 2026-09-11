@@ -44,6 +44,12 @@ final class MixerEngine: @unchecked Sendable {
     private var playheadEmitCounter: Int = 0
     private var lastAutoGainDb: [Float] = []
     private var lastRTABins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
+    /// Separate from the audio lock so channel-select waveform swaps never stall the render thread.
+    private let waveformLock = NSLock()
+    private var cachedVoicePeaks: [[Float]] = []
+    private var cachedMusicPeaks: [Float] = []
+    private var cachedMasterPeaks: [Float] = []
+    private let waveformBinCount = 2048
 
     private var meterSlotCount: Int { voiceCount + 1 } // last slot always music
 
@@ -59,53 +65,17 @@ final class MixerEngine: @unchecked Sendable {
         lock.unlock()
     }
 
-    /// Peak envelope for UI waveform (0…1).
+    /// Peak envelope for UI waveform (0…1). Precomputed at load so channel select never stalls audio.
     func waveformPeaks(channelIndex: Int?, music: Bool, masterMix: Bool = false, binCount: Int = 800) -> [Float] {
-        lock.lock()
-        defer { lock.unlock() }
-        guard binCount > 0, frameCount > 0 else { return [] }
-
-        if masterMix {
-            var m = [Float](repeating: 0, count: frameCount)
-            for c in 0..<voiceBuffers.count {
-                let buf = voiceBuffers[c]
-                for f in 0..<min(frameCount, buf.count) {
-                    m[f] = max(m[f], abs(buf[f]))
-                }
-            }
-            if !musicBuffer.isEmpty {
-                let frames = musicBuffer.count / max(1, musicChannels)
-                for f in 0..<min(frameCount, frames) {
-                    if musicChannels >= 2 {
-                        m[f] = max(m[f], abs(musicBuffer[f * musicChannels]), abs(musicBuffer[f * musicChannels + 1]))
-                    } else {
-                        m[f] = max(m[f], abs(musicBuffer[f]))
-                    }
-                }
-            }
-            return downsamplePeaks(m, binCount: binCount)
+        _ = binCount
+        waveformLock.lock()
+        defer { waveformLock.unlock() }
+        if masterMix { return cachedMasterPeaks }
+        if music { return cachedMusicPeaks }
+        guard let channelIndex, cachedVoicePeaks.indices.contains(channelIndex) else {
+            return []
         }
-
-        if music {
-            var m: [Float] = []
-            let frames = musicBuffer.count / max(1, musicChannels)
-            m.reserveCapacity(frames)
-            if musicChannels >= 2 {
-                for f in 0..<frames {
-                    let l = musicBuffer[f * musicChannels]
-                    let r = musicBuffer[f * musicChannels + 1]
-                    m.append(max(abs(l), abs(r)))
-                }
-            } else {
-                m = musicBuffer.map { abs($0) }
-            }
-            return downsamplePeaks(m, binCount: binCount)
-        }
-
-        guard let channelIndex, voiceBuffers.indices.contains(channelIndex) else {
-            return Array(repeating: 0, count: binCount)
-        }
-        return downsamplePeaks(voiceBuffers[channelIndex].map { abs($0) }, binCount: binCount)
+        return cachedVoicePeaks[channelIndex]
     }
 
     func currentFrame() -> Int {
@@ -131,22 +101,33 @@ final class MixerEngine: @unchecked Sendable {
         onPlayhead?(head)
     }
 
-    private func downsamplePeaks(_ samples: [Float], binCount: Int) -> [Float] {
-        guard !samples.isEmpty else { return Array(repeating: 0, count: binCount) }
+    /// Downsample interleaved samples to a normalized peak envelope. No full-length copies.
+    private func downsampleAbs(_ samples: [Float], binCount: Int, frameCount: Int, channelCount: Int) -> [Float] {
+        let frames = max(0, frameCount)
+        guard frames > 0, !samples.isEmpty else { return Array(repeating: 0, count: binCount) }
+        let ch = max(1, channelCount)
         var out = [Float](repeating: 0, count: binCount)
-        let n = samples.count
         for i in 0..<binCount {
-            let start = i * n / binCount
-            let end = max(start + 1, (i + 1) * n / binCount)
+            let start = i * frames / binCount
+            let end = max(start + 1, (i + 1) * frames / binCount)
             var peak: Float = 0
-            for j in start..<min(end, n) {
-                peak = max(peak, samples[j])
+            for f in start..<min(end, frames) {
+                if ch <= 1 {
+                    if f < samples.count { peak = max(peak, abs(samples[f])) }
+                } else {
+                    let base = f * ch
+                    if base + 1 < samples.count {
+                        peak = max(peak, abs(samples[base]), abs(samples[base + 1]))
+                    } else if base < samples.count {
+                        peak = max(peak, abs(samples[base]))
+                    }
+                }
             }
             out[i] = peak
         }
         let maxPeak = out.max() ?? 1
         if maxPeak > 1e-6 {
-            out = out.map { $0 / maxPeak }
+            for i in 0..<binCount { out[i] /= maxPeak }
         }
         return out
     }
@@ -232,6 +213,52 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
+        rebuildWaveformCache()
+    }
+
+    private func rebuildWaveformCache() {
+        let bins = waveformBinCount
+        let voicePeaks = voiceBuffers.map { downsampleAbs($0, binCount: bins, frameCount: $0.count, channelCount: 1) }
+        let musicPeaks: [Float]
+        if !musicBuffer.isEmpty {
+            let frames = musicBuffer.count / max(1, musicChannels)
+            musicPeaks = downsampleAbs(musicBuffer, binCount: bins, frameCount: frames, channelCount: musicChannels)
+        } else {
+            musicPeaks = []
+        }
+
+        var master = [Float](repeating: 0, count: bins)
+        let total = max(1, frameCount)
+        let ch = max(1, musicChannels)
+        for i in 0..<bins {
+            let start = i * total / bins
+            let end = max(start + 1, (i + 1) * total / bins)
+            var peak: Float = 0
+            for f in start..<min(end, total) {
+                for buf in voiceBuffers {
+                    if f < buf.count { peak = max(peak, abs(buf[f])) }
+                }
+                if !musicBuffer.isEmpty {
+                    let base = f * ch
+                    if ch >= 2, base + 1 < musicBuffer.count {
+                        peak = max(peak, abs(musicBuffer[base]), abs(musicBuffer[base + 1]))
+                    } else if base < musicBuffer.count {
+                        peak = max(peak, abs(musicBuffer[base]))
+                    }
+                }
+            }
+            master[i] = peak
+        }
+        let maxPeak = master.max() ?? 1
+        if maxPeak > 1e-6 {
+            for i in 0..<bins { master[i] /= maxPeak }
+        }
+
+        waveformLock.lock()
+        cachedVoicePeaks = voicePeaks
+        cachedMusicPeaks = musicPeaks
+        cachedMasterPeaks = master
+        waveformLock.unlock()
     }
 
     func updateParams(
@@ -280,6 +307,7 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
             processors[i].wetterBypass = voices[i].voice.wetterBypass
+            processors[i].wetterRoom = voices[i].voice.wetterRoom
             processors[i].levelerDrive = voices[i].voice.levelerDrive
             processors[i].levelerBypass = voices[i].voice.levelerBypass
             processors[i].levelerTargetDb = voices[i].voice.levelerTargetDb
