@@ -25,7 +25,8 @@ Opens `dist/Lil Leveler.app`.
 2. Drop it onto Lil Leveler (WAV, AIFF, MP3, M4A, CAF, FLAC, …)
 3. Pick a platform preset (or Custom)
 4. Review before/after metering
-5. **Export leveled** → `{name}_leveled.wav` (PCM WAV for host compatibility)
+5. Hit **PLAY**, drag the time slider, flip **A/B** between PRE (original) and POST (leveled)
+6. **Export leveled** → `{name}_leveled.wav` (PCM WAV for host compatibility)
 
 ## Platform targets (v0.1)
 

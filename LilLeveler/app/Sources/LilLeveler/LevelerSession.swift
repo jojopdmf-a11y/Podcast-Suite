@@ -1,5 +1,4 @@
 import AppKit
-import AVFoundation
 import Combine
 import Foundation
 import SwiftUI
@@ -20,12 +19,16 @@ final class LevelerSession: ObservableObject {
     @Published var hasResult = false
 
     @Published var isPlaying = false
-    @Published var playAfter = false // false = preview source, true = preview leveled
+    /// false = PRE (source), true = POST (leveled)
+    @Published var playAfter = false
+    @Published var playheadFrame = 0
+    @Published var durationFrames = 0
+    @Published var sampleRate: Double = 44100
+    @Published var isScrubbing = false
 
     private var sourceBuffer: WAVIO.Buffer?
     private var leveledBuffer: WAVIO.Buffer?
-    private var audioEngine: AVAudioEngine?
-    private var player: AVAudioPlayerNode?
+    private let playback = LevelerPlaybackEngine()
 
     var activeTargetLUFS: Float {
         preset.isCustom ? customLUFS : preset.targetLUFS
@@ -33,6 +36,33 @@ final class LevelerSession: ObservableObject {
 
     var activeTruePeak: Float {
         preset.isCustom ? customTP : preset.truePeakDbTP
+    }
+
+    var durationSeconds: Double {
+        guard sampleRate > 0 else { return 0 }
+        return Double(durationFrames) / sampleRate
+    }
+
+    var playheadSeconds: Double {
+        guard sampleRate > 0 else { return 0 }
+        return Double(playheadFrame) / sampleRate
+    }
+
+    init() {
+        playback.onPlayhead = { [weak self] frame in
+            Task { @MainActor in
+                guard let self, !self.isScrubbing else { return }
+                self.playheadFrame = frame
+            }
+        }
+        playback.onEnded = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.isPlaying = false
+                self.playheadFrame = 0
+                self.status = self.readyStatus()
+            }
+        }
     }
 
     func load(url: URL) {
@@ -43,6 +73,9 @@ final class LevelerSession: ObservableObject {
         after = .empty
         appliedGainDb = 0
         leveledBuffer = nil
+        playAfter = false
+        playheadFrame = 0
+        durationFrames = 0
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -53,6 +86,9 @@ final class LevelerSession: ObservableObject {
                     self.sourceName = url.lastPathComponent
                     self.sourceBuffer = buf
                     self.before = report
+                    self.sampleRate = buf.sampleRate
+                    self.durationFrames = buf.frameCount
+                    self.playback.load(pre: buf, post: nil)
                     self.isBusy = false
                     self.status = String(
                         format: "Loaded · %.0fs · %d ch · %.0f Hz · integrated %.1f LUFS",
@@ -96,13 +132,9 @@ final class LevelerSession: ObservableObject {
                     self.after = report
                     self.appliedGainDb = gain
                     self.hasResult = true
+                    self.playback.setPost(out)
                     self.isBusy = false
-                    self.status = String(
-                        format: "Ready · gain %+.1f dB → %.1f LUFS · TP %.1f dBTP",
-                        gain,
-                        report.integratedLUFS,
-                        report.truePeakDbTP
-                    )
+                    self.status = self.isPlaying ? self.playingStatus() : self.readyStatus()
                 }
             } catch {
                 await MainActor.run {
@@ -131,73 +163,76 @@ final class LevelerSession: ObservableObject {
         }
     }
 
-    func togglePlay(after: Bool) {
-        if isPlaying, playAfter == after {
-            stopPlayback()
+    func togglePlayback() {
+        if isPlaying {
+            playback.pause()
+            isPlaying = false
+            playheadFrame = playback.currentFrame()
+            status = "Paused · \(Self.formatTime(seconds: playheadSeconds))"
             return
         }
-        stopPlayback()
-        let buf = after ? leveledBuffer : sourceBuffer
-        guard let buf else { return }
-        playAfter = after
+        guard sourceBuffer != nil else { return }
         do {
-            try startPlayback(buf)
+            try playback.start()
             isPlaying = true
-            status = after ? "Playing leveled…" : "Playing source…"
+            status = playingStatus()
         } catch {
+            isPlaying = false
             status = error.localizedDescription
         }
     }
 
-    func stopPlayback() {
-        player?.stop()
-        audioEngine?.stop()
-        if let node = player {
-            audioEngine?.detach(node)
+    func setListenPost(_ listenPost: Bool) {
+        let next = listenPost && hasResult
+        playAfter = next
+        playback.setPlayPost(next)
+        if isPlaying {
+            status = playingStatus()
         }
-        player = nil
-        audioEngine = nil
-        isPlaying = false
     }
 
-    private func startPlayback(_ buffer: WAVIO.Buffer) throws {
-        let engine = AVAudioEngine()
-        let node = AVAudioPlayerNode()
-        engine.attach(node)
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: buffer.sampleRate,
-            channels: AVAudioChannelCount(buffer.channelCount),
-            interleaved: true
-        )!
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        let frameCount = AVAudioFrameCount(buffer.frameCount)
-        guard let pcm = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw LevelerError.processFailed("Could not build playback buffer.")
+    func scrub(to seconds: Double) {
+        isScrubbing = true
+        let clamped = max(0, min(durationSeconds, seconds))
+        let frame = Int((clamped * sampleRate).rounded(.down))
+        playback.seek(frame: frame)
+        playheadFrame = frame
+    }
+
+    func endScrub() {
+        isScrubbing = false
+        playheadFrame = playback.currentFrame()
+    }
+
+    func stopPlayback() {
+        playback.stop(resetPlayhead: true)
+        isPlaying = false
+        isScrubbing = false
+        playheadFrame = 0
+    }
+
+    static func formatTime(seconds: Double) -> String {
+        let safe = max(0, seconds)
+        let total = Int(safe.rounded(.down))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    private func playingStatus() -> String {
+        playAfter ? "Playing POST (leveled)…" : "Playing PRE (source)…"
+    }
+
+    private func readyStatus() -> String {
+        if hasResult {
+            return String(
+                format: "Ready · gain %+.1f dB → %.1f LUFS · TP %.1f dBTP",
+                appliedGainDb,
+                after.integratedLUFS,
+                after.truePeakDbTP
+            )
         }
-        pcm.frameLength = frameCount
-        if let dst = pcm.floatChannelData {
-            if buffer.channelCount == 1 {
-                for i in 0..<buffer.frameCount {
-                    dst[0][i] = buffer.samples[i]
-                }
-            } else {
-                // De-interleave for non-interleaved PCM buffer
-                for f in 0..<buffer.frameCount {
-                    for c in 0..<buffer.channelCount {
-                        dst[c][f] = buffer.samples[f * buffer.channelCount + c]
-                    }
-                }
-            }
+        if sourceURL != nil {
+            return "Ready"
         }
-        try engine.start()
-        node.scheduleBuffer(pcm, at: nil, options: []) { [weak self] in
-            Task { @MainActor in
-                self?.isPlaying = false
-            }
-        }
-        node.play()
-        audioEngine = engine
-        player = node
+        return "Drop a final mix to begin"
     }
 }
