@@ -8,6 +8,8 @@ Native DSP (inspired by, not affiliated with): De-verb, Wetter (Drum / Studio / 
 
 In the Podcast Suite folder, double-click **`Update Fixer Mixer.command`**. That pulls GitHub, rebuilds, and launches the app.
 
+Needs **macOS 14 Sonoma or newer**. Mixer is light compared with Stripper; any Apple Silicon Mac with 16 GB RAM is a comfortable match. See the suite README for the full Mac notes.
+
 ## Use
 
 1. Run Podcast Stripper on an episode

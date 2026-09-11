@@ -8,6 +8,8 @@ Companion to **Podcast Stripper** and **Fixer Mixer**. Same dark cyan neon look.
 
 In the Podcast Suite folder, double-click **`Update Lil Leveler.command`**. That pulls GitHub, rebuilds, and launches the app.
 
+Needs **macOS 14 Sonoma or newer**. Leveler is the lightest of the three apps. See the suite README for Mac recommendations.
+
 ## Build
 
 ```bash
