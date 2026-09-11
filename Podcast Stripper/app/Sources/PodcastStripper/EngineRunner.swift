@@ -152,6 +152,23 @@ final class EngineRunner: ObservableObject {
     private var outputDirExisted = false
     private var pulseTimer: Timer?
     private var lastEngineProgressAt = Date()
+    private var jobStartedAt: Date?
+
+    var elapsedLabel: String { Self.formatElapsed(elapsedSeconds) }
+
+    static func formatElapsed(_ seconds: Int) -> String {
+        let total = max(0, seconds)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m \(String(format: "%02d", secs))s"
+        }
+        if minutes > 0 {
+            return "\(minutes)m \(String(format: "%02d", secs))s"
+        }
+        return "\(secs)s"
+    }
 
     func refreshSetup() {
         if isRunning {
@@ -197,8 +214,8 @@ final class EngineRunner: ObservableObject {
         }
         process = nil
         isRunning = false
-        stopPulseTimer()
-        message = "Cancelled."
+        freezeElapsed()
+        message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
         restoreIdleSetupMessage()
         removeEmptyOutputDirIfNeeded()
     }
@@ -215,6 +232,7 @@ final class EngineRunner: ObservableObject {
         message = "Starting…"
         setup.message = "Still working. Long episodes can take several minutes."
         elapsedSeconds = 0
+        jobStartedAt = Date()
         engineProgressStale = false
         lastEngineProgressAt = Date()
         startPulseTimer()
@@ -232,8 +250,9 @@ final class EngineRunner: ObservableObject {
                     arguments += ["--num-speakers", String(count)]
                 }
                 let output = try await runTool(paths: paths, arguments: arguments, streaming: true)
+                freezeElapsed()
                 if userCancelled {
-                    message = "Cancelled."
+                    message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
                     removeEmptyOutputDirIfNeeded()
                 } else if let done = lastEvent(from: output, named: "done"),
                    let dir = done["output_dir"] as? String
@@ -242,28 +261,32 @@ final class EngineRunner: ObservableObject {
                     result = EngineResult(outputDir: URL(fileURLWithPath: dir), tracks: tracks)
                     percent = 100
                     let speakerCount = (done["speakers"] as? [Any])?.count ?? tracks.count
+                    let took = elapsedSeconds > 0 ? " Took \(elapsedLabel)." : ""
                     if done["music"] != nil {
-                        message = "Saved \(speakerCount) speaker track\(speakerCount == 1 ? "" : "s") and a music/SFX track."
+                        message = "Saved \(speakerCount) speaker track\(speakerCount == 1 ? "" : "s") and a music/SFX track.\(took)"
                     } else {
-                        message = "Saved \(tracks.count) speaker track\(tracks.count == 1 ? "" : "s")."
+                        message = "Saved \(tracks.count) speaker track\(tracks.count == 1 ? "" : "s").\(took)"
                     }
                 } else if let failed = lastEvent(from: output, named: "error") {
                     throw EngineError.failed(failed["message"] as? String ?? "Something went wrong.")
                 }
             } catch {
+                freezeElapsed()
                 if userCancelled {
-                    message = "Cancelled."
+                    message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
                     errorMessage = nil
                     removeEmptyOutputDirIfNeeded()
                 } else {
                     errorMessage = error.localizedDescription
-                    message = "Could not split this file."
+                    message = elapsedSeconds > 0
+                        ? "Could not split this file. Stopped after \(elapsedLabel)."
+                        : "Could not split this file."
                     removeEmptyOutputDirIfNeeded()
                 }
             }
             isRunning = false
             process = nil
-            stopPulseTimer()
+            freezeElapsed()
             restoreIdleSetupMessage()
         }
     }
@@ -387,6 +410,13 @@ final class EngineRunner: ObservableObject {
         }
     }
 
+    private func freezeElapsed() {
+        if let jobStartedAt {
+            elapsedSeconds = max(0, Int(Date().timeIntervalSince(jobStartedAt).rounded()))
+        }
+        stopPulseTimer()
+    }
+
     private func startPulseTimer() {
         stopPulseTimer()
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -405,10 +435,12 @@ final class EngineRunner: ObservableObject {
 
     private func tickWhileRunning() {
         guard isRunning else {
-            stopPulseTimer()
+            freezeElapsed()
             return
         }
-        elapsedSeconds += 1
+        if let jobStartedAt {
+            elapsedSeconds = max(0, Int(Date().timeIntervalSince(jobStartedAt)))
+        }
         let silent = Date().timeIntervalSince(lastEngineProgressAt)
         engineProgressStale = silent >= 40
         if !engineProgressStale {

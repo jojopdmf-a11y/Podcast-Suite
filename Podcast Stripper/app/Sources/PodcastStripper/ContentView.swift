@@ -206,12 +206,25 @@ struct ContentView: View {
             }
             .frame(height: 8)
 
-            Text(runner.message.uppercased())
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .tracking(0.6)
-                .foregroundStyle(StripperTheme.textPrimary)
+            HStack(alignment: .firstTextBaseline) {
+                Text(runner.message.uppercased())
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .tracking(0.6)
+                    .foregroundStyle(StripperTheme.textPrimary)
+                Spacer(minLength: 8)
+                if showElapsedClock {
+                    Text(runner.elapsedLabel)
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(StripperTheme.lime)
+                        .help(runner.isRunning ? "Time so far" : "Time this job took")
+                }
+            }
             if runner.isRunning {
                 Text(processingHint)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+            } else if runner.result != nil, runner.elapsedSeconds > 0 {
+                Text("Finished in \(runner.elapsedLabel).")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
             } else {
@@ -232,13 +245,15 @@ struct ContentView: View {
     }
 
     private var processingHint: String {
-        let minutes = runner.elapsedSeconds / 60
-        let seconds = runner.elapsedSeconds % 60
-        let clock = minutes > 0 ? "\(minutes)m \(String(format: "%02d", seconds))s" : "\(seconds)s"
+        let clock = runner.elapsedLabel
         if runner.engineProgressStale {
             return "No new progress for a while (\(clock)). You can cancel if this looks stuck."
         }
         return "Still working… \(clock). Long episodes can take several minutes."
+    }
+
+    private var showElapsedClock: Bool {
+        runner.isRunning || runner.elapsedSeconds > 0
     }
 
     private func resultRow(_ result: EngineResult) -> some View {
@@ -249,6 +264,13 @@ struct ContentView: View {
                 .font(.system(size: 12, weight: .bold, design: .rounded))
                 .tracking(0.8)
                 .foregroundStyle(StripperTheme.textPrimary)
+            if runner.elapsedSeconds > 0 {
+                Text("·")
+                    .foregroundStyle(StripperTheme.textSecondary)
+                Text(runner.elapsedLabel.uppercased())
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(StripperTheme.lime)
+            }
             Spacer()
             Button("SHOW IN FINDER") {
                 NSWorkspace.shared.activateFileViewerSelecting([result.outputDir])
