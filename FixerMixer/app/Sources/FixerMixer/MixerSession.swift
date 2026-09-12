@@ -298,7 +298,7 @@ final class MixerSession: ObservableObject {
     @Published var isBouncing = false
     @Published var sourceFolder: URL?
     /// Last mix JSON the user saved or opened, used as the Save panel default.
-    private var lastMixURL: URL?
+    @Published private(set) var lastMixURL: URL?
     @Published var sampleRate: Double = 44100
     @Published var frameCount: Int = 0
     /// Voice slot id, or `ChannelStripState.musicID`
@@ -481,6 +481,8 @@ final class MixerSession: ObservableObject {
                 } else {
                     line += " · mix file found but could not be read"
                 }
+            } else if lastMixURL?.deletingLastPathComponent() != folder {
+                lastMixURL = nil
             }
             status = line
         } catch {
@@ -529,6 +531,17 @@ final class MixerSession: ObservableObject {
         }
     }
 
+    /// Overwrite the current mix file with no naming window.
+    /// First time writes `FixerMixer.mix.json` in the `_speakers` folder.
+    func updateMix() {
+        guard frameCount > 0, let folder = sourceFolder else {
+            status = "Load a Stripper folder before saving a mix."
+            return
+        }
+        let dest = lastMixURL ?? MixerMixFile.sidecarURL(in: folder)
+        writeMix(to: dest, verb: "Updated")
+    }
+
     /// Opens a Save panel so you pick the folder and file name for the mix JSON.
     func saveMix() {
         guard frameCount > 0, let folder = sourceFolder else {
@@ -551,10 +564,14 @@ final class MixerSession: ObservableObject {
         if dest.pathExtension.lowercased() != "json" {
             dest = dest.appendingPathExtension("json")
         }
+        writeMix(to: dest, verb: "Saved")
+    }
+
+    private func writeMix(to dest: URL, verb: String) {
         do {
             try MixerMixFile.write(MixerMixFile.make(from: self), to: dest)
             lastMixURL = dest
-            status = "Saved mix → \(dest.lastPathComponent)"
+            status = "\(verb) mix → \(dest.lastPathComponent)"
         } catch {
             status = "Could not save mix: \(error.localizedDescription)"
         }
@@ -570,6 +587,7 @@ final class MixerSession: ObservableObject {
                 loadStripperFolder(folder)
                 MixerMixFile.apply(doc, to: self)
                 syncParamsToEngine()
+                lastMixURL = url
                 status = "Loaded folder and mix from \(url.lastPathComponent)"
                 return
             }
@@ -597,6 +615,7 @@ final class MixerSession: ObservableObject {
             let doc = try MixerMixFile.read(from: url)
             MixerMixFile.apply(doc, to: self)
             syncParamsToEngine()
+            lastMixURL = url
             return true
         } catch {
             return false
