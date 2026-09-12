@@ -29,6 +29,7 @@ struct ContentView: View {
             }
             .padding(18)
         }
+        .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
@@ -94,7 +95,7 @@ struct ContentView: View {
                     .padding(.top, 6)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 320)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }
@@ -116,7 +117,9 @@ struct ContentView: View {
                 )
                 transportRow
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var presetColumn: some View {

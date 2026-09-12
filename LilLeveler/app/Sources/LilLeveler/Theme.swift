@@ -22,6 +22,16 @@ enum LevelerTheme {
     }
 }
 
+/// Desk size is fixed. Meters stay Dorrough-skinny; the window does not stretch.
+enum LevelerLayout {
+    static let windowWidth: CGFloat = 900
+    static let windowHeight: CGFloat = 792
+    static let faceplateWidth: CGFloat = 148
+    static let ledColumnWidth: CGFloat = 38
+    static let scaleWidth: CGFloat = 22
+    static let meterStackHeight: CGFloat = 248
+}
+
 extension View {
     func levelerPanel(cornerRadius: CGFloat = 12, glow: Bool = false) -> some View {
         self

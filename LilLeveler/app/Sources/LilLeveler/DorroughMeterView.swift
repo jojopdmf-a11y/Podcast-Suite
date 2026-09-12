@@ -56,6 +56,7 @@ struct DorroughMeterDeck: View {
             )
             meterControls
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
         .levelerPanel()
     }
@@ -115,7 +116,7 @@ struct DorroughMeterDeck: View {
 
             Spacer(minLength: 0)
         }
-        .frame(width: 118)
+        .frame(width: 100)
         .padding(.vertical, 4)
     }
 
@@ -169,13 +170,13 @@ struct DorroughFaceplate: View {
                     .foregroundStyle(DorroughLook.scale.opacity(0.8))
             }
 
-            HStack(alignment: .top, spacing: 4) {
+            HStack(alignment: .top, spacing: 3) {
                 scaleColumn(align: .trailing)
                 ledWell(level: live.0, hold: holdL)
                 ledWell(level: live.1, hold: holdR)
                 scaleColumn(align: .leading)
             }
-            .frame(height: 248)
+            .frame(height: LevelerLayout.meterStackHeight)
             .opacity(active ? 1 : 0.38)
 
             HStack {
@@ -186,11 +187,12 @@ struct DorroughFaceplate: View {
             }
             .font(.system(size: 9, weight: .bold, design: .rounded))
             .foregroundStyle(DorroughLook.silk)
-            .padding(.horizontal, 22)
+            .padding(.horizontal, 8)
 
             readout
         }
-        .padding(12)
+        .padding(8)
+        .frame(width: LevelerLayout.faceplateWidth)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
@@ -223,9 +225,9 @@ struct DorroughFaceplate: View {
                 lcdValue("R", live.1)
             }
             HStack {
-                lcdValue("HOLD", holdL)
+                lcdValue("PK", holdL)
                 Spacer()
-                lcdValue("HOLD", holdR)
+                lcdValue("PK", holdR)
             }
         }
         .padding(.horizontal, 8)
@@ -246,7 +248,7 @@ struct DorroughFaceplate: View {
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundStyle(DorroughLook.silk.opacity(0.75))
             Text(formatDb(db))
-                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(db >= 0 ? DorroughLook.ledRed : DorroughLook.lcd)
                 .shadow(color: (db >= 0 ? DorroughLook.ledRed : DorroughLook.lcd).opacity(0.45), radius: 3)
         }
@@ -281,7 +283,7 @@ struct DorroughFaceplate: View {
                 .position(x: geo.size.width / 2, y: y)
             }
         }
-        .frame(width: 28)
+        .frame(width: LevelerLayout.scaleWidth)
     }
 
     private func scaleLabel(_ db: Float) -> String {
@@ -332,8 +334,8 @@ struct DorroughFaceplate: View {
                 )
             }
         }
-        .padding(4)
-        .frame(maxWidth: .infinity)
+        .padding(3)
+        .frame(width: LevelerLayout.ledColumnWidth)
         .background(
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(DorroughLook.well)
