@@ -11,8 +11,11 @@ enum MixerMixFile {
     }
 
     static func isMixFile(_ url: URL) -> Bool {
-        url.lastPathComponent.lowercased() == fileName.lowercased()
-            || url.pathExtension.lowercased() == "json" && url.lastPathComponent.lowercased().contains("fixer")
+        guard url.pathExtension.lowercased() == "json" else { return false }
+        if url.lastPathComponent.lowercased() == fileName.lowercased() { return true }
+        if url.lastPathComponent.lowercased().contains("fixer") { return true }
+        if url.lastPathComponent.lowercased().contains("mix") { return true }
+        return (try? read(from: url)) != nil
     }
 
     struct Document: Codable {

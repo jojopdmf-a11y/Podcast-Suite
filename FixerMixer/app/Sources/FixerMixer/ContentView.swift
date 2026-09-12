@@ -135,11 +135,11 @@ struct ContentView: View {
                 .buttonStyle(MixerGhostButtonStyle())
             Button("LOAD MIX…") { pickMixFile() }
                 .buttonStyle(MixerGhostButtonStyle())
-                .help("Open a FixerMixer.mix.json file (also loads its _speakers folder)")
+                .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
             if session.frameCount > 0 {
-                Button("SAVE MIX") { session.saveMix() }
+                Button("SAVE MIX…") { session.saveMix() }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Writes FixerMixer.mix.json into this _speakers folder. Drop the folder later and the mix comes back.")
+                    .help("Choose a folder and name for this mix. Audio stays in the WAV files.")
                 Button("LOAD OTHER FOLDER…") { pickFolder() }
                     .buttonStyle(MixerGhostButtonStyle())
             }
@@ -468,7 +468,7 @@ struct ContentView: View {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.json]
-        panel.message = "Choose a FixerMixer.mix.json file"
+        panel.message = "Choose a mix JSON file"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
             session.openMixFile(url)
