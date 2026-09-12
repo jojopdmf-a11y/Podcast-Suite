@@ -53,7 +53,7 @@ struct SelectedChannelPanel: View {
                             }
                     }
                     if canRename {
-                        Text("Bounce → \(channel.bounceStemBaseName)_fixed.wav")
+                        Text("Export name → \(channel.bounceStemBaseName)_fixed.wav")
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
                             .foregroundStyle(APILook.labelDim)
                     }

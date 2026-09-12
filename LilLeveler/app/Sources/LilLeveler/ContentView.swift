@@ -342,11 +342,12 @@ struct ContentView: View {
 
                 Spacer()
 
-                Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED") {
+                Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
                     session.exportLeveled()
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
                 .disabled(!session.hasResult || session.isBusy)
+                .help("Choose a folder and file name for the leveled WAV")
             }
         }
         .padding(12)

@@ -7,6 +7,9 @@ struct ContentView: View {
     @State private var isDropTargeted = false
     @State private var spaceMonitor: Any?
     @State private var showAbout = false
+    @State private var showExport = false
+    @State private var exportItems: [MixerExportItem] = []
+    @State private var exportFolder: URL?
 
     var body: some View {
         ZStack {
@@ -66,6 +69,19 @@ struct ContentView: View {
                 accent: MixerTheme.cyan
             )
         }
+        .sheet(isPresented: $showExport) {
+            MixerExportSheet(
+                items: $exportItems,
+                folder: $exportFolder,
+                onCancel: { showExport = false },
+                onExport: {
+                    showExport = false
+                    if let exportFolder {
+                        session.bounce(items: exportItems, folder: exportFolder)
+                    }
+                }
+            )
+        }
     }
 
     private func installSpacebarMonitor() {
@@ -107,7 +123,7 @@ struct ContentView: View {
                     .tracking(1.4)
                     .foregroundStyle(MixerTheme.cyan)
                     .shadow(color: MixerTheme.cyan.opacity(0.4), radius: 10)
-                Text("Stripper stems → polish → bounce")
+                Text("Stripper stems → polish → export")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                 Text(CougarCalcBrand.versionLabel)
@@ -408,12 +424,14 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
-            Button(session.isBouncing ? "BOUNCING…" : "BOUNCE STEMS + MIX") {
-                session.bounce()
+            Button(session.isBouncing ? "EXPORTING…" : "EXPORT…") {
+                exportItems = session.makeExportItems()
+                exportFolder = session.suggestedExportFolder()
+                showExport = true
             }
             .buttonStyle(MixerGhostButtonStyle())
             .disabled(session.isBouncing || session.frameCount == 0)
-            .help("Export post-DSP stems + stereo mix")
+            .help("Choose speaker stems, music, and the master 2-mix, then name and save them")
         }
         .padding(12)
         .mixerPanel()
