@@ -35,7 +35,7 @@ struct DorroughMeterDeck: View {
     @ObservedObject var session: LevelerSession
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: LevelerLayout.meterDeckSpacing) {
             DorroughFaceplate(
                 title: "PRE",
                 sample: session.livePre,
@@ -56,8 +56,7 @@ struct DorroughMeterDeck: View {
             )
             meterControls
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(LevelerLayout.meterDeckPadding)
         .levelerPanel()
     }
 
@@ -116,7 +115,7 @@ struct DorroughMeterDeck: View {
 
             Spacer(minLength: 0)
         }
-        .frame(width: 100)
+        .frame(width: LevelerLayout.meterControlsWidth)
         .padding(.vertical, 4)
     }
 

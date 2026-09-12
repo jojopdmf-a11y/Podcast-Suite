@@ -27,7 +27,7 @@ struct ContentView: View {
                 }
                 statusBar
             }
-            .padding(18)
+            .padding(LevelerLayout.windowPadding)
         }
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
         .preferredColorScheme(.dark)
@@ -102,9 +102,9 @@ struct ContentView: View {
     }
 
     private var mainWorkspace: some View {
-        HStack(alignment: .top, spacing: 14) {
+        HStack(alignment: .top, spacing: LevelerLayout.columnGap) {
             presetColumn
-                .frame(width: 220)
+                .frame(width: LevelerLayout.presetColumnWidth)
 
             VStack(alignment: .leading, spacing: 12) {
                 fileRow
@@ -117,9 +117,9 @@ struct ContentView: View {
                 )
                 transportRow
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(width: LevelerLayout.meterDeckWidth, alignment: .leading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var presetColumn: some View {
