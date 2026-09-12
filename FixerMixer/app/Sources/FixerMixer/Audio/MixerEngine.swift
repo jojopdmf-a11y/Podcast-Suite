@@ -547,10 +547,20 @@ final class MixerEngine: @unchecked Sendable {
 
     struct BounceResult {
         var folder: URL
-        var stemCount: Int
+        var fileCount: Int
     }
 
-    func bounce(to folder: URL) throws -> BounceResult {
+    /// Which rendered buffers to write, and the `.wav` file names inside `folder`.
+    struct BounceWritePlan: Sendable {
+        var voiceFiles: [Int: String]
+        var musicFile: String?
+        var mixFile: String?
+        var isEmpty: Bool {
+            voiceFiles.isEmpty && musicFile == nil && mixFile == nil
+        }
+    }
+
+    func bounce(to folder: URL, plan: BounceWritePlan) throws -> BounceResult {
         lock.lock()
         let total = frameCount
         let sr = sampleRate
@@ -568,6 +578,7 @@ final class MixerEngine: @unchecked Sendable {
         lock.unlock()
 
         guard total > 0 else { throw MixerError.engine("Nothing to bounce.") }
+        guard !plan.isEmpty else { throw MixerError.engine("Pick at least one output to export.") }
 
         for i in procs.indices {
             procs[i].reset()
@@ -644,41 +655,57 @@ final class MixerEngine: @unchecked Sendable {
             mixR[head] = busR
         }
 
-        var stemCount = 0
+        var fileCount = 0
         var usedNames = Set<String>()
+        func uniqueName(_ raw: String, fallback: String) -> String {
+            var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if base.lowercased().hasSuffix(".wav") {
+                base = String(base.dropLast(4))
+            }
+            base = ChannelStripState.sanitizeFilenameComponent(base)
+            if base.isEmpty { base = fallback }
+            var unique = base
+            var suffix = 2
+            while usedNames.contains(unique.lowercased()) {
+                unique = "\(base)_\(suffix)"
+                suffix += 1
+            }
+            usedNames.insert(unique.lowercased())
+            return "\(unique).wav"
+        }
+
         for c in 0..<voiceN {
+            guard let requested = plan.voiceFiles[c] else { continue }
             let has = c < voices.count && !voices[c].isEmpty
             if has {
                 let num = nums.indices.contains(c) ? nums[c] : (c + 1)
-                var base = names.indices.contains(c) ? names[c] : "Speaker_\(num)"
-                if base.isEmpty { base = "Speaker_\(num)" }
-                var unique = base
-                var suffix = 2
-                while usedNames.contains(unique.lowercased()) {
-                    unique = "\(base)_\(suffix)"
-                    suffix += 1
-                }
-                usedNames.insert(unique.lowercased())
-                let url = folder.appendingPathComponent("\(unique)_fixed.wav")
+                let fallback = names.indices.contains(c) ? names[c] : "Speaker_\(num)"
+                let filename = uniqueName(requested, fallback: fallback.isEmpty ? "Speaker_\(num)" : fallback)
+                let url = folder.appendingPathComponent(filename)
                 try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[c]))
-                stemCount += 1
+                fileCount += 1
             }
         }
-        if !music.isEmpty {
-            let url = folder.appendingPathComponent("Music_and_SFX_fixed.wav")
+        if let requested = plan.musicFile, !music.isEmpty {
+            let filename = uniqueName(requested, fallback: "Music_and_SFX_fixed")
+            let url = folder.appendingPathComponent(filename)
             try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[voiceN]))
-            stemCount += 1
+            fileCount += 1
         }
-        var mixInterleaved: [Float] = []
-        mixInterleaved.reserveCapacity(total * 2)
-        for i in 0..<total {
-            mixInterleaved.append(mixL[i])
-            mixInterleaved.append(mixR[i])
+        if let requested = plan.mixFile {
+            var mixInterleaved: [Float] = []
+            mixInterleaved.reserveCapacity(total * 2)
+            for i in 0..<total {
+                mixInterleaved.append(mixL[i])
+                mixInterleaved.append(mixR[i])
+            }
+            let filename = uniqueName(requested, fallback: "mix")
+            try WAVIO.write(
+                url: folder.appendingPathComponent(filename),
+                buffer: .init(sampleRate: sr, channelCount: 2, samples: mixInterleaved)
+            )
+            fileCount += 1
         }
-        try WAVIO.write(
-            url: folder.appendingPathComponent("mix.wav"),
-            buffer: .init(sampleRate: sr, channelCount: 2, samples: mixInterleaved)
-        )
-        return BounceResult(folder: folder, stemCount: stemCount)
+        return BounceResult(folder: folder, fileCount: fileCount)
     }
 }

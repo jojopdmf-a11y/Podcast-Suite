@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class LevelerSession: ObservableObject {
@@ -221,9 +222,23 @@ final class LevelerSession: ObservableObject {
             return
         }
         let base = sourceURL.deletingPathExtension().lastPathComponent
-        let dest = sourceURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("\(base)_leveled.wav")
+        let panel = NSSavePanel()
+        panel.title = "Export Leveled"
+        panel.message = "WAV file after leveling. Pick a folder and a name."
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.wav]
+        panel.nameFieldStringValue = "\(base)_leveled.wav"
+        panel.directoryURL = sourceURL.deletingLastPathComponent()
+        panel.level = .modalPanel
+        guard panel.runModal() == .OK, var dest = panel.url else {
+            status = "Export cancelled"
+            return
+        }
+        if dest.pathExtension.lowercased() != "wav" {
+            dest = dest.appendingPathExtension("wav")
+        }
         do {
             try WAVIO.write(url: dest, buffer: leveledBuffer)
             status = "Exported → \(dest.lastPathComponent)"

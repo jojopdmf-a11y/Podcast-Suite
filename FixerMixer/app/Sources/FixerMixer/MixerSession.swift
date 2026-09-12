@@ -572,10 +572,79 @@ final class MixerSession: ObservableObject {
         }
     }
 
-    func bounce() {
+    func makeExportItems() -> [MixerExportItem] {
+        var items: [MixerExportItem] = []
+        for (index, voice) in voices.enumerated() {
+            items.append(
+                MixerExportItem(
+                    id: "voice-\(voice.id)",
+                    kind: .voice(index),
+                    enabled: true,
+                    name: "\(voice.bounceStemBaseName)_fixed",
+                    label: voice.name,
+                    role: "Speaker stem"
+                )
+            )
+        }
+        if hasMusic {
+            items.append(
+                MixerExportItem(
+                    id: "music",
+                    kind: .music,
+                    enabled: true,
+                    name: "\(music.bounceStemBaseName)_fixed",
+                    label: music.name,
+                    role: "Music + SFX"
+                )
+            )
+        }
+        items.append(
+            MixerExportItem(
+                id: "mix",
+                kind: .mix,
+                enabled: true,
+                name: "mix",
+                label: "Complete 2-mix",
+                role: "Master bus"
+            )
+        )
+        return items
+    }
+
+    func suggestedExportFolder() -> URL {
+        if let sourceFolder {
+            return sourceFolder.appendingPathComponent("FixerMixer_bounce")
+        }
+        return FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory())
+    }
+
+    func bounce(items: [MixerExportItem], folder: URL) {
         guard !isBouncing else { return }
         guard frameCount > 0 else {
-            status = "Load tracks before bouncing."
+            status = "Load tracks before exporting."
+            return
+        }
+        var voiceFiles: [Int: String] = [:]
+        var musicFile: String?
+        var mixFile: String?
+        for item in items where item.enabled {
+            switch item.kind {
+            case .voice(let index):
+                voiceFiles[index] = item.name
+            case .music:
+                musicFile = item.name
+            case .mix:
+                mixFile = item.name
+            }
+        }
+        let plan = MixerEngine.BounceWritePlan(
+            voiceFiles: voiceFiles,
+            musicFile: musicFile,
+            mixFile: mixFile
+        )
+        guard !plan.isEmpty else {
+            status = "Check at least one output to export."
             return
         }
         isBouncing = true
@@ -583,16 +652,14 @@ final class MixerSession: ObservableObject {
             engine.stop()
             isPlaying = false
         }
-        status = "Bouncing…"
+        status = "Exporting…"
         syncParamsToEngine()
-        let destParent = sourceFolder ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
-        let dest = destParent.appendingPathComponent("FixerMixer_bounce")
         Task.detached(priority: .userInitiated) { [engine] in
             do {
-                let result = try engine.bounce(to: dest)
+                let result = try engine.bounce(to: folder, plan: plan)
                 await MainActor.run {
                     self.isBouncing = false
-                    self.status = "Bounced \(result.stemCount) stems + mix → \(result.folder.lastPathComponent)"
+                    self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") → \(result.folder.lastPathComponent)"
                     NSWorkspace.shared.activateFileViewerSelecting([result.folder])
                 }
             } catch {
