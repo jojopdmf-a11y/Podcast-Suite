@@ -22,9 +22,13 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
     /// When true (and POST samples exist), the callback reads the leveled buffer.
     private var playPost = false
     private var playheadEmitCounter = 0
+    private var meterEmitCounter = 0
+    private var preBall = MeterBallistics()
+    private var postBall = MeterBallistics()
 
     var onPlayhead: ((Int) -> Void)?
     var onEnded: (() -> Void)?
+    var onMeters: ((LiveMeterSample, LiveMeterSample) -> Void)?
 
     func currentFrame() -> Int {
         lock.lock()
@@ -41,12 +45,15 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         frameCount = buffer.frameCount
         playhead = 0
         playPost = false
+        preBall.reset()
+        postBall.reset()
         lock.unlock()
     }
 
     func setPost(_ leveled: WAVIO.Buffer?) {
         lock.lock()
         post = leveled?.samples ?? []
+        postBall.reset()
         lock.unlock()
     }
 
@@ -139,13 +146,16 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
             let isPlaying = self.playing
             var head = self.playhead
             let usePost = self.playPost && !self.post.isEmpty
-            let samples = usePost ? self.post : self.pre
+            let playSamples = usePost ? self.post : self.pre
+            let preSamples = self.pre
+            let postSamples = self.post
+            let hasPost = !self.post.isEmpty
             let ch = max(1, self.channelCount)
             let total = self.frameCount
             let srLocal = self.sampleRate
-            self.lock.unlock()
 
             if !isPlaying {
+                self.lock.unlock()
                 for i in 0..<n {
                     lPtr[i] = 0
                     rPtr[i] = 0
@@ -155,9 +165,15 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
 
             for i in 0..<n {
                 if head < total {
-                    let (l, r) = Self.stereoFrame(samples: samples, channels: ch, frame: head)
+                    let (l, r) = Self.stereoFrame(samples: playSamples, channels: ch, frame: head)
                     lPtr[i] = l
                     rPtr[i] = r
+                    let prePair = Self.stereoFrame(samples: preSamples, channels: ch, frame: head)
+                    self.preBall.process(left: prePair.0, right: prePair.1, sampleRate: srLocal)
+                    if hasPost {
+                        let postPair = Self.stereoFrame(samples: postSamples, channels: ch, frame: head)
+                        self.postBall.process(left: postPair.0, right: postPair.1, sampleRate: srLocal)
+                    }
                     head += 1
                 } else {
                     lPtr[i] = 0
@@ -165,12 +181,16 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
                 }
             }
 
-            self.lock.lock()
             self.playhead = head
             self.playheadEmitCounter += n
-            let shouldEmit = self.playheadEmitCounter >= Int(srLocal / 30)
-            if shouldEmit {
+            self.meterEmitCounter += n
+            let shouldEmitHead = self.playheadEmitCounter >= Int(srLocal / 30)
+            let shouldEmitMeters = self.meterEmitCounter >= Int(srLocal / 24)
+            if shouldEmitHead {
                 self.playheadEmitCounter = 0
+            }
+            if shouldEmitMeters {
+                self.meterEmitCounter = 0
             }
             let ended = head >= total
             if ended {
@@ -178,13 +198,15 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
                 self.playhead = 0
             }
             let emitHead = ended ? 0 : head
+            let emitPre = self.preBall.snapshot
+            let emitPost = hasPost ? self.postBall.snapshot : LiveMeterSample.silent
             self.lock.unlock()
 
-            // Same hop as Fixer Mixer (`MixerEngine`): playhead callback from
-            // the render thread (session hops to MainActor). The class is
-            // `@unchecked Sendable` so the ended teardown may run on main.
-            if shouldEmit || ended {
+            if shouldEmitHead || ended {
                 self.onPlayhead?(emitHead)
+            }
+            if shouldEmitMeters || ended {
+                self.onMeters?(emitPre, emitPost)
             }
             if ended {
                 DispatchQueue.main.async {

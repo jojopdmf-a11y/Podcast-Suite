@@ -9,7 +9,7 @@ struct LilLevelerApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 980, minHeight: 640)
+                .frame(minWidth: 1080, minHeight: 760)
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)

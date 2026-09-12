@@ -26,6 +26,17 @@ final class LevelerSession: ObservableObject {
     @Published var sampleRate: Double = 44100
     @Published var isScrubbing = false
 
+    @Published var meterMode: LevelerMeterMode = .truePeak
+    @Published var peakHold = true
+    @Published var livePre = LiveMeterSample.silent
+    @Published var livePost = LiveMeterSample.silent
+    @Published var preHoldL: Float = -80
+    @Published var preHoldR: Float = -80
+    @Published var postHoldL: Float = -80
+    @Published var postHoldR: Float = -80
+    @Published var preOvers = false
+    @Published var postOvers = false
+
     private var sourceBuffer: WAVIO.Buffer?
     private var leveledBuffer: WAVIO.Buffer?
     private let playback = LevelerPlaybackEngine()
@@ -63,6 +74,11 @@ final class LevelerSession: ObservableObject {
                 self.status = self.readyStatus()
             }
         }
+        playback.onMeters = { [weak self] pre, post in
+            Task { @MainActor in
+                self?.ingestMeters(pre: pre, post: post)
+            }
+        }
     }
 
     func load(url: URL) {
@@ -76,6 +92,7 @@ final class LevelerSession: ObservableObject {
         playAfter = false
         playheadFrame = 0
         durationFrames = 0
+        resetMeterUI()
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -204,6 +221,22 @@ final class LevelerSession: ObservableObject {
         playheadFrame = playback.currentFrame()
     }
 
+    func setMeterMode(_ mode: LevelerMeterMode) {
+        meterMode = mode
+        resetPeakHold()
+    }
+
+    func resetPeakHold() {
+        let pre = livePre.display(mode: meterMode)
+        let post = livePost.display(mode: meterMode)
+        preHoldL = pre.left
+        preHoldR = pre.right
+        postHoldL = post.left
+        postHoldR = post.right
+        preOvers = false
+        postOvers = false
+    }
+
     func stopPlayback() {
         playback.stop(resetPlayhead: true)
         isPlaying = false
@@ -234,5 +267,37 @@ final class LevelerSession: ObservableObject {
             return "Ready"
         }
         return "Drop a final mix to begin"
+    }
+
+    private func resetMeterUI() {
+        livePre = .silent
+        livePost = .silent
+        preHoldL = -80
+        preHoldR = -80
+        postHoldL = -80
+        postHoldR = -80
+        preOvers = false
+        postOvers = false
+    }
+
+    private func ingestMeters(pre: LiveMeterSample, post: LiveMeterSample) {
+        livePre = pre
+        livePost = post
+        let prePair = pre.display(mode: meterMode)
+        let postPair = post.display(mode: meterMode)
+        if peakHold {
+            preHoldL = max(preHoldL, prePair.left)
+            preHoldR = max(preHoldR, prePair.right)
+            postHoldL = max(postHoldL, postPair.left)
+            postHoldR = max(postHoldR, postPair.right)
+        } else {
+            let fall: Float = 12.0 / 24.0
+            preHoldL = max(prePair.left, preHoldL - fall)
+            preHoldR = max(prePair.right, preHoldR - fall)
+            postHoldL = max(postPair.left, postHoldL - fall)
+            postHoldR = max(postPair.right, postHoldR - fall)
+        }
+        if pre.tpL >= -0.1 || pre.tpR >= -0.1 { preOvers = true }
+        if post.tpL >= -0.1 || post.tpR >= -0.1 { postOvers = true }
     }
 }

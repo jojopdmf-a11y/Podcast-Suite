@@ -107,10 +107,13 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 fileRow
-                HStack(alignment: .top, spacing: 12) {
-                    MeterPanel(title: "BEFORE", report: session.before, glow: false)
-                    MeterPanel(title: "AFTER", report: session.after, glow: session.hasResult)
-                }
+                DorroughMeterDeck(session: session)
+                LoudnessStrip(
+                    before: session.before,
+                    after: session.after,
+                    gainDb: session.appliedGainDb,
+                    hasResult: session.hasResult
+                )
                 transportRow
             }
         }
@@ -319,119 +322,5 @@ struct ContentView: View {
             }
         }
         return true
-    }
-}
-
-// MARK: - Metering
-
-struct MeterPanel: View {
-    var title: String
-    var report: LoudnessReport
-    var glow: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .tracking(1.2)
-                .foregroundStyle(glow ? LevelerTheme.lime : LevelerTheme.cyan)
-
-            HStack(alignment: .bottom, spacing: 14) {
-                LoudnessBar(
-                    label: "INT",
-                    value: report.integratedLUFS,
-                    range: -40...(-5),
-                    unit: "LUFS"
-                )
-                LoudnessBar(
-                    label: "SHORT",
-                    value: report.shortTermLUFS,
-                    range: -40...(-5),
-                    unit: "LUFS"
-                )
-                LoudnessBar(
-                    label: "MOM",
-                    value: report.momentaryLUFS,
-                    range: -40...(-5),
-                    unit: "LUFS"
-                )
-                LoudnessBar(
-                    label: "TP",
-                    value: report.truePeakDbTP,
-                    range: -20...0,
-                    unit: "dBTP",
-                    hotAbove: -1
-                )
-            }
-            .frame(height: 160)
-
-            VStack(alignment: .leading, spacing: 4) {
-                metricRow("Integrated", String(format: "%.1f LUFS", report.integratedLUFS))
-                metricRow("Short-term", String(format: "%.1f LUFS", report.shortTermLUFS))
-                metricRow("True peak", String(format: "%.1f dBTP", report.truePeakDbTP))
-                metricRow("Sample peak", String(format: "%.1f dBFS", report.samplePeakDbFS))
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .levelerPanel(glow: glow)
-    }
-
-    private func metricRow(_ k: String, _ v: String) -> some View {
-        HStack {
-            Text(k)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(LevelerTheme.textSecondary)
-            Spacer()
-            Text(v)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(LevelerTheme.cyan)
-        }
-    }
-}
-
-struct LoudnessBar: View {
-    var label: String
-    var value: Float
-    var range: ClosedRange<Float>
-    var unit: String
-    var hotAbove: Float? = nil
-
-    private var norm: CGFloat {
-        let span = range.upperBound - range.lowerBound
-        let n = (value - range.lowerBound) / span
-        return CGFloat(max(0, min(1, n)))
-    }
-
-    private var color: Color {
-        if let hot = hotAbove, value > hot { return LevelerTheme.meterRed }
-        if norm > 0.85 { return LevelerTheme.meterYellow }
-        return LevelerTheme.meterGreen
-    }
-
-    var body: some View {
-        VStack(spacing: 4) {
-            Text(String(format: "%.1f", value))
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(color)
-                .frame(height: 12)
-            GeometryReader { geo in
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(LevelerTheme.cyanFaint)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(color)
-                        .frame(height: max(2, geo.size.height * norm))
-                        .shadow(color: color.opacity(0.45), radius: 3)
-                }
-            }
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .foregroundStyle(LevelerTheme.cyanDim)
-            Text(unit)
-                .font(.system(size: 7, weight: .medium, design: .rounded))
-                .foregroundStyle(LevelerTheme.textSecondary)
-        }
-        .frame(maxWidth: .infinity)
     }
 }

@@ -24,7 +24,7 @@ Opens `dist/Lil Leveler.app`.
 1. Bounce a final mix from Fixer Mixer (or any stereo/mono master)
 2. Drop it onto Lil Leveler (WAV, AIFF, MP3, M4A, CAF, FLAC, …)
 3. Pick a platform preset (or Custom)
-4. Review before/after metering
+4. Watch the PRE / POST Dorrough meters while you play (Peak Hold, RMS or True Peak)
 5. Hit **PLAY**, drag the time slider, flip **A/B** between PRE (original) and POST (leveled)
 6. **Export leveled** → `{name}_leveled.wav` (PCM WAV for host compatibility)
 
