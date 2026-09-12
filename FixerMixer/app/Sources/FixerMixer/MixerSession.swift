@@ -471,7 +471,15 @@ final class MixerSession: ObservableObject {
             syncParamsToEngine()
             let loaded = voices.count + (hasMusic ? 1 : 0)
             let spkLabel = voices.isEmpty ? "no speakers" : "\(voices.count) speaker\(voices.count == 1 ? "" : "s")"
-            status = "Loaded \(loaded) track(s) · \(spkLabel)\(hasMusic ? " + music" : "") · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            var line = "Loaded \(loaded) track(s) · \(spkLabel)\(hasMusic ? " + music" : "") · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            if FileManager.default.fileExists(atPath: MixerMixFile.sidecarURL(in: folder).path) {
+                if restoreMixIfPresent(in: folder) {
+                    line += " · mix restored"
+                } else {
+                    line += " · mix file found but could not be read"
+                }
+            }
+            status = line
         } catch {
             status = error.localizedDescription
         }
@@ -515,6 +523,52 @@ final class MixerSession: ObservableObject {
             status = "Playing from start…"
         } catch {
             status = error.localizedDescription
+        }
+    }
+
+    /// Writes `FixerMixer.mix.json` into the current `_speakers` folder.
+    func saveMix() {
+        guard frameCount > 0, let folder = sourceFolder else {
+            status = "Load a Stripper folder before saving a mix."
+            return
+        }
+        do {
+            let url = MixerMixFile.sidecarURL(in: folder)
+            try MixerMixFile.write(MixerMixFile.make(from: self), to: url)
+            status = "Saved mix → \(MixerMixFile.fileName)"
+        } catch {
+            status = "Could not save mix: \(error.localizedDescription)"
+        }
+    }
+
+    /// Open a mix JSON. If it sits in a speakers folder, load that folder (which restores the mix).
+    func openMixFile(_ url: URL) {
+        let folder = url.deletingLastPathComponent()
+        if frameCount == 0 || sourceFolder != folder {
+            loadStripperFolder(folder)
+            return
+        }
+        do {
+            let doc = try MixerMixFile.read(from: url)
+            MixerMixFile.apply(doc, to: self)
+            syncParamsToEngine()
+            status = "Mix loaded from \(url.lastPathComponent)"
+        } catch {
+            status = "Could not load mix: \(error.localizedDescription)"
+        }
+    }
+
+    @discardableResult
+    private func restoreMixIfPresent(in folder: URL) -> Bool {
+        let url = MixerMixFile.sidecarURL(in: folder)
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        do {
+            let doc = try MixerMixFile.read(from: url)
+            MixerMixFile.apply(doc, to: self)
+            syncParamsToEngine()
+            return true
+        } catch {
+            return false
         }
     }
 
@@ -602,6 +656,7 @@ enum MixerError: LocalizedError {
     case noTracks
     case loadFailed(String)
     case engine(String)
+    case mixFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -609,6 +664,7 @@ enum MixerError: LocalizedError {
         case .noTracks: return "No Speaker_*.wav or Music_and_SFX.wav found in that folder."
         case .loadFailed(let m): return "Could not load audio: \(m)"
         case .engine(let m): return m
+        case .mixFailed(let m): return m
         }
     }
 }

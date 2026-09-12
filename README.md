@@ -56,6 +56,12 @@ Fixer Mixer and Lil Leveler are light: mix and level in real time on any Apple S
 
 The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requirements.md`](docs/cougarcalc-system-requirements.md). Stripper also has a short **YOUR MAC** panel next to Settings.
 
+## Saving your work
+
+- **Podcast Stripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
+- **Fixer Mixer** — **SAVE MIX** writes `FixerMixer.mix.json` into the `_speakers` folder. Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file.
+- **Lil Leveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
+
 ## Build
 
 Each app has `app/scripts/build_app.sh`. Run it from that app folder. Built `.app` bundles land in `dist/` and are not committed.
