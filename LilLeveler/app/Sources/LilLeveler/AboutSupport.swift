@@ -96,6 +96,6 @@ struct AboutSupportPanel: View {
                 .textSelection(.enabled)
         }
         .padding(20)
-        .frame(width: 420)
+        .frame(maxWidth: 400)
     }
 }
