@@ -28,6 +28,10 @@ struct ContentView: View {
                 statusBar
             }
             .padding(LevelerLayout.windowPadding)
+
+            if showAbout {
+                aboutOverlay
+            }
         }
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
         .preferredColorScheme(.dark)
@@ -35,37 +39,78 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
-        .sheet(isPresented: $showAbout) {
-            AboutSupportPanel(
-                appName: "Lil Leveler",
-                tagline: "Final mix → platform loudness",
-                accent: LevelerTheme.cyan
-            )
+        .onExitCommand {
+            if showAbout { showAbout = false }
         }
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("LIL LEVELER")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .tracking(1.4)
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyan)
                     .shadow(color: LevelerTheme.cyan.opacity(0.4), radius: 10)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Text("Final mix → platform loudness")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                 Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary.opacity(0.85))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            Spacer()
-            Button("ABOUT") { showAbout = true }
-                .buttonStyle(LevelerGhostButtonStyle())
-            if session.sourceURL != nil {
-                Button("LOAD OTHER…") { pickFile() }
+            .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            VStack(alignment: .trailing, spacing: 6) {
+                Button("ABOUT") { showAbout = true }
                     .buttonStyle(LevelerGhostButtonStyle())
+                if session.sourceURL != nil {
+                    Button("LOAD OTHER…") { pickFile() }
+                        .buttonStyle(LevelerGhostButtonStyle())
+                }
             }
+            .fixedSize()
+            .controlSize(.small)
+        }
+    }
+
+    /// In-window panel. A SwiftUI `.sheet` on a `.contentSize` window freezes macOS.
+    private var aboutOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { showAbout = false }
+
+            VStack(spacing: 12) {
+                AboutSupportPanel(
+                    appName: "Lil Leveler",
+                    tagline: "Final mix → platform loudness",
+                    accent: LevelerTheme.cyan
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(LevelerTheme.panelRaised)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(LevelerTheme.cyan.opacity(0.4), lineWidth: 1.1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                Button("CLOSE") { showAbout = false }
+                    .buttonStyle(LevelerPrimaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
         }
     }
 
