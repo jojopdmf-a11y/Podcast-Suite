@@ -6,7 +6,12 @@ from typing import Iterable
 
 import numpy as np
 
-from podcast_stripper.cleanup import build_music_and_sfx, build_speaker_track_soft, music_activity_mask
+from podcast_stripper.cleanup import (
+    apply_gate,
+    build_music_and_sfx,
+    music_activity_mask,
+    shared_speaker_gates,
+)
 from podcast_stripper.convert import convert_for_export
 
 Segment = tuple[float, float, str]
@@ -144,16 +149,18 @@ def export_speaker_tracks(
         )
 
     tracks: list[dict] = []
+    speaker_turns = [grouped[speaker] for speaker in speakers]
+    gates = shared_speaker_gates(
+        voice_audio.shape[0],
+        sample_rate,
+        speaker_turns,
+        mute_mask=music_mute,
+    )
     for index, speaker in enumerate(speakers):
         label = speaker_label(index)
         filename = f"{label.replace(' ', '_')}.wav"
         dest = output_dir / filename
-        track = build_speaker_track_soft(
-            voice_audio,
-            sample_rate,
-            grouped[speaker],
-            mute_mask=music_mute,
-        )
+        track = apply_gate(voice_audio, gates[index])
         save_wav(dest, track, sample_rate)
         tracks.append(
             {

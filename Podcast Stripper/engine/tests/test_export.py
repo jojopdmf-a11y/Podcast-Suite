@@ -252,3 +252,91 @@ def test_mix_aligned_wavs_sums_without_extra_gain(tmp_path: Path):
     assert np.max(np.abs(mixed)) > np.max(np.abs(single))
     stats = reconstruction_stats(left, left)
     assert stats["correlation"] > 0.99
+
+
+def test_overlap_share_does_not_double_level():
+    from podcast_stripper.cleanup import apply_gate, shared_speaker_gates
+
+    sample_rate = 16000
+    tone = _sine(440, 1.0, sample_rate, amplitude=0.3)
+    gates = shared_speaker_gates(
+        tone.shape[0],
+        sample_rate,
+        [[(0.0, 1.0)], [(0.0, 1.0)]],
+        hold_ms=0,
+        fade_ms=10,
+    )
+    first = apply_gate(tone, gates[0]).astype(np.float64)
+    second = apply_gate(tone, gates[1]).astype(np.float64)
+    summed = first + second
+    original = tone.astype(np.float64)
+    mid = slice(sample_rate // 4, 3 * sample_rate // 4)
+    rms_sum = float(np.sqrt(np.mean(summed[mid] ** 2)))
+    rms_orig = float(np.sqrt(np.mean(original[mid] ** 2)))
+    rms_a = float(np.sqrt(np.mean(first[mid] ** 2)))
+    rms_b = float(np.sqrt(np.mean(second[mid] ** 2)))
+    assert rms_sum / rms_orig < 1.2
+    assert max(rms_a, rms_b) > min(rms_a, rms_b) * 2.5
+
+
+def test_overlap_keeps_prior_speaker_dominant():
+    from podcast_stripper.cleanup import shared_speaker_gates
+
+    sample_rate = 16000
+    length = sample_rate
+    gates = shared_speaker_gates(
+        length,
+        sample_rate,
+        [[(0.0, 0.8)], [(0.4, 1.0)]],
+        hold_ms=0,
+        fade_ms=10,
+    )
+    overlap = int(0.6 * sample_rate)
+    early = int(0.2 * sample_rate)
+    late = int(0.9 * sample_rate)
+    assert gates[0][overlap] > gates[1][overlap] * 2
+    assert gates[0][early] > 0.9
+    assert gates[1][early] < 0.2
+    assert gates[1][late] > 0.9
+    assert gates[0][late] < 0.25
+
+
+def test_solo_regions_stay_full_level():
+    from podcast_stripper.cleanup import shared_speaker_gates
+
+    sample_rate = 16000
+    length = sample_rate
+    gates = shared_speaker_gates(
+        length,
+        sample_rate,
+        [[(0.0, 0.45)], [(0.55, 1.0)]],
+        hold_ms=0,
+        fade_ms=10,
+    )
+    assert gates[0][int(0.2 * sample_rate)] > 0.95
+    assert gates[1][int(0.2 * sample_rate)] < 0.08
+    assert gates[1][int(0.8 * sample_rate)] > 0.95
+    assert gates[0][int(0.8 * sample_rate)] < 0.08
+
+
+def test_export_overlap_mixdown_stays_near_original(tmp_path: Path):
+    sample_rate = 16000
+    source = tmp_path / "overlap.wav"
+    _write_wav(source, [_sine(440, 1.0, sample_rate, amplitude=0.3)], sample_rate)
+    output_dir = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output_dir,
+        [(0.0, 1.0, "SPEAKER_00"), (0.0, 1.0, "SPEAKER_01")],
+        work_wav=source,
+    )
+    first, _ = load_wav(output_dir / "Speaker_1.wav")
+    second, _ = load_wav(output_dir / "Speaker_2.wav")
+    original, _ = load_wav(source)
+    summed = first.astype(np.float64) + second.astype(np.float64)
+    mid = slice(sample_rate // 4, 3 * sample_rate // 4)
+    rms_sum = float(np.sqrt(np.mean(summed[mid] ** 2)))
+    rms_orig = float(np.sqrt(np.mean(original.astype(np.float64)[mid] ** 2)))
+    assert rms_sum / rms_orig < 1.2
+    assert rms_sum / rms_orig > 0.7
+

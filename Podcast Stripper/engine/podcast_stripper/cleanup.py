@@ -158,6 +158,15 @@ def strip_trailing_garbage(
     return cleaned, cut / float(sample_rate)
 
 
+def apply_gate(audio: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Multiply audio by a 0…1 gate and return 16-bit samples."""
+    gate = mask
+    if audio.ndim > 1:
+        gate = mask.reshape(-1, 1)
+    gated = audio.astype(np.float64) * gate
+    return np.clip(gated, -32768, 32767).astype(np.int16)
+
+
 def build_speaker_track_soft(
     audio: np.ndarray,
     sample_rate: int,
@@ -177,10 +186,118 @@ def build_speaker_track_soft(
     )
     if mute_mask is not None:
         mask = mask * (1.0 - np.clip(mute_mask[: mask.size], 0.0, 1.0))
-    if audio.ndim > 1:
-        mask = mask.reshape(-1, 1)
-    gated = audio.astype(np.float64) * mask
-    return np.clip(gated, -32768, 32767).astype(np.int16)
+    return apply_gate(audio, mask)
+
+
+def _hop_samples(sample_rate: int, hop_ms: float = 20.0) -> int:
+    return max(1, int(round(sample_rate * hop_ms / 1000.0)))
+
+
+def _frame_mean(mask: np.ndarray, hop: int, n_frames: int) -> np.ndarray:
+    padded = np.zeros(n_frames * hop, dtype=np.float64)
+    n = min(mask.size, padded.size)
+    padded[:n] = mask[:n]
+    return padded.reshape(n_frames, hop).mean(axis=1)
+
+
+def _turns_to_framed_mask(
+    n_frames: int,
+    hop: int,
+    sample_rate: int,
+    turns: list[tuple[float, float]],
+    *,
+    fade_ms: float,
+    hold_ms: float,
+) -> np.ndarray:
+    hop_ms = 1000.0 * hop / float(sample_rate)
+    hold_frames = max(0, int(round(hold_ms / hop_ms))) if hop_ms > 0 else 0
+    mask = np.zeros(n_frames, dtype=np.float64)
+    for start, end in turns:
+        start_index = int(round(start * sample_rate / hop)) - hold_frames
+        end_index = int(round(end * sample_rate / hop)) + hold_frames
+        start_index = max(0, start_index)
+        end_index = min(n_frames, end_index)
+        if end_index > start_index:
+            mask[start_index:end_index] = 1.0
+    fade_frames = max(1, int(round(fade_ms / hop_ms))) if hop_ms > 0 else 1
+    if fade_frames > 1 and np.any(mask):
+        kernel = np.hanning(fade_frames * 2 + 1)
+        kernel = kernel / kernel.sum()
+        mask = np.clip(np.convolve(mask, kernel, mode="same"), 0.0, 1.0)
+    return mask
+
+
+def _share_framed_masks(
+    stack: np.ndarray,
+    *,
+    bleed: float = 0.16,
+    min_dom: float = 0.68,
+    active: float = 0.12,
+) -> np.ndarray:
+    """When several speakers are on, keep the main one loud and duck extras so gains sum to ~1."""
+    speakers, frames = stack.shape
+    if speakers < 2:
+        return stack.copy()
+    decay = 0.88
+    recency = np.empty_like(stack)
+    recency[:, 0] = stack[:, 0]
+    keep = 1.0 - decay
+    for frame in range(1, frames):
+        recency[:, frame] = decay * recency[:, frame - 1] + keep * stack[:, frame]
+    n_active = (stack > active).sum(axis=0)
+    overlap = n_active >= 2
+    out = stack.copy()
+    if not np.any(overlap):
+        return out
+    dominant = np.argmax(recency, axis=0)
+    idx = np.flatnonzero(overlap)
+    extra_n = np.maximum(n_active[idx].astype(np.float64) - 1.0, 1.0)
+    extra_gain = np.minimum(bleed, (1.0 - min_dom) / extra_n)
+    dom_gain = np.clip(1.0 - extra_n * extra_gain, min_dom, 1.0)
+    out[:, idx] = stack[:, idx] * extra_gain
+    out[dominant[idx], idx] = stack[dominant[idx], idx] * dom_gain
+    return np.clip(out, 0.0, 1.0)
+
+
+def _smooth_gate(mask: np.ndarray, sample_rate: int, fade_ms: float = 12) -> np.ndarray:
+    fade = max(1, int(sample_rate * fade_ms / 1000.0))
+    if fade <= 1 or not np.any(mask):
+        return mask
+    kernel = np.hanning(fade * 2 + 1)
+    kernel = kernel / kernel.sum()
+    return np.clip(np.convolve(mask, kernel, mode="same"), 0.0, 1.0)
+
+
+def shared_speaker_gates(
+    length: int,
+    sample_rate: int,
+    speaker_turns: list[list[tuple[float, float]]],
+    *,
+    mute_mask: np.ndarray | None = None,
+    fade_ms: float = 15,
+    hold_ms: float = 100,
+) -> list[np.ndarray]:
+    """Per-speaker 0…1 gates. Solo regions stay full; talk-over is shared instead of copied."""
+    if not speaker_turns:
+        return []
+    hop = _hop_samples(sample_rate)
+    n_frames = max(1, (length + hop - 1) // hop)
+    framed = [
+        _turns_to_framed_mask(
+            n_frames,
+            hop,
+            sample_rate,
+            turns,
+            fade_ms=fade_ms,
+            hold_ms=hold_ms,
+        )
+        for turns in speaker_turns
+    ]
+    if mute_mask is not None:
+        mute_frames = _frame_mean(np.clip(mute_mask[:length], 0.0, 1.0), hop, n_frames)
+        framed = [row * (1.0 - mute_frames) for row in framed]
+    shared = _share_framed_masks(np.stack(framed, axis=0))
+    return [_smooth_gate(upsample_mask(row, hop, length), sample_rate) for row in shared]
 
 
 def build_music_and_sfx(
