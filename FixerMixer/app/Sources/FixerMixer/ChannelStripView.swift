@@ -139,6 +139,7 @@ struct VerticalFader: View {
             Text(caption ?? (autoDriven ? "AUTO" : "FADER"))
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundStyle(autoDriven ? MixerTheme.lime.opacity(0.8) : MixerTheme.cyanDim)
+                .padding(.bottom, 1)
         }
         .help(autoDriven ? "Auto Balance" : "Double-click to zero")
     }
@@ -360,7 +361,7 @@ struct ChannelStripView: View {
     var onChange: () -> Void
 
     /// Keeps music strip the same height as full speaker strips.
-    static let stripHeight: CGFloat = 468
+    static let stripHeight: CGFloat = 484
 
     @State private var dropTargetSlot: ChannelDSPSlot?
     @State private var isRenaming = false
