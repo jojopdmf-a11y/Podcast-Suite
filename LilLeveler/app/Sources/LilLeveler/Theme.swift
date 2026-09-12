@@ -22,14 +22,31 @@ enum LevelerTheme {
     }
 }
 
-/// Desk size is fixed. Meters stay Dorrough-skinny; the window does not stretch.
+/// Desk size is fixed. Width hugs the platform column + Dorrough meters.
 enum LevelerLayout {
-    static let windowWidth: CGFloat = 900
-    static let windowHeight: CGFloat = 792
+    static let windowPadding: CGFloat = 18
+    static let presetColumnWidth: CGFloat = 220
+    static let columnGap: CGFloat = 14
     static let faceplateWidth: CGFloat = 148
     static let ledColumnWidth: CGFloat = 38
     static let scaleWidth: CGFloat = 22
     static let meterStackHeight: CGFloat = 248
+    static let meterControlsWidth: CGFloat = 100
+    static let meterDeckPadding: CGFloat = 12
+    static let meterDeckSpacing: CGFloat = 14
+
+    static var meterDeckWidth: CGFloat {
+        meterDeckPadding * 2
+            + faceplateWidth * 2
+            + meterControlsWidth
+            + meterDeckSpacing * 2
+    }
+
+    static var windowWidth: CGFloat {
+        windowPadding * 2 + presetColumnWidth + columnGap + meterDeckWidth
+    }
+
+    static let windowHeight: CGFloat = 792
 }
 
 extension View {
