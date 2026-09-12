@@ -17,7 +17,7 @@ struct FixerMixerApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Save Mix") {
+                Button("Save Mix…") {
                     NotificationCenter.default.post(name: .fixerMixerSaveMix, object: nil)
                 }
                 .keyboardShortcut("s", modifiers: .command)

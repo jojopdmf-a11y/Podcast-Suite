@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum GraphicEQBand: Int, CaseIterable, Identifiable {
     case b31, b63, b125, b250, b500, b1k, b2k, b4k, b8k, b16k
@@ -296,6 +297,8 @@ final class MixerSession: ObservableObject {
     @Published var isPlaying = false
     @Published var isBouncing = false
     @Published var sourceFolder: URL?
+    /// Last mix JSON the user saved or opened, used as the Save panel default.
+    private var lastMixURL: URL?
     @Published var sampleRate: Double = 44100
     @Published var frameCount: Int = 0
     /// Voice slot id, or `ChannelStripState.musicID`
@@ -526,36 +529,64 @@ final class MixerSession: ObservableObject {
         }
     }
 
-    /// Writes `FixerMixer.mix.json` into the current `_speakers` folder.
+    /// Opens a Save panel so you pick the folder and file name for the mix JSON.
     func saveMix() {
         guard frameCount > 0, let folder = sourceFolder else {
             status = "Load a Stripper folder before saving a mix."
             return
         }
+        let panel = NSSavePanel()
+        panel.title = "Save Mix"
+        panel.message = "Mix settings only (faders, EQ, FX). Audio stays in the WAV files."
+        panel.prompt = "Save"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = lastMixURL?.lastPathComponent ?? MixerMixFile.fileName
+        panel.directoryURL = lastMixURL?.deletingLastPathComponent() ?? folder
+        guard panel.runModal() == .OK, var dest = panel.url else {
+            status = "Save cancelled"
+            return
+        }
+        if dest.pathExtension.lowercased() != "json" {
+            dest = dest.appendingPathExtension("json")
+        }
         do {
-            let url = MixerMixFile.sidecarURL(in: folder)
-            try MixerMixFile.write(MixerMixFile.make(from: self), to: url)
-            status = "Saved mix → \(MixerMixFile.fileName)"
+            try MixerMixFile.write(MixerMixFile.make(from: self), to: dest)
+            lastMixURL = dest
+            status = "Saved mix → \(dest.lastPathComponent)"
         } catch {
             status = "Could not save mix: \(error.localizedDescription)"
         }
     }
 
-    /// Open a mix JSON. If it sits in a speakers folder, load that folder (which restores the mix).
+    /// Open a mix JSON. If it sits in a speakers folder, that folder loads first.
     func openMixFile(_ url: URL) {
-        let folder = url.deletingLastPathComponent()
-        if frameCount == 0 || sourceFolder != folder {
-            loadStripperFolder(folder)
-            return
-        }
         do {
             let doc = try MixerMixFile.read(from: url)
+            lastMixURL = url
+            let folder = url.deletingLastPathComponent()
+            if isStripperSpeakersFolder(folder), sourceFolder != folder || frameCount == 0 {
+                loadStripperFolder(folder)
+                MixerMixFile.apply(doc, to: self)
+                syncParamsToEngine()
+                status = "Loaded folder and mix from \(url.lastPathComponent)"
+                return
+            }
+            guard frameCount > 0 else {
+                status = "Drop the _speakers folder first, then load this mix."
+                return
+            }
             MixerMixFile.apply(doc, to: self)
             syncParamsToEngine()
             status = "Mix loaded from \(url.lastPathComponent)"
         } catch {
             status = "Could not load mix: \(error.localizedDescription)"
         }
+    }
+
+    private func isStripperSpeakersFolder(_ folder: URL) -> Bool {
+        (try? StripperFolderLoader.load(folder: folder)) != nil
     }
 
     @discardableResult
