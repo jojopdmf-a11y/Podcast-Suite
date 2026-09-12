@@ -281,7 +281,7 @@ struct ContentView: View {
     }
 
     private var masterStrip: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             HStack(alignment: .center, spacing: 6) {
                 Text("MASTER")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -379,13 +379,26 @@ struct ContentView: View {
                 }
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 4)
 
             HStack(spacing: 6) {
                 LevelMeter(level: session.masterPeakL, label: "L")
                 LevelMeter(level: session.masterPeakR, label: "R")
             }
-            .frame(height: 140)
+            .frame(height: 112)
+
+            VStack(spacing: 1) {
+                Text(masterOutLabel)
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundStyle(masterOutColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                Text("dBFS")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+            }
+            .help("Live peak on the master bus after the OUT fader")
+
             VerticalFader(
                 valueDb: Binding(
                     get: { session.masterDb },
@@ -398,14 +411,32 @@ struct ContentView: View {
                 range: -24...12,
                 caption: "OUT"
             )
+            .layoutPriority(1)
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
         .frame(width: 110, height: ChannelStripView.stripHeight, alignment: .top)
         .mixerPanel(glow: true)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : .clear, lineWidth: 2)
         )
+    }
+
+    private var masterOutDb: Float {
+        let peak = max(session.masterPeakL, session.masterPeakR)
+        return 20 * log10(max(peak, 1e-5))
+    }
+
+    private var masterOutLabel: String {
+        masterOutDb <= -59 ? "—" : String(format: "%+.1f", masterOutDb)
+    }
+
+    private var masterOutColor: Color {
+        if masterOutDb >= 0 { return MixerTheme.meterRed }
+        if masterOutDb > -12 { return MixerTheme.meterYellow }
+        return MixerTheme.lime
     }
 
     private var transport: some View {
