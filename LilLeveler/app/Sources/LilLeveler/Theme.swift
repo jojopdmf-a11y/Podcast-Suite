@@ -46,7 +46,7 @@ enum LevelerLayout {
         windowPadding * 2 + presetColumnWidth + columnGap + meterDeckWidth
     }
 
-    static let windowHeight: CGFloat = 792
+    static let windowHeight: CGFloat = 888
 }
 
 extension View {

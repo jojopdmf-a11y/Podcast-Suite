@@ -400,40 +400,133 @@ struct HardwareLitButton: View {
     }
 }
 
-struct LoudnessStrip: View {
+struct LoudnessCompareBoard: View {
     var before: LoudnessReport
     var after: LoudnessReport
     var gainDb: Float
     var hasResult: Bool
+    var targetLUFS: Float
+    var targetTP: Float
 
     var body: some View {
-        HStack(spacing: 16) {
-            stripSide(title: "PRE FILE", report: before, glow: false)
-            Divider().overlay(LevelerTheme.cyan.opacity(0.25))
-            stripSide(title: "POST FILE", report: after, glow: hasResult)
-            if hasResult {
-                Spacer(minLength: 8)
-                Text(String(format: "GAIN %+.1f dB", gainDb))
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(LevelerTheme.lime)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("FILE LOUDNESS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.1)
+                    .foregroundStyle(LevelerTheme.cyanDim)
+                Spacer()
+                Text(String(format: "TARGET  %.1f LUFS  ·  %.1f dBTP", targetLUFS, targetTP))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LevelerTheme.cyan)
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                loudnessCard(title: "PRE", report: before, glow: false)
+                gainPill
+                loudnessCard(title: "POST", report: after, glow: hasResult)
             }
         }
         .padding(12)
         .levelerPanel(glow: hasResult)
     }
 
-    private func stripSide(title: String, report: LoudnessReport, glow: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(1)
-                .foregroundStyle(glow ? LevelerTheme.lime : LevelerTheme.cyanDim)
-            HStack(spacing: 12) {
-                Text(String(format: "INT %.1f LUFS", report.integratedLUFS))
-                Text(String(format: "TP %.1f dBTP", report.truePeakDbTP))
-            }
-            .font(.system(size: 11, weight: .bold, design: .monospaced))
-            .foregroundStyle(LevelerTheme.cyan)
+    private var gainPill: some View {
+        VStack(spacing: 4) {
+            Text("GAIN")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(LevelerTheme.cyanDim)
+            Text(hasResult ? String(format: "%+.1f", gainDb) : "—")
+                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                .foregroundStyle(hasResult ? LevelerTheme.lime : LevelerTheme.textSecondary)
+            Text("dB")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(LevelerTheme.textSecondary)
         }
+        .frame(width: 58)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(LevelerTheme.panelRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(LevelerTheme.lime.opacity(hasResult ? 0.55 : 0.15), lineWidth: 1)
+        )
+        .padding(.top, 18)
+    }
+
+    private func loudnessCard(title: String, report: LoudnessReport, glow: Bool) -> some View {
+        let accent = glow ? LevelerTheme.lime : LevelerTheme.cyan
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(1.4)
+                .foregroundStyle(accent)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(formatLUFS(report.integratedLUFS))
+                    .font(.system(size: 26, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent)
+                    .shadow(color: accent.opacity(0.35), radius: 6)
+                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                Text("INTEGRATED LUFS")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(LevelerTheme.textSecondary)
+            }
+
+            VStack(spacing: 4) {
+                metric("SHORT-TERM", formatLUFS(report.shortTermLUFS), unit: "LUFS", accent: accent)
+                metric("MOMENTARY", formatLUFS(report.momentaryLUFS), unit: "LUFS", accent: accent)
+                metric("TRUE PEAK", formatPeak(report.truePeakDbTP), unit: "dBTP", accent: peakColor(report.truePeakDbTP, fallback: accent))
+                metric("SAMPLE PEAK", formatPeak(report.samplePeakDbFS), unit: "dBFS", accent: accent)
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(LevelerTheme.panelRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(accent.opacity(glow ? 0.85 : 0.35), lineWidth: glow ? 1.4 : 1)
+        )
+    }
+
+    private func metric(_ label: String, _ value: String, unit: String, accent: Color) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .foregroundStyle(LevelerTheme.textSecondary)
+            Spacer(minLength: 4)
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(accent)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+            Text(unit)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(LevelerTheme.textSecondary)
+                .frame(width: 32, alignment: .leading)
+        }
+    }
+
+    private func formatLUFS(_ value: Float) -> String {
+        value <= -69 ? "—" : String(format: "%.1f", value)
+    }
+
+    private func formatPeak(_ value: Float) -> String {
+        value <= -80 ? "—" : String(format: "%+.1f", value)
+    }
+
+    private func peakColor(_ value: Float, fallback: Color) -> Color {
+        if value > -0.1 { return LevelerTheme.meterRed }
+        if value > -1.0 { return LevelerTheme.meterYellow }
+        return fallback
     }
 }
