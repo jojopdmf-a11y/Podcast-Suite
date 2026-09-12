@@ -9,15 +9,6 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            LevelerTheme.windowBackground.ignoresSafeArea()
-            RadialGradient(
-                colors: [LevelerTheme.cyan.opacity(0.06), .clear],
-                center: .top,
-                startRadius: 10,
-                endRadius: 480
-            )
-            .ignoresSafeArea()
-
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if session.sourceURL == nil {
@@ -33,7 +24,20 @@ struct ContentView: View {
                 aboutOverlay
             }
         }
+        // Keep this view in the title-bar safe area. Ignoring safe area here
+        // slides LIL LEVELER under the traffic lights and clips the status line.
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
+        .background {
+            ZStack {
+                LevelerTheme.windowBackground
+                RadialGradient(
+                    colors: [LevelerTheme.cyan.opacity(0.06), .clear],
+                    center: .top,
+                    startRadius: 10,
+                    endRadius: 480
+                )
+            }
+        }
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
@@ -46,30 +50,31 @@ struct ContentView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text("LIL LEVELER")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyan)
-                    .shadow(color: LevelerTheme.cyan.opacity(0.4), radius: 10)
+                    .shadow(color: LevelerTheme.cyan.opacity(0.35), radius: 6)
                     .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.vertical, 2)
+                    .fixedSize()
                 Text("Final mix → platform loudness")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .fixedSize()
                 Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary.opacity(0.85))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .fixedSize()
             }
             .layoutPriority(1)
 
             Spacer(minLength: 8)
 
-            VStack(alignment: .trailing, spacing: 6) {
+            HStack(spacing: 8) {
                 Button("ABOUT") { showAbout = true }
                     .buttonStyle(LevelerGhostButtonStyle())
                 if session.sourceURL != nil {
@@ -86,7 +91,6 @@ struct ContentView: View {
     private var aboutOverlay: some View {
         ZStack {
             Color.black.opacity(0.58)
-                .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { showAbout = false }
 
