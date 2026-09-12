@@ -161,7 +161,6 @@ struct ContentView: View {
                 LoudnessCompareBoard(
                     before: session.before,
                     after: session.after,
-                    gainDb: session.appliedGainDb,
                     hasResult: session.hasResult,
                     targetLUFS: session.activeTargetLUFS,
                     targetTP: session.activeTruePeak
@@ -175,10 +174,11 @@ struct ContentView: View {
 
     private var presetColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("PLATFORM")
+            Text("PLATFORM TARGET LEVEL")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
-                .tracking(1)
+                .tracking(0.6)
                 .foregroundStyle(LevelerTheme.cyanDim)
+                .fixedSize(horizontal: false, vertical: true)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
@@ -243,7 +243,7 @@ struct ContentView: View {
 
                             Button("SAVE PRESET") { promptSavePreset() }
                                 .buttonStyle(LevelerGhostButtonStyle())
-                                .help("Keep these LUFS / true-peak numbers in the PLATFORM list")
+                                .help("Keep these LUFS / true-peak numbers in the Platform Target Level list")
                         }
                         .padding(.top, 4)
                     }
@@ -365,7 +365,7 @@ struct ContentView: View {
         let alert = NSAlert()
         alert.messageText = "Name this loudness preset"
         alert.informativeText = String(
-            format: "Keeps %.1f LUFS and %.1f dBTP in the PLATFORM list on this Mac.",
+            format: "Keeps %.1f LUFS and %.1f dBTP in the Platform Target Level list on this Mac.",
             session.customLUFS,
             session.customTP
         )
