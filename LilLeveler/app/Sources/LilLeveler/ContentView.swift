@@ -109,11 +109,13 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 12) {
                 fileRow
                 DorroughMeterDeck(session: session)
-                LoudnessStrip(
+                LoudnessCompareBoard(
                     before: session.before,
                     after: session.after,
                     gainDb: session.appliedGainDb,
-                    hasResult: session.hasResult
+                    hasResult: session.hasResult,
+                    targetLUFS: session.activeTargetLUFS,
+                    targetTP: session.activeTruePeak
                 )
                 transportRow
             }
