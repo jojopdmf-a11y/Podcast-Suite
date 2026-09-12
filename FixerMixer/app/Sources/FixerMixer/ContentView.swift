@@ -53,6 +53,12 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix)) { _ in
+            session.saveMix()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix)) { _ in
+            pickMixFile()
+        }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
                 appName: "Fixer Mixer",
@@ -111,7 +117,13 @@ struct ContentView: View {
             Spacer()
             Button("ABOUT") { showAbout = true }
                 .buttonStyle(MixerGhostButtonStyle())
+            Button("LOAD MIX…") { pickMixFile() }
+                .buttonStyle(MixerGhostButtonStyle())
+                .help("Open a FixerMixer.mix.json file (also loads its _speakers folder)")
             if session.frameCount > 0 {
+                Button("SAVE MIX") { session.saveMix() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Writes FixerMixer.mix.json into this _speakers folder. Drop the folder later and the mix comes back.")
                 Button("LOAD OTHER FOLDER…") { pickFolder() }
                     .buttonStyle(MixerGhostButtonStyle())
             }
@@ -142,6 +154,8 @@ struct ContentView: View {
                 Button("CHOOSE FOLDER…") { pickFolder() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
+                Button("LOAD MIX…") { pickMixFile() }
+                    .buttonStyle(MixerGhostButtonStyle())
             }
         }
         .frame(maxWidth: .infinity, minHeight: 280)
@@ -430,6 +444,19 @@ struct ContentView: View {
         }
     }
 
+    private func pickMixFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.json]
+        panel.message = "Choose a FixerMixer.mix.json file"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            session.openMixFile(url)
+        }
+    }
+
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
         provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
@@ -441,6 +468,10 @@ struct ContentView: View {
             }
             guard let url else { return }
             DispatchQueue.main.async {
+                if MixerMixFile.isMixFile(url) {
+                    session.openMixFile(url)
+                    return
+                }
                 var isDir: ObjCBool = false
                 if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
                     session.loadStripperFolder(url)

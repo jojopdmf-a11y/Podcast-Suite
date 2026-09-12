@@ -129,57 +129,74 @@ struct ContentView: View {
                 .tracking(1)
                 .foregroundStyle(LevelerTheme.cyanDim)
 
-            ForEach(PlatformPreset.all) { p in
-                Button {
-                    session.preset = p
-                    session.process()
-                } label: {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(p.title)
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom : LevelerTheme.cyan)
-                        Text(p.subtitle)
-                            .font(.system(size: 9, weight: .medium, design: .rounded))
-                            .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom.opacity(0.75) : LevelerTheme.textSecondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(session.listedPresets) { p in
+                        HStack(spacing: 6) {
+                            Button {
+                                session.selectPreset(p)
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(p.title)
+                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom : LevelerTheme.cyan)
+                                    Text(p.subtitle)
+                                        .font(.system(size: 9, weight: .medium, design: .rounded))
+                                        .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom.opacity(0.75) : LevelerTheme.textSecondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(session.preset.id == p.id ? LevelerTheme.lime : LevelerTheme.panelRaised)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .stroke(LevelerTheme.cyan.opacity(0.4), lineWidth: 1)
+                                )
+                            }
+                            .buttonStyle(.plain)
+
+                            if UserLoudnessPreset.isUserID(p.id) {
+                                Button("✕") {
+                                    session.deleteUserPreset(p.id)
+                                }
+                                .buttonStyle(LevelerGhostButtonStyle())
+                                .help("Remove this personal preset")
+                            }
+                        }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(session.preset.id == p.id ? LevelerTheme.lime : LevelerTheme.panelRaised)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(LevelerTheme.cyan.opacity(0.4), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-            }
 
-            if session.preset.isCustom {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("TARGET LUFS  \(String(format: "%.1f", session.customLUFS))")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LevelerTheme.cyan)
-                    Slider(value: Binding(
-                        get: { Double(session.customLUFS) },
-                        set: { session.customLUFS = Float($0) }
-                    ), in: -24...(-10))
-                    .tint(LevelerTheme.cyan)
-                    .onChange(of: session.customLUFS) { _, _ in session.process() }
+                    if session.preset.isCustom {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("TARGET LUFS  \(String(format: "%.1f", session.customLUFS))")
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundStyle(LevelerTheme.cyan)
+                            Slider(value: Binding(
+                                get: { Double(session.customLUFS) },
+                                set: { session.customLUFS = Float($0) }
+                            ), in: -24...(-10))
+                            .tint(LevelerTheme.cyan)
+                            .onChange(of: session.customLUFS) { _, _ in session.process() }
 
-                    Text("TRUE PEAK  \(String(format: "%.1f", session.customTP)) dBTP")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(LevelerTheme.cyan)
-                    Slider(value: Binding(
-                        get: { Double(session.customTP) },
-                        set: { session.customTP = Float($0) }
-                    ), in: -3...(-0.1))
-                    .tint(LevelerTheme.lime)
-                    .onChange(of: session.customTP) { _, _ in session.process() }
+                            Text("TRUE PEAK  \(String(format: "%.1f", session.customTP)) dBTP")
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundStyle(LevelerTheme.cyan)
+                            Slider(value: Binding(
+                                get: { Double(session.customTP) },
+                                set: { session.customTP = Float($0) }
+                            ), in: -3...(-0.1))
+                            .tint(LevelerTheme.lime)
+                            .onChange(of: session.customTP) { _, _ in session.process() }
+
+                            Button("SAVE PRESET") { promptSavePreset() }
+                                .buttonStyle(LevelerGhostButtonStyle())
+                                .help("Keep these LUFS / true-peak numbers in the PLATFORM list")
+                        }
+                        .padding(.top, 4)
+                    }
                 }
-                .padding(.top, 4)
             }
 
             Spacer(minLength: 0)
@@ -291,6 +308,26 @@ struct ContentView: View {
             .foregroundStyle(LevelerTheme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
+    }
+
+    private func promptSavePreset() {
+        let alert = NSAlert()
+        alert.messageText = "Name this loudness preset"
+        alert.informativeText = String(
+            format: "Keeps %.1f LUFS and %.1f dBTP in the PLATFORM list on this Mac.",
+            session.customLUFS,
+            session.customTP
+        )
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "My show target"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            session.saveCustomAsPreset(name: field.stringValue)
+        }
     }
 
     private func pickFile() {

@@ -12,6 +12,7 @@ final class LevelerSession: ObservableObject {
     @Published var preset: PlatformPreset = .universal
     @Published var customLUFS: Float = -16
     @Published var customTP: Float = -1
+    @Published var userPresets: [UserLoudnessPreset] = []
 
     @Published var before = LoudnessReport.empty
     @Published var after = LoudnessReport.empty
@@ -59,7 +60,12 @@ final class LevelerSession: ObservableObject {
         return Double(playheadFrame) / sampleRate
     }
 
+    var listedPresets: [PlatformPreset] {
+        PlatformPreset.factory + userPresets.map(\.asPlatformPreset) + [.custom]
+    }
+
     init() {
+        userPresets = UserLoudnessPresetStore.load()
         playback.onPlayhead = { [weak self] frame in
             Task { @MainActor in
                 guard let self, !self.isScrubbing else { return }
@@ -79,6 +85,53 @@ final class LevelerSession: ObservableObject {
                 self?.ingestMeters(pre: pre, post: post)
             }
         }
+    }
+
+    func selectPreset(_ p: PlatformPreset) {
+        preset = p
+        if !p.isCustom, let match = userPresets.first(where: { $0.id == p.id }) {
+            customLUFS = match.targetLUFS
+            customTP = match.truePeakDbTP
+        }
+        process()
+    }
+
+    func saveCustomAsPreset(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            status = "Give the preset a name first."
+            return
+        }
+        let item = UserLoudnessPreset(
+            id: "user-\(UUID().uuidString)",
+            title: trimmed,
+            targetLUFS: customLUFS,
+            truePeakDbTP: customTP
+        )
+        userPresets.append(item)
+        do {
+            try UserLoudnessPresetStore.save(userPresets)
+            selectPreset(item.asPlatformPreset)
+            status = "Saved preset “\(trimmed)”"
+        } catch {
+            userPresets.removeAll { $0.id == item.id }
+            status = "Could not save preset: \(error.localizedDescription)"
+        }
+    }
+
+    func deleteUserPreset(_ id: String) {
+        userPresets.removeAll { $0.id == id }
+        do {
+            try UserLoudnessPresetStore.save(userPresets)
+        } catch {
+            status = "Could not update presets: \(error.localizedDescription)"
+            return
+        }
+        if preset.id == id {
+            preset = .universal
+            process()
+        }
+        status = "Removed personal preset"
     }
 
     func load(url: URL) {

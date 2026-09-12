@@ -74,6 +74,10 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
     static let all: [PlatformPreset] = [
         .universal, .apple, .spotify, .youtube, .amazon, .mono, .custom
     ]
+
+    static let factory: [PlatformPreset] = [
+        .universal, .apple, .spotify, .youtube, .amazon, .mono
+    ]
 }
 
 struct LoudnessReport: Equatable {
