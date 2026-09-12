@@ -259,7 +259,7 @@ struct RTAView: View {
                         RoundedRectangle(cornerRadius: 1.2, style: .continuous)
                             .fill(barColor(v))
                             .frame(width: barW, height: h)
-                            .shadow(color: (apiStyle ? APILook.accentBlue : MixerTheme.cyan).opacity(0.25), radius: v > 0.55 ? 3 : 0)
+                            .shadow(color: (apiStyle ? APILook.accentBlue : MixerTheme.cyan).opacity(0.25), radius: v > 0.64 ? 3 : 0)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -277,8 +277,9 @@ struct RTAView: View {
     }
 
     private func barColor(_ v: Float) -> Color {
-        if v > 0.85 { return apiStyle ? APILook.ledRed : MixerTheme.meterRed }
-        if v > 0.65 { return apiStyle ? APILook.ledYellow : MixerTheme.meterYellow }
+        // RTA maps −80…−10 dB onto 0…1. Shift yellow/red +6 dB.
+        if v > 0.936 { return apiStyle ? APILook.ledRed : MixerTheme.meterRed }
+        if v > 0.736 { return apiStyle ? APILook.ledYellow : MixerTheme.meterYellow }
         return apiStyle ? APILook.accentBlue : MixerTheme.cyan
     }
 }
