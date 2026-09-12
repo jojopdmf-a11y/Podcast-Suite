@@ -29,7 +29,8 @@ enum LoudnessEngine {
         )
     }
 
-    /// Gain toward target integrated LUFS, then soft-limit to true-peak ceiling.
+    /// Gain toward target integrated LUFS, then true-peak limit to the ceiling.
+    /// The returned gain is the net PRE → POST integrated-loudness change.
     static func normalize(
         _ buffer: WAVIO.Buffer,
         targetLUFS: Float,
@@ -40,26 +41,51 @@ enum LoudnessEngine {
             throw LevelerError.processFailed("Audio too short to level.")
         }
 
-        // Gain needed to hit target integrated loudness
         var gainDb = targetLUFS - before.integratedLUFS
-        // Cap wild gains (silence / near-silence)
         gainDb = max(-24, min(24, gainDb))
         let gain = pow(10.0, gainDb / 20.0)
-
         var out = buffer.samples.map { $0 * gain }
 
-        // Soft brickwall toward true-peak ceiling (with a little margin)
-        let ceiling = pow(10.0, truePeakCeilingDbTP / 20.0) * 0.98
-        let limited = softLimitTruePeak(samples: out, channels: buffer.channelCount, ceiling: ceiling)
-        out = limited
+        // Sit a hair under the printed ceiling so round-trip measurement does not tick over.
+        let ceilingDb = truePeakCeilingDbTP - 0.05
+        let ceiling = pow(10.0, ceilingDb / 20.0)
+        out = truePeakLimit(
+            samples: out,
+            channels: buffer.channelCount,
+            sampleRate: buffer.sampleRate,
+            ceiling: ceiling
+        )
 
-        let result = WAVIO.Buffer(
+        var result = WAVIO.Buffer(
             sampleRate: buffer.sampleRate,
             channelCount: buffer.channelCount,
             samples: out
         )
-        let after = analyze(result)
-        return (result, after, gainDb)
+        var after = analyze(result)
+
+        // If the limiter left unused true-peak headroom, spend it chasing LUFS once.
+        let lufsShort = targetLUFS - after.integratedLUFS
+        let tpHeadroom = ceilingDb - after.truePeakDbTP
+        if lufsShort > 0.15 && tpHeadroom > 0.15 {
+            let extraDb = min(min(lufsShort, tpHeadroom), 6)
+            let extra = pow(10.0, extraDb / 20.0)
+            out = result.samples.map { $0 * extra }
+            out = truePeakLimit(
+                samples: out,
+                channels: buffer.channelCount,
+                sampleRate: buffer.sampleRate,
+                ceiling: ceiling
+            )
+            result = WAVIO.Buffer(
+                sampleRate: buffer.sampleRate,
+                channelCount: buffer.channelCount,
+                samples: out
+            )
+            after = analyze(result)
+        }
+
+        let netGainDb = after.integratedLUFS - before.integratedLUFS
+        return (result, after, netGainDb)
     }
 
     // MARK: - BS.1770 K-weighting + gating
@@ -188,19 +214,76 @@ enum LoudnessEngine {
         return 20 * log10(peak)
     }
 
-    private static func softLimitTruePeak(samples: [Float], channels: Int, ceiling: Float) -> [Float] {
-        // First pass: find post-gain true peak, scale if needed, then soft clip
-        let tp = truePeakDbTP(samples: samples, channels: channels)
-        let tpLin = pow(10.0, tp / 20.0)
-        var scale: Float = 1
-        if tpLin > ceiling && tpLin > 1e-8 {
-            scale = ceiling / tpLin
+    /// Lookahead true-peak limiter. Turns down only around peaks that would break
+    /// the ceiling, so average loudness can stay close to the LUFS target.
+    private static func truePeakLimit(
+        samples: [Float],
+        channels: Int,
+        sampleRate: Double,
+        ceiling: Float
+    ) -> [Float] {
+        let ch = max(1, channels)
+        let frames = samples.count / ch
+        guard frames > 0 else { return samples }
+
+        let ceilingLin = max(ceiling, 1e-4)
+        let tpLin = pow(10.0, truePeakDbTP(samples: samples, channels: ch) / 20.0)
+        if tpLin <= ceilingLin || tpLin < 1e-8 {
+            return samples
         }
-        return samples.map { x in
-            let y = x * scale
-            let c = max(ceiling, 1e-4)
-            return c * tanhf(y / c)
+
+        let look = max(1, Int(0.002 * sampleRate))
+        let releaseN = max(1.0, Float(0.05 * sampleRate))
+        let rel = exp(-1.0 / releaseN)
+
+        var out = [Float](repeating: 0, count: samples.count)
+        var env: Float = 1
+
+        func interpolatedPeak(at frame: Int) -> Float {
+            guard frame >= 0, frame < frames else { return 0 }
+            let next = min(frame + 1, frames - 1)
+            var peak: Float = 0
+            for c in 0..<ch {
+                let x = samples[frame * ch + c]
+                let xn = samples[next * ch + c]
+                peak = max(peak, abs(x))
+                peak = max(peak, abs(x + (xn - x) * 0.25))
+                peak = max(peak, abs(x + (xn - x) * 0.50))
+                peak = max(peak, abs(x + (xn - x) * 0.75))
+            }
+            return peak
         }
+
+        // Sidechain sees the current frame; audio is delayed by `look` so gain
+        // drops before that peak is written.
+        for i in 0..<(frames + look) {
+            let peak = interpolatedPeak(at: i)
+            let needed: Float = (peak > ceilingLin && peak > 1e-12) ? ceilingLin / peak : 1
+            if needed < env {
+                env = needed
+            } else {
+                env += (needed - env) * (1 - rel)
+                if env > 1 { env = 1 }
+            }
+
+            let src = i - look
+            if src >= 0 {
+                let g = env
+                let base = src * ch
+                for c in 0..<ch {
+                    out[base + c] = samples[base + c] * g
+                }
+            }
+        }
+
+        let leftover = pow(10.0, truePeakDbTP(samples: out, channels: ch) / 20.0)
+        if leftover > ceilingLin && leftover > 1e-8 {
+            let scale = ceilingLin / leftover
+            for i in 0..<out.count {
+                out[i] *= scale
+            }
+        }
+        return out
     }
 }
 

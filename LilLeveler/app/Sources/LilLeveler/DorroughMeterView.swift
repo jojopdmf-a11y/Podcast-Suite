@@ -403,22 +403,26 @@ struct HardwareLitButton: View {
 struct LoudnessCompareBoard: View {
     var before: LoudnessReport
     var after: LoudnessReport
-    var gainDb: Float
     var hasResult: Bool
     var targetLUFS: Float
     var targetTP: Float
 
+    private var netGainDb: Float {
+        after.integratedLUFS - before.integratedLUFS
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("FILE LOUDNESS")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyanDim)
-                Spacer()
-                Text(String(format: "TARGET  %.1f LUFS  ·  %.1f dBTP", targetLUFS, targetTP))
+                Text(String(format: "PLATFORM TARGET LEVEL  %.1f LUFS  ·  %.1f dBTP", targetLUFS, targetTP))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.cyan)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
 
             HStack(alignment: .top, spacing: 8) {
@@ -437,12 +441,16 @@ struct LoudnessCompareBoard: View {
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.8)
                 .foregroundStyle(LevelerTheme.cyanDim)
-            Text(hasResult ? String(format: "%+.1f", gainDb) : "—")
+            Text(hasResult ? String(format: "%+.1f", netGainDb) : "—")
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
                 .foregroundStyle(hasResult ? LevelerTheme.lime : LevelerTheme.textSecondary)
             Text("dB")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .foregroundStyle(LevelerTheme.textSecondary)
+            Text("PRE → POST")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .foregroundStyle(LevelerTheme.textSecondary.opacity(0.9))
         }
         .frame(width: 58)
         .padding(.vertical, 10)
@@ -455,6 +463,7 @@ struct LoudnessCompareBoard: View {
                 .stroke(LevelerTheme.lime.opacity(hasResult ? 0.55 : 0.15), lineWidth: 1)
         )
         .padding(.top, 18)
+        .help("How much louder the whole file got, from PRE to POST.")
     }
 
     private func loudnessCard(title: String, report: LoudnessReport, glow: Bool) -> some View {
