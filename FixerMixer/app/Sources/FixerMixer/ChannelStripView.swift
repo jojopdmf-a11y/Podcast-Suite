@@ -31,8 +31,9 @@ struct LevelMeter: View {
     }
 
     private var meterColor: Color {
-        if dbNorm > 0.9 { return MixerTheme.meterRed }
-        if dbNorm > 0.7 { return MixerTheme.meterYellow }
+        // 60 dB meter: yellow was −18, red −6. Shift both +6 dB.
+        if dbNorm >= 1.0 { return MixerTheme.meterRed }
+        if dbNorm > 0.8 { return MixerTheme.meterYellow }
         return MixerTheme.meterGreen
     }
 }

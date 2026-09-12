@@ -56,6 +56,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerUpdateMix)) { _ in
+            session.updateMix()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix)) { _ in
             session.saveMix()
         }
@@ -137,6 +140,9 @@ struct ContentView: View {
                 .buttonStyle(MixerGhostButtonStyle())
                 .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
             if session.frameCount > 0 {
+                Button("UPDATE MIX") { session.updateMix() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this _speakers folder")
                 Button("SAVE MIX…") { session.saveMix() }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Choose a folder and name for this mix. Audio stays in the WAV files.")

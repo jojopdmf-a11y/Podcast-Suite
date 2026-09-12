@@ -3,6 +3,7 @@ import SwiftUI
 extension Notification.Name {
     static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
     static let fixerMixerSaveMix = Notification.Name("fixerMixerSaveMix")
+    static let fixerMixerUpdateMix = Notification.Name("fixerMixerUpdateMix")
     static let fixerMixerLoadMix = Notification.Name("fixerMixerLoadMix")
 }
 
@@ -17,10 +18,14 @@ struct FixerMixerApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {
+                Button("Update Mix") {
+                    NotificationCenter.default.post(name: .fixerMixerUpdateMix, object: nil)
+                }
+                .keyboardShortcut("s", modifiers: .command)
                 Button("Save Mix…") {
                     NotificationCenter.default.post(name: .fixerMixerSaveMix, object: nil)
                 }
-                .keyboardShortcut("s", modifiers: .command)
+                .keyboardShortcut("s", modifiers: [.command, .shift])
                 Button("Load Mix…") {
                     NotificationCenter.default.post(name: .fixerMixerLoadMix, object: nil)
                 }
