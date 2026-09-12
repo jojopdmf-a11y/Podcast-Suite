@@ -4,7 +4,7 @@ A small Mac app that takes **one mixed podcast file** and writes **one WAV track
 
 Audio is processed **on this Mac**. Nothing is uploaded.
 
-This is version 1. It does not transcribe, name speakers, or unmix two people talking over each other.
+This is version 1. It does not transcribe, name speakers, or unmix two people talking over each other. When talk-over lands on several speaker tracks, Stripper keeps the main talker loud and ducks the extras so the mix does not jump up.
 
 Speaker detection uses [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) on the original mix. Set **Speakers** to the real headcount when you know it — that is the main control if voices land wrong.
 
@@ -140,7 +140,7 @@ Check that tools are ready:
 - **Cannot download the model** — you must be logged in and must accept the community-1 terms. Use a **Read** token.
 - **ffmpeg was not found** — run `brew install ffmpeg`, then `./scripts/setup.sh` again.
 - **Speakers mixed up** — try setting the exact speaker count. Short clips and heavy music beds are harder. After detection, the app also fingerprint-checks turns and moves clear wrong-track moments to the matching speaker.
-- **Two people talking at once** — that moment stays on whoever the app thinks was speaking. True unmixing is not in v1.
+- **Two people talking at once** — that moment is not unmixed into two clean voices. The main talker stays loud on their track; extras are ducked so the mix does not jump up.
 
 ## Project layout
 
