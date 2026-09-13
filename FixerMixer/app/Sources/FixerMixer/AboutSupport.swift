@@ -7,6 +7,8 @@ enum CougarCalcBrand {
     static let suiteName = "CougarCalc Podcast Suite"
     /// Update when the real domain is live.
     static let websiteURL = URL(string: "https://cougarcalc.com")!
+    static let privacyURL = URL(string: "https://cougarcalc.com/privacy")!
+    static let termsURL = URL(string: "https://cougarcalc.com/terms")!
     static let supportEmail = "hello@cougarcalc.com"
     static let copyrightYear = 2026
 
@@ -86,6 +88,18 @@ struct AboutSupportPanel: View {
 
                 Button("WEBSITE") {
                     NSWorkspace.shared.open(CougarCalcBrand.websiteURL)
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 10) {
+                Button("PRIVACY") {
+                    NSWorkspace.shared.open(CougarCalcBrand.privacyURL)
+                }
+                .buttonStyle(.bordered)
+
+                Button("TERMS") {
+                    NSWorkspace.shared.open(CougarCalcBrand.termsURL)
                 }
                 .buttonStyle(.bordered)
             }

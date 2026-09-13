@@ -118,6 +118,8 @@ You should not need to “wait through” Mixer or Leveler the way you wait thro
 
 ## Privacy
 
+The full public policy is [`docs/privacy-policy.md`](privacy-policy.md) (site: [cougarcalc.com/privacy](https://cougarcalc.com/privacy)). Terms: [`docs/terms.md`](terms.md).
+
 Audio is processed **on this Mac**. Files are not uploaded to CougarCalc or to a render server. Speaker detection uses a model you agree to on Hugging Face; that is a one-time login/token, not your episode going to the cloud.
 
 ---

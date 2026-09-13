@@ -584,10 +584,17 @@ struct SettingsView: View {
                         .buttonStyle(StripperPrimaryButtonStyle(compact: true))
                         .keyboardShortcut(.defaultAction)
                 }
+                HStack(spacing: 14) {
+                    Link("Privacy", destination: URL(string: "https://cougarcalc.com/privacy")!)
+                        .foregroundStyle(StripperTheme.cyan)
+                    Link("Terms", destination: URL(string: "https://cougarcalc.com/terms")!)
+                        .foregroundStyle(StripperTheme.cyan)
+                }
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
             }
             .padding(24)
         }
-        .frame(width: 540, height: 400)
+        .frame(width: 540, height: 430)
         .preferredColorScheme(.dark)
         .onAppear {
             // Attributes-only check; usually avoids the password prompt that load() triggers.
