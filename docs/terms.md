@@ -22,29 +22,41 @@ The [Privacy Policy](https://cougarcalc.com/privacy) explains how information is
 
 You are buying a **license to use** the Software, not ownership of the code, names, or trademarks.
 
-One paid **Podcast Suite** license is meant to cover **all three apps** (Stripper, Mixer, and Leveler) as we ship them together, unless a checkout page clearly says otherwise.
+The checkout page will say which license you bought:
+
+- **Podcast Stripper**, **Fixer Mixer**, or **Lil Leveler** — that one app
+- **Podcast Suite** — all three apps, usually for less than buying them separately
+
+A single-app key does not unlock the others. A Suite key unlocks all three. You can buy a second app later; we do not force the bundle.
 
 We may add features and ship updates. Updates do not reduce the rights you already paid for, except as described in “Changes” below.
 
 ---
 
-## 2. Trial
+## 2. Unlicensed / demo mode
 
-When a trial is offered, you may use the full Software for **14 days** from first launch on that Mac, without paying.
+Until you enter a valid license for that app, it runs in **demo mode**. There is no free period of unlimited, deliverable output. You may evaluate as long as you like. You may not use demo output as a finished episode, mix, or master.
 
-After the trial, the apps may refuse to process or export until you enter a valid license. Buying a license turns that same copy into a licensed copy. You do not need a second download.
+Demo limits (we may tune the numbers; the idea stays the same):
 
-We may refuse or end a trial if we reasonably believe it is being abused (for example, wiping trial data to restart the clock).
+- **Podcast Stripper** — writes only a **portion** of the episode (the first few minutes of each stem). Enough to hear whether speakers and music split. Not enough to publish the show.
+- **Fixer Mixer** and **Lil Leveler** — the file you export has **short bursts of white noise** every few minutes. Playback is for judging the sound. The bounced/exported file is not a clean deliverable.
+
+Buying a license for that app (or a Suite license) turns the same copy into a licensed copy. You do not need a second download. Demo marks are not applied to licensed exports.
+
+Removing or bypassing demo marks, or using a cracked key, is a breach of this license.
 
 ---
 
 ## 3. License grant
 
-If you hold a valid license (or a valid trial), we grant you a personal, non-exclusive, non-transferable license to:
+If you hold a valid license for an app (or a Suite license), we grant you a personal, non-exclusive, non-transferable license to:
 
-- install and use the Software on **up to two Macs** that you own or control (for example a studio Mac and a laptop)
+- install and use **that licensed app** (or all three, if you bought the Suite) on **up to two Macs** that you own or control (for example a studio Mac and a laptop)
 - process **your** audio, or audio you have the right to process
 - make a reasonable number of backup copies of the app and of your own files
+
+Unlicensed copies may only be used in demo mode as described above.
 
 You may not:
 
@@ -95,7 +107,7 @@ Payouts from Paddle go to our business bank. That does not change your license.
 
 Chargebacks and refunds follow Paddle’s process. Email **hello@cougarcalc.com** if something went wrong; we will help.
 
-Prices on the site are the current offer. We may change future prices. That does not change a license you already paid for.
+Prices on the site are the current offer. We may change future prices. That does not change a license you already paid for. Buying one app does not include the others unless you buy the Suite or those other licenses.
 
 ---
 

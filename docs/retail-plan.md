@@ -14,44 +14,64 @@ Last updated: September 13, 2026
 | How customers get the apps | **Download from cougarcalc.com** (disk image or zip), not git |
 | Mac App Store | **No** |
 | Payments | **Paddle** → payout to **Novo** |
-| Product | **One Podcast Suite license** unlocks Stripper + Mixer + Leveler |
-| Trial | **14 days, full features**, same build as paid |
+| Products | **Each app sold separately**, plus a **Suite bundle** (all three, cheaper than buying à la carte) |
+| Demo | **No 14-day full trial.** Unlicensed = demo forever. Output is not a clean deliverable. |
+| Stripper demo | Export only the **first 3 minutes** of each stem (not the whole episode) |
+| Mixer / Leveler demo | Exported file gets **~1 second of white noise every 2 minutes** |
 | Macs per license | **Two** (studio + laptop) |
-| After trial | Paste a license key; Buy opens the website checkout |
+| After purchase | Paste a license key; Buy opens the website checkout for that SKU |
 
 ---
 
-## Trial and authorization (the plan)
+## Why not a 14-day full trial
 
-Paddle takes the money and the tax. **Paddle Billing does not mint Mac license keys for us.** We do not put a Paddle SDK inside the audio apps.
+These apps finish a job. Fourteen clean days is enough to strip, mix, and level a bunch of episodes and never pay. A clock also punishes the person who opens Stripper once, gets busy, and comes back on day 16.
 
-### What the customer sees
+Demo **marks the file**, not the calendar. They can evaluate for a year. They cannot hand a client a clean master.
 
-1. Download the Suite from cougarcalc.com (signed/notarized when the Developer account is live).
-2. First launch starts a **14-day clock** stored in **Keychain** on that Mac. Everything works, including export.
-3. A small **License** status in About: “Trial · 11 days left” or “Licensed.”
-4. Day 15: processing/export stops until they **Buy** (browser → Paddle checkout) or **Paste license**.
-5. After a valid key is pasted, the same app keeps working **offline**. A studio Mac does not need the internet to mix.
+---
 
-### What we build in the apps (no Paddle account required to start)
+## Demo mode (what we will build)
 
-- Keychain trial start date  
-- License field + Buy button (Buy = cougarcalc.com checkout URL)  
-- Local check of a **signed** key (public key inside the app; private key never ships)
+Same download for demo and paid. About shows **DEMO** or **Licensed**. Buy / paste key per app.
 
-### What happens when someone pays
+| App | Unlicensed output |
+|---|---|
+| **Podcast Stripper** | Writes only the **first 3 minutes** of each speaker stem and Music/SFX (files may still be named normally; duration is short or the rest is silence — prefer **short files** so it is obvious). Enough to hear split quality. Not a show. |
+| **Fixer Mixer** | Play can stay clear so they can mix. **Bounce / export** inserts **1 second of white noise every 2 minutes** of program. Status line: “Demo — licensed bounce is clean.” |
+| **Lil Leveler** | Same as Mixer: hear POST while playing; **Export Leveled** is noised. |
 
-1. Paddle checkout on the site (overlay or hosted). Card data never hits our server.
-2. Paddle emails the receipt. We send (or Paddle’s fulfillment email includes) the **suite license key**.
-3. Early on, Jeffrey can send keys by hand from a small list. When volume grows, a Paddle `transaction.completed` webhook mints and emails a key automatically.
+If people start recording the Mixer/Leveler output with a loopback, we can also noise the live output later. Day-one protection is the **file they save**.
 
-### Why not lock the key to one hardware ID on day one
+Licensed copy: no noise, full Stripper duration.
 
-Podcasters use a desk Mac and a laptop. Tight machine-locking creates support mail. Two Macs, honor system, revoke a key if it is posted in public. Tighten later only if it is actually a problem.
+---
 
-### Refunds / chargebacks
+## SKUs (Paddle)
 
-Paddle refunds → we deactivate that key on our list. The app can optionally re-check online **when it has a network**, and **fail open** if the Mac is offline (do not punish a licensed user on a plane).
+Four one-time products:
+
+1. Podcast Stripper  
+2. Fixer Mixer  
+3. Lil Leveler  
+4. **Podcast Suite** (all three) — price below 1+2+3  
+
+License key payload says which app IDs it unlocks. A Suite key unlocks all three. Buying Mixer later while already owning Stripper is a second key (or we later offer “upgrade to Suite” credit — not required for launch).
+
+Website: Download (all three demos), Buy this app, Buy the suite.
+
+---
+
+## Authorization
+
+Paddle takes the money and the tax. **Paddle Billing does not mint Mac license keys.** No Paddle SDK inside the audio apps.
+
+1. Checkout on cougarcalc.com for the SKU they picked.  
+2. Email a **signed key** for that SKU (hand-sent at first; webhook later).  
+3. Paste in the app → Keychain. Works **offline** after that.  
+4. Two Macs, honor system. Revoke if a key is posted in public.
+
+Refund → deactivate that key. Online re-check only when the Mac has a network; **fail open** if offline.
 
 ---
 
@@ -70,9 +90,8 @@ Until that exists, Update.command / git remains the desk workflow. Customers sho
 
 ## Website download
 
-- One page: what the Suite is, Mac requirements (already drafted in `cougarcalc-system-requirements.md`), **Download**, **Buy**, Privacy, Terms  
-- Direct links to Privacy and Terms from each app’s About box  
-- Sparkle (quiet in-app updates) comes **after** the first notarized dmg is selling. Same apps, new feed URL. Not required for launch.
+- Pages: what each app is, Mac requirements, **Download**, **Buy Stripper / Mixer / Leveler / Suite**, Privacy, Terms  
+- Sparkle comes **after** the first notarized dmg is selling  
 
 ---
 
@@ -80,26 +99,14 @@ Until that exists, Update.command / git remains the desk workflow. Customers sho
 
 **Do we wait until Stripper is 100% bundled before anything can ship? No.**
 
-- Mixer and Leveler can be real, paid, notarized Mac apps first if needed.  
-- **After** you ship, we can still update everything — bundling ffmpeg/Python into Stripper is an update, not a one-shot freeze.  
-- What we should **not** do is take money from a stranger for Stripper while the first-run story is still “open Terminal, install Homebrew.” That feels like an unfinished product.  
-
-Practical sequence:
-
-1. Legal pages on the site (this PR’s copy)  
-2. Notarized Mixer + Leveler downloads  
-3. Trial + license in all three  
-4. Stripper **bundled engine** (no Homebrew) as a dated update — can be before or shortly after first paid customers, but it should be on the public download before we call Stripper “buy this”  
-5. Sparkle  
-
-Shipping is a door you walk through. It is not a lid. Features and bundling keep moving.
+Mixer and Leveler can be paid, notarized Mac apps first. Stripper’s bundled engine is an **update**, not a freeze. Do not take money for Stripper while first run is still “install Homebrew.”
 
 ---
 
 ## Next concrete slices (when Jeffrey says go)
 
-1. Put `privacy-policy.md` and `terms.md` on cougarcalc.com (`/privacy`, `/terms`). Lawyer pass on entity + governing law.  
-2. Apple Developer account → notarized dmg.  
-3. Implement the 14-day Keychain trial + license paste in the three apps (Buy URL can be a placeholder until Paddle checkout exists).  
-4. Paddle product + Novo payout; then wire fulfillment email.  
+1. Port updated `privacy-policy.md` / `terms.md` to cougarcalc.com.  
+2. Apple Developer → notarized dmg.  
+3. Implement **demo marks** + license paste in each app (Buy URL per SKU).  
+4. Paddle catalog: 4 products → Novo; then fulfillment email.  
 5. Bundle Stripper’s engine.
