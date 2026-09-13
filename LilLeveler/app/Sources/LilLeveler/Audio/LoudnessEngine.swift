@@ -201,6 +201,61 @@ enum LoudnessEngine {
         return (result, after, netGainDb)
     }
 
+    /// Raise a mixed music track as far as the ceiling allows: makeup into a
+    /// tanh soft-clip, hard clip at the printed max, then true-peak limit leftovers.
+    static func maximize(
+        _ store: PCMStore,
+        truePeakCeilingDbTP: Float,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws -> (PCMStore, LoudnessReport, Float) {
+        let before = analyze(store) { progress?(0.40 * $0) }
+        guard before.durationSec > 0.05 else {
+            throw LevelerError.processFailed("Audio too short to level.")
+        }
+
+        // Sit on the printed ceiling (no extra 0.05 dB podcast safety).
+        let ceilingDb = truePeakCeilingDbTP
+        let ceiling = pow(10.0, ceilingDb / 20.0)
+        let peakGainDb = ceilingDb - before.truePeakDbTP
+        let clipDriveDb: Float = 4
+        var gainDb = peakGainDb + clipDriveDb
+        gainDb = max(-24, min(24, gainDb))
+        let gain = pow(10.0, gainDb / 20.0)
+
+        if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
+            try PCMStore.ensureDiskSpace(
+                bytes: Int64(needed) + 32_000_000,
+                near: FileManager.default.temporaryDirectory
+            )
+        }
+
+        let clipped = try PCMStore.createTemporary(
+            sampleRate: store.sampleRate,
+            channelCount: store.channelCount,
+            frameCount: store.frameCount
+        )
+        softClip(
+            from: store,
+            to: clipped,
+            gain: gain,
+            ceiling: ceiling
+        ) { progress?(0.40 + 0.35 * $0) }
+        clipped.sync()
+
+        let dest = try PCMStore.createTemporary(
+            sampleRate: store.sampleRate,
+            channelCount: store.channelCount,
+            frameCount: store.frameCount
+        )
+        truePeakLimit(from: clipped, to: dest, gain: 1, ceiling: ceiling) { progress?(0.75 + 0.12 * $0) }
+        dest.sync()
+
+        let after = analyze(dest) { progress?(0.87 + 0.13 * $0) }
+        progress?(1)
+        let netGainDb = after.integratedLUFS - before.integratedLUFS
+        return (dest, after, netGainDb)
+    }
+
     // MARK: - Streaming helpers
 
     private static func meanSquareFromRing(
@@ -258,6 +313,44 @@ enum LoudnessEngine {
             if gain != 1 {
                 let count = n * ch
                 for i in 0..<count { tmp[i] *= gain }
+            }
+            dest.write(interleaved: tmp, startFrame: pos, frames: n)
+            pos += n
+            let pct = Int((Double(pos) / Double(frames)) * 100.0)
+            if pct != lastPct {
+                lastPct = pct
+                progress?(Double(pos) / Double(frames))
+            }
+        }
+    }
+
+    /// Makeup gain → tanh soft clip → hard clip at `ceiling`.
+    private static func softClip(
+        from source: PCMStore,
+        to dest: PCMStore,
+        gain: Float,
+        ceiling: Float,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) {
+        let ch = source.channelCount
+        let frames = source.frameCount
+        let ceilingLin = max(ceiling, 1e-4)
+        let drive: Float = 1.8
+        var tmp = [Float](repeating: 0, count: chunkFrames * ch)
+        var pos = 0
+        var lastPct = -1
+        source.adviseSequential()
+        dest.adviseSequential()
+        while pos < frames {
+            let n = source.copyFrames(start: pos, count: min(chunkFrames, frames - pos), into: &tmp)
+            guard n > 0 else { break }
+            let count = n * ch
+            for i in 0..<count {
+                let x = tmp[i] * gain
+                var y = ceilingLin * tanh(drive * x / ceilingLin)
+                if y > ceilingLin { y = ceilingLin }
+                if y < -ceilingLin { y = -ceilingLin }
+                tmp[i] = y
             }
             dest.write(interleaved: tmp, startFrame: pos, frames: n)
             pos += n

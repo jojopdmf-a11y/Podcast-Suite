@@ -163,7 +163,8 @@ struct ContentView: View {
                     after: session.after,
                     hasResult: session.hasResult,
                     targetLUFS: session.activeTargetLUFS,
-                    targetTP: session.activeTruePeak
+                    targetTP: session.activeTruePeak,
+                    isMaximizer: session.preset.isMaximizer
                 )
                 transportRow
             }
@@ -209,6 +210,9 @@ struct ContentView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(session.isBusy)
+                            .help(p.isMaximizer
+                                  ? "Pushes a mixed music track up: soft clip into a hard −0.1 dB ceiling. Not a podcast target."
+                                  : "Level the file to this platform’s loudness and true-peak numbers.")
 
                             if UserLoudnessPreset.isUserID(p.id) {
                                 Button("✕") {

@@ -19,6 +19,8 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
     var targetLUFS: Float
     var truePeakDbTP: Float
     var isCustom: Bool = false
+    /// Soft-clip into a hard ceiling instead of chasing a podcast LUFS number.
+    var isMaximizer: Bool = false
 
     static let universal = PlatformPreset(
         id: "universal",
@@ -62,6 +64,14 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
         targetLUFS: -19,
         truePeakDbTP: -1
     )
+    static let musicLoud = PlatformPreset(
+        id: "music-loud",
+        title: "MUSIC LOUD",
+        subtitle: "soft clip · hard limit · −0.1 dB",
+        targetLUFS: -8,
+        truePeakDbTP: -0.1,
+        isMaximizer: true
+    )
     static let custom = PlatformPreset(
         id: "custom",
         title: "CUSTOM",
@@ -72,11 +82,11 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
     )
 
     static let all: [PlatformPreset] = [
-        .universal, .apple, .spotify, .youtube, .amazon, .mono, .custom
+        .universal, .apple, .spotify, .youtube, .amazon, .mono, .musicLoud, .custom
     ]
 
     static let factory: [PlatformPreset] = [
-        .universal, .apple, .spotify, .youtube, .amazon, .mono
+        .universal, .apple, .spotify, .youtube, .amazon, .mono, .musicLoud
     ]
 }
 
