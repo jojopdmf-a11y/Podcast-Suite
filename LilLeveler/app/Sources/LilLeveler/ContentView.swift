@@ -212,7 +212,7 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                             .disabled(session.isBusy)
                             .help(p.isMaximizer
-                                  ? "L1-style maximizer. Lower THRESHOLD to raise the track into a hard −0.1 dB limiter. Not a podcast target."
+                                  ? "L1-style maximizer. Play, then drag THRESHOLD — you hear it live. Not a podcast target."
                                   : "Level the file to this platform’s loudness and true-peak numbers.")
 
                             if UserLoudnessPreset.isUserID(p.id) {
@@ -284,7 +284,7 @@ struct ContentView: View {
             Slider(
                 value: Binding(
                     get: { Double(session.musicThresholdDb) },
-                    set: { session.musicThresholdDb = Float($0) }
+                    set: { session.setMusicThreshold(Float($0)) }
                 ),
                 in: Double(LevelerSession.musicThresholdMin)...Double(LevelerSession.musicThresholdMax)
             ) { editing in
@@ -292,7 +292,12 @@ struct ContentView: View {
             }
             .tint(LevelerTheme.lime)
             .disabled(session.isBusy)
-            .help("Lower the threshold to raise the whole track into the limiter. Ceiling stays −0.1 dB.")
+            .help("Live: drag while playing to hear makeup into the −0.1 dB limiter. FILE LOUDNESS cards catch up when you let go.")
+
+            Text("Live while you drag. FILE LOUDNESS updates when you let go.")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(LevelerTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(alignment: .bottom, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -350,7 +355,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(session.sourceURL == nil || session.isBusy)
+                .disabled(!session.hasFile || session.isBusy)
                 .help("Spacebar toggles play/pause")
 
                 Text(LevelerSession.formatTime(seconds: session.playheadSeconds))
@@ -396,12 +401,12 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 150)
-                .disabled(!session.hasResult)
-                .help("PRE is the file you dropped. POST is after leveling. Time stays put when you flip.")
+                .disabled(!session.canListenPost)
+                .help("PRE is the file you dropped. POST is the live maximizer (MUSIC LOUD) or the leveled file. Time stays put when you flip.")
 
                 Button("RE-LEVEL") { session.process() }
                     .buttonStyle(LevelerGhostButtonStyle())
-                    .disabled(session.sourceURL == nil || session.isBusy)
+                    .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
 
                 Spacer()
 
@@ -409,8 +414,8 @@ struct ContentView: View {
                     session.exportLeveled()
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
-                .disabled(!session.hasResult || session.isBusy)
-                .help("Choose a folder and file name for the leveled WAV")
+                .disabled((session.preset.isMaximizer ? !session.hasFile : !session.hasResult) || session.isBusy)
+                .help("Choose a folder and file name. MUSIC LOUD exports the current THRESHOLD.")
             }
         }
         .padding(12)
