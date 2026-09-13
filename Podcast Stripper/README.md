@@ -4,7 +4,7 @@ A small Mac app that takes **one mixed podcast file** and writes **one WAV track
 
 Audio is processed **on this Mac**. Nothing is uploaded.
 
-This is version 1. It does not transcribe, name speakers, or unmix two people talking over each other. When talk-over lands on several speaker tracks, Stripper keeps the main talker loud and ducks the extras so the mix does not jump up.
+This is version 1. It does not transcribe, name speakers, or unmix two people talking over each other. When talk-over lands on several speaker tracks, Stripper keeps the main talker loud and ducks the extras so the mix does not jump up. It also fingerprint-checks each voice and the handoff into the next person, so a guest’s first words are less likely to sit on the host track.
 
 Speaker detection uses [pyannote community-1](https://huggingface.co/pyannote/speaker-diarization-community-1) on the original mix. Set **Speakers** to the real headcount when you know it — that is the main control if voices land wrong.
 
@@ -117,7 +117,7 @@ Check that tools are ready:
 - **No Hugging Face token** — complete the Hugging Face steps above. The error text will say `missing_token`.
 - **Cannot download the model** — you must be logged in and must accept the community-1 terms. Use a **Read** token.
 - **ffmpeg was not found** — close the window, wait until the first-open install finished, then open the app again. From the project folder you can run `./scripts/setup.sh`.
-- **Speakers mixed up** — try setting the exact speaker count. Short clips and heavy music beds are harder. After detection, the app also fingerprint-checks turns and moves clear wrong-track moments to the matching speaker.
+- **Speakers mixed up** — try setting the exact speaker count. Short clips and heavy music beds are harder. After detection, the app fingerprint-checks turns and the moment one person hands to the next, so the next talker’s first words are less likely to stay on the previous track. It does not transcribe or “understand” the conversation.
 - **Two people talking at once** — that moment is not unmixed into two clean voices. The main talker stays loud on their track; extras are ducked so the mix does not jump up.
 
 ## Project layout
