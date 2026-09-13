@@ -201,26 +201,25 @@ enum LoudnessEngine {
         return (result, after, netGainDb)
     }
 
-    /// Raise a mixed music track as far as the ceiling allows: makeup into a
-    /// tanh soft-clip, hard clip at the printed max, then true-peak limit leftovers.
+    /// L1-style maximizer: constant makeup = ceiling − threshold, then a fast
+    /// lookahead brickwall at the printed ceiling. Lowering threshold raises the
+    /// whole track into the limiter. Peaks above threshold are reduced; everything
+    /// else keeps that makeup gain.
     static func maximize(
         _ store: PCMStore,
-        truePeakCeilingDbTP: Float,
+        thresholdDb: Float,
+        ceilingDb: Float,
         progress: (@Sendable (Double) -> Void)? = nil
-    ) throws -> (PCMStore, LoudnessReport, Float) {
+    ) throws -> (PCMStore, LoudnessReport, Float, Float) {
         let before = analyze(store) { progress?(0.40 * $0) }
         guard before.durationSec > 0.05 else {
             throw LevelerError.processFailed("Audio too short to level.")
         }
 
-        // Sit on the printed ceiling (no extra 0.05 dB podcast safety).
-        let ceilingDb = truePeakCeilingDbTP
+        let thresh = min(ceilingDb, max(-24, thresholdDb))
+        let makeupDb = ceilingDb - thresh
+        let gain = pow(10.0, makeupDb / 20.0)
         let ceiling = pow(10.0, ceilingDb / 20.0)
-        let peakGainDb = ceilingDb - before.truePeakDbTP
-        let clipDriveDb: Float = 4
-        var gainDb = peakGainDb + clipDriveDb
-        gainDb = max(-24, min(24, gainDb))
-        let gain = pow(10.0, gainDb / 20.0)
 
         if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
             try PCMStore.ensureDiskSpace(
@@ -229,31 +228,25 @@ enum LoudnessEngine {
             )
         }
 
-        let clipped = try PCMStore.createTemporary(
-            sampleRate: store.sampleRate,
-            channelCount: store.channelCount,
-            frameCount: store.frameCount
-        )
-        softClip(
-            from: store,
-            to: clipped,
-            gain: gain,
-            ceiling: ceiling
-        ) { progress?(0.40 + 0.35 * $0) }
-        clipped.sync()
-
         let dest = try PCMStore.createTemporary(
             sampleRate: store.sampleRate,
             channelCount: store.channelCount,
             frameCount: store.frameCount
         )
-        truePeakLimit(from: clipped, to: dest, gain: 1, ceiling: ceiling) { progress?(0.75 + 0.12 * $0) }
+        // L1 default release is 1 ms — fast peak limiting, not a slow compressor.
+        let peakGR = truePeakLimit(
+            from: store,
+            to: dest,
+            gain: gain,
+            ceiling: ceiling,
+            releaseSec: 0.001
+        ) { progress?(0.40 + 0.45 * $0) }
         dest.sync()
 
-        let after = analyze(dest) { progress?(0.87 + 0.13 * $0) }
+        let after = analyze(dest) { progress?(0.85 + 0.15 * $0) }
         progress?(1)
         let netGainDb = after.integratedLUFS - before.integratedLUFS
-        return (dest, after, netGainDb)
+        return (dest, after, netGainDb, peakGR)
     }
 
     // MARK: - Streaming helpers
@@ -324,64 +317,30 @@ enum LoudnessEngine {
         }
     }
 
-    /// Makeup gain → tanh soft clip → hard clip at `ceiling`.
-    private static func softClip(
-        from source: PCMStore,
-        to dest: PCMStore,
-        gain: Float,
-        ceiling: Float,
-        progress: (@Sendable (Double) -> Void)? = nil
-    ) {
-        let ch = source.channelCount
-        let frames = source.frameCount
-        let ceilingLin = max(ceiling, 1e-4)
-        let drive: Float = 1.8
-        var tmp = [Float](repeating: 0, count: chunkFrames * ch)
-        var pos = 0
-        var lastPct = -1
-        source.adviseSequential()
-        dest.adviseSequential()
-        while pos < frames {
-            let n = source.copyFrames(start: pos, count: min(chunkFrames, frames - pos), into: &tmp)
-            guard n > 0 else { break }
-            let count = n * ch
-            for i in 0..<count {
-                let x = tmp[i] * gain
-                var y = ceilingLin * tanh(drive * x / ceilingLin)
-                if y > ceilingLin { y = ceilingLin }
-                if y < -ceilingLin { y = -ceilingLin }
-                tmp[i] = y
-            }
-            dest.write(interleaved: tmp, startFrame: pos, frames: n)
-            pos += n
-            let pct = Int((Double(pos) / Double(frames)) * 100.0)
-            if pct != lastPct {
-                lastPct = pct
-                progress?(Double(pos) / Double(frames))
-            }
-        }
-    }
-
     /// Lookahead true-peak limiter. Turns down only around peaks that would break
     /// the ceiling, so average loudness can stay close to the LUFS target.
+    /// Returns peak gain reduction in dB.
+    @discardableResult
     private static func truePeakLimit(
         from source: PCMStore,
         to dest: PCMStore,
         gain: Float,
         ceiling: Float,
+        releaseSec: Double = 0.05,
         progress: (@Sendable (Double) -> Void)? = nil
-    ) {
+    ) -> Float {
         let ch = max(1, source.channelCount)
         let sr = source.sampleRate
         let frames = source.frameCount
-        guard frames > 0 else { return }
+        guard frames > 0 else { return 0 }
 
         let ceilingLin = max(ceiling, 1e-4)
         let look = max(1, Int(0.002 * sr))
-        let releaseN = max(1.0, Float(0.05 * sr))
+        let releaseN = max(1.0, Float(max(0.0005, releaseSec) * sr))
         let rel = exp(-1.0 / releaseN)
 
         var env: Float = 1
+        var peakGR: Float = 0
         var delay = [Float](repeating: 0, count: look * ch)
         var delayWrite = 0
         var delayFilled = 0
@@ -401,6 +360,9 @@ enum LoudnessEngine {
             } else {
                 env += (needed - env) * (1 - rel)
                 if env > 1 { env = 1 }
+            }
+            if env < 1 {
+                peakGR = max(peakGR, -20 * log10(max(env, 1e-8)))
             }
         }
 
@@ -494,8 +456,11 @@ enum LoudnessEngine {
 
         let leftover = leftoverTruePeak(store: dest)
         if leftover > ceilingLin && leftover > 1e-8 {
-            copyGained(from: dest, to: dest, gain: ceilingLin / leftover)
+            let scale = ceilingLin / leftover
+            copyGained(from: dest, to: dest, gain: scale)
+            peakGR = max(peakGR, -20 * log10(max(scale, 1e-8)))
         }
+        return peakGR
     }
 
     private static func leftoverTruePeak(store: PCMStore) -> Float {

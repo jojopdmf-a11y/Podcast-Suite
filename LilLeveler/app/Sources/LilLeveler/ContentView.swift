@@ -164,7 +164,8 @@ struct ContentView: View {
                     hasResult: session.hasResult,
                     targetLUFS: session.activeTargetLUFS,
                     targetTP: session.activeTruePeak,
-                    isMaximizer: session.preset.isMaximizer
+                    isMaximizer: session.preset.isMaximizer,
+                    maximizerMakeupDb: session.musicMakeupDb
                 )
                 transportRow
             }
@@ -211,7 +212,7 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                             .disabled(session.isBusy)
                             .help(p.isMaximizer
-                                  ? "Pushes a mixed music track up: soft clip into a hard −0.1 dB ceiling. Not a podcast target."
+                                  ? "L1-style maximizer. Lower THRESHOLD to raise the track into a hard −0.1 dB limiter. Not a podcast target."
                                   : "Level the file to this platform’s loudness and true-peak numbers.")
 
                             if UserLoudnessPreset.isUserID(p.id) {
@@ -222,6 +223,10 @@ struct ContentView: View {
                                 .help("Remove this personal preset")
                             }
                         }
+                    }
+
+                    if session.preset.isMaximizer {
+                        musicMaximizerControls
                     }
 
                     if session.preset.isCustom {
@@ -262,6 +267,57 @@ struct ContentView: View {
         .padding(12)
         .frame(maxHeight: .infinity, alignment: .top)
         .levelerPanel(glow: true)
+    }
+
+    /// L1-style: one threshold slider + a fast attenuation meter. Ceiling is fixed.
+    private var musicMaximizerControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("THRESHOLD")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(LevelerTheme.cyanDim)
+                Spacer()
+                Text(String(format: "%.1f dB", session.musicThresholdDb))
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(LevelerTheme.cyan)
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(session.musicThresholdDb) },
+                    set: { session.musicThresholdDb = Float($0) }
+                ),
+                in: Double(LevelerSession.musicThresholdMin)...Double(LevelerSession.musicThresholdMax)
+            ) { editing in
+                if !editing { session.process() }
+            }
+            .tint(LevelerTheme.lime)
+            .disabled(session.isBusy)
+            .help("Lower the threshold to raise the whole track into the limiter. Ceiling stays −0.1 dB.")
+
+            HStack(alignment: .bottom, spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("GR")
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(LevelerTheme.cyanDim)
+                        Spacer()
+                        Text(String(format: "%.1f", session.isPlaying ? session.liveGR : session.peakGR))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(session.liveGR > 0.05 || session.peakGR > 0.05 ? LevelerTheme.meterYellow : LevelerTheme.textSecondary)
+                        Text("dB")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .foregroundStyle(LevelerTheme.textSecondary)
+                    }
+                    GainReductionMeter(liveDb: session.liveGR, peakDb: session.peakGR)
+                        .frame(height: 14)
+                }
+            }
+
+            Text("CEILING  −0.1 dB")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(LevelerTheme.textSecondary)
+        }
+        .padding(.top, 6)
     }
 
     private var fileRow: some View {
@@ -421,5 +477,45 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+/// Fast L1-style attenuation meter. Fill is live GR; pip is peak hold.
+private struct GainReductionMeter: View {
+    var liveDb: Float
+    var peakDb: Float
+    private let ceiling: Float = 12
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let live = CGFloat(min(1, max(0, liveDb / ceiling)))
+            let peak = CGFloat(min(1, max(0, peakDb / ceiling)))
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(LevelerTheme.bgBottom)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(barColor)
+                    .frame(width: max(2, w * live))
+                Rectangle()
+                    .fill(LevelerTheme.meterYellow)
+                    .frame(width: 2, height: h)
+                    .offset(x: max(0, w * peak - 1))
+                    .opacity(peakDb > 0.05 ? 1 : 0)
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .stroke(LevelerTheme.cyan.opacity(0.35), lineWidth: 1)
+            )
+        }
+        .accessibilityLabel("Gain reduction")
+        .accessibilityValue(Text(String(format: "%.1f dB", liveDb)))
+    }
+
+    private var barColor: Color {
+        if liveDb >= 8 { return LevelerTheme.meterRed }
+        if liveDb >= 3 { return LevelerTheme.meterYellow }
+        return LevelerTheme.lime
     }
 }

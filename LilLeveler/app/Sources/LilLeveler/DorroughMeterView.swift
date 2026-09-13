@@ -407,6 +407,7 @@ struct LoudnessCompareBoard: View {
     var targetLUFS: Float
     var targetTP: Float
     var isMaximizer: Bool = false
+    var maximizerMakeupDb: Float = 0
 
     private var netGainDb: Float {
         after.integratedLUFS - before.integratedLUFS
@@ -420,7 +421,7 @@ struct LoudnessCompareBoard: View {
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyanDim)
                 Text(isMaximizer
-                     ? String(format: "MUSIC LOUD  soft clip → hard limit  ·  %.1f dB", targetTP)
+                     ? String(format: "MUSIC LOUD  ceiling −0.1 dB  ·  makeup %+.1f dB", maximizerMakeupDb)
                      : String(format: "PLATFORM TARGET LEVEL  %.1f LUFS  ·  %.1f dBTP", targetLUFS, targetTP))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.cyan)

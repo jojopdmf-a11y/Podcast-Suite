@@ -67,7 +67,7 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
     static let musicLoud = PlatformPreset(
         id: "music-loud",
         title: "MUSIC LOUD",
-        subtitle: "soft clip · hard limit · −0.1 dB",
+        subtitle: "threshold · hard limit · −0.1 dB",
         targetLUFS: -8,
         truePeakDbTP: -0.1,
         isMaximizer: true

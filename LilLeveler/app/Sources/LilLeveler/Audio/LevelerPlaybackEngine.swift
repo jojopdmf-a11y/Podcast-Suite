@@ -28,6 +28,11 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
     var onPlayhead: ((Int) -> Void)?
     var onEnded: (() -> Void)?
     var onMeters: ((LiveMeterSample, LiveMeterSample) -> Void)?
+    var onGainReduction: ((Float) -> Void)?
+
+    private var makeupLin: Float = 1
+    private var measureGR = false
+    private var grEnv: Float = 0
 
     func currentFrame() -> Int {
         lock.lock()
@@ -45,6 +50,7 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         playPost = false
         preBall.reset()
         postBall.reset()
+        grEnv = 0
         lock.unlock()
     }
 
@@ -52,6 +58,15 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         lock.lock()
         post = leveled
         postBall.reset()
+        grEnv = 0
+        lock.unlock()
+    }
+
+    func setMaximizerMakeup(db: Float, enabled: Bool) {
+        lock.lock()
+        makeupLin = pow(10.0, db / 20.0)
+        measureGR = enabled
+        grEnv = 0
         lock.unlock()
     }
 
@@ -170,6 +185,21 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
                     if hasPost {
                         let postPair = postStore?.stereoFrame(at: head) ?? (0, 0)
                         self.postBall.process(left: postPair.0, right: postPair.1, sampleRate: srLocal)
+                        if self.measureGR {
+                            let gained = max(abs(prePair.0), abs(prePair.1)) * self.makeupLin
+                            let outp = max(abs(postPair.0), abs(postPair.1))
+                            var inst: Float = 0
+                            if gained > outp && outp > 1e-8 {
+                                inst = 20 * log10(gained / outp)
+                            }
+                            let atk = Float(1 - exp(-1.0 / (0.001 * srLocal)))
+                            let relGR = Float(1 - exp(-1.0 / (0.080 * srLocal)))
+                            if inst > self.grEnv {
+                                self.grEnv += atk * (inst - self.grEnv)
+                            } else {
+                                self.grEnv += relGR * (inst - self.grEnv)
+                            }
+                        }
                     }
                     head += 1
                 } else {
@@ -193,10 +223,12 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
             if ended {
                 self.playing = false
                 self.playhead = 0
+                self.grEnv = 0
             }
             let emitHead = ended ? 0 : head
             let emitPre = self.preBall.snapshot
             let emitPost = hasPost ? self.postBall.snapshot : LiveMeterSample.silent
+            let emitGR = self.measureGR ? self.grEnv : 0
             self.lock.unlock()
 
             if shouldEmitHead || ended {
@@ -204,6 +236,7 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
             }
             if shouldEmitMeters || ended {
                 self.onMeters?(emitPre, emitPost)
+                self.onGainReduction?(emitGR)
             }
             if ended {
                 DispatchQueue.main.async {

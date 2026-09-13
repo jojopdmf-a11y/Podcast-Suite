@@ -14,6 +14,11 @@ final class LevelerSession: ObservableObject {
     @Published var customLUFS: Float = -16
     @Published var customTP: Float = -1
     @Published var userPresets: [UserLoudnessPreset] = []
+    /// L1-style threshold. Lower = more makeup into the −0.1 dB limiter.
+    @Published var musicThresholdDb: Float = -0.1
+    @Published var liveGR: Float = 0
+    @Published var peakGR: Float = 0
+    private var filePeakGR: Float = 0
 
     @Published var before = LoudnessReport.empty
     @Published var after = LoudnessReport.empty
@@ -63,6 +68,14 @@ final class LevelerSession: ObservableObject {
         return Double(playheadFrame) / sampleRate
     }
 
+    static let musicCeilingDb: Float = -0.1
+    static let musicThresholdMin: Float = -24
+    static let musicThresholdMax: Float = -0.1
+
+    var musicMakeupDb: Float {
+        Self.musicCeilingDb - musicThresholdDb
+    }
+
     var listedPresets: [PlatformPreset] {
         PlatformPreset.factory + userPresets.map(\.asPlatformPreset) + [.custom]
     }
@@ -87,6 +100,13 @@ final class LevelerSession: ObservableObject {
         playback.onMeters = { [weak self] pre, post in
             Task { @MainActor in
                 self?.ingestMeters(pre: pre, post: post)
+            }
+        }
+        playback.onGainReduction = { [weak self] gr in
+            Task { @MainActor in
+                guard let self, self.preset.isMaximizer else { return }
+                self.liveGR = gr
+                self.peakGR = max(self.peakGR, gr)
             }
         }
     }
@@ -181,6 +201,13 @@ final class LevelerSession: ObservableObject {
                     self.before = report
                     self.sampleRate = store.sampleRate
                     self.durationFrames = store.frameCount
+                    self.musicThresholdDb = min(
+                        Self.musicThresholdMax,
+                        max(Self.musicThresholdMin, report.truePeakDbTP)
+                    )
+                    self.liveGR = 0
+                    self.peakGR = 0
+                    self.filePeakGR = 0
                     self.playback.load(pre: store, post: nil)
                     self.status = String(
                         format: "Loaded · %@ · %d ch · %.0f Hz · integrated %.1f LUFS",
@@ -214,22 +241,29 @@ final class LevelerSession: ObservableObject {
         let tp = activeTruePeak
         let store = sourceStore
         status = maximizer
-            ? "Maximizing to \(String(format: "%.1f", tp)) dB…"
+            ? "Maximizing…"
             : "Leveling to \(String(format: "%.1f", target)) LUFS…"
+        let threshold = musicThresholdDb
+        let ceiling = Self.musicCeilingDb
+        playback.setMaximizerMakeup(db: musicMakeupDb, enabled: maximizer)
 
         Task.detached(priority: .userInitiated) {
             do {
                 let (out, report, gain): (PCMStore, LoudnessReport, Float)
+                var renderGR: Float = 0
                 if maximizer {
-                    (out, report, gain) = try LoudnessEngine.maximize(
+                    let result = try LoudnessEngine.maximize(
                         store,
-                        truePeakCeilingDbTP: tp
+                        thresholdDb: threshold,
+                        ceilingDb: ceiling
                     ) { fraction in
                         Task { @MainActor in
                             guard self.processGeneration == gen else { return }
                             self.status = String(format: "Maximizing… %.0f%%", fraction * 100)
                         }
                     }
+                    (out, report, gain) = (result.0, result.1, result.2)
+                    renderGR = result.3
                 } else {
                     (out, report, gain) = try LoudnessEngine.normalize(
                         store,
@@ -253,6 +287,12 @@ final class LevelerSession: ObservableObject {
                     self.appliedGainDb = gain
                     self.hasResult = true
                     self.playback.setPost(out)
+                    self.playback.setMaximizerMakeup(db: self.musicMakeupDb, enabled: maximizer)
+                    if maximizer {
+                        self.liveGR = 0
+                        self.filePeakGR = renderGR
+                        self.peakGR = renderGR
+                    }
                     self.isBusy = false
                     self.status = self.isPlaying ? self.playingStatus() : self.readyStatus()
                 }
@@ -373,9 +413,9 @@ final class LevelerSession: ObservableObject {
         postHoldR = post.right
         preOvers = false
         postOvers = false
+        liveGR = 0
+        peakGR = filePeakGR
     }
-
-    func stopPlayback() {
         playback.stop(resetPlayhead: true)
         isPlaying = false
         isScrubbing = false
@@ -402,9 +442,9 @@ final class LevelerSession: ObservableObject {
         if hasResult {
             if preset.isMaximizer {
                 return String(
-                    format: "Ready · MUSIC LOUD · gain %+.1f dB → %.1f LUFS · TP %.1f dBTP",
-                    appliedGainDb,
-                    after.integratedLUFS,
+                    format: "Ready · MUSIC LOUD · thresh %.1f dB · GR %.1f dB · TP %.1f dBTP",
+                    musicThresholdDb,
+                    peakGR,
                     after.truePeakDbTP
                 )
             }
@@ -430,6 +470,9 @@ final class LevelerSession: ObservableObject {
         postHoldR = -80
         preOvers = false
         postOvers = false
+        liveGR = 0
+        peakGR = 0
+        filePeakGR = 0
     }
 
     private func ingestMeters(pre: LiveMeterSample, post: LiveMeterSample) {
