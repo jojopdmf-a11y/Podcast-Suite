@@ -269,7 +269,7 @@ struct ContentView: View {
         .levelerPanel(glow: true)
     }
 
-    /// L1-style: one threshold slider + a fast attenuation meter. Ceiling is fixed.
+    /// L1-style: one threshold slider + a readable GR meter. Ceiling is fixed.
     private var musicMaximizerControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
@@ -315,6 +315,7 @@ struct ContentView: View {
                     }
                     GainReductionMeter(liveDb: session.liveGR, peakDb: session.peakGR)
                         .frame(height: 14)
+                        .help("How hard the limiter is working. Jumps up with peaks, then falls slowly so you can see it.")
                 }
             }
 
@@ -485,7 +486,7 @@ struct ContentView: View {
     }
 }
 
-/// Fast L1-style attenuation meter. Fill is live GR; pip is peak hold.
+/// GR meter. Fill follows live reduction with a slow fall; pip is peak hold.
 private struct GainReductionMeter: View {
     var liveDb: Float
     var peakDb: Float
