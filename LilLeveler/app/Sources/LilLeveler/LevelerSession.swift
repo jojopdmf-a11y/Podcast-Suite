@@ -209,25 +209,41 @@ final class LevelerSession: ObservableObject {
         processGeneration += 1
         let gen = processGeneration
         isBusy = true
-        status = "Leveling to \(String(format: "%.1f", activeTargetLUFS)) LUFS…"
+        let maximizer = preset.isMaximizer
         let target = activeTargetLUFS
         let tp = activeTruePeak
         let store = sourceStore
+        status = maximizer
+            ? "Maximizing to \(String(format: "%.1f", tp)) dB…"
+            : "Leveling to \(String(format: "%.1f", target)) LUFS…"
 
         Task.detached(priority: .userInitiated) {
             do {
-                let (out, report, gain) = try LoudnessEngine.normalize(
-                    store,
-                    targetLUFS: target,
-                    truePeakCeilingDbTP: tp
-                ) { fraction in
-                    Task { @MainActor in
-                        guard self.processGeneration == gen else { return }
-                        self.status = String(
-                            format: "Leveling to %.1f LUFS… %.0f%%",
-                            target,
-                            fraction * 100
-                        )
+                let (out, report, gain): (PCMStore, LoudnessReport, Float)
+                if maximizer {
+                    (out, report, gain) = try LoudnessEngine.maximize(
+                        store,
+                        truePeakCeilingDbTP: tp
+                    ) { fraction in
+                        Task { @MainActor in
+                            guard self.processGeneration == gen else { return }
+                            self.status = String(format: "Maximizing… %.0f%%", fraction * 100)
+                        }
+                    }
+                } else {
+                    (out, report, gain) = try LoudnessEngine.normalize(
+                        store,
+                        targetLUFS: target,
+                        truePeakCeilingDbTP: tp
+                    ) { fraction in
+                        Task { @MainActor in
+                            guard self.processGeneration == gen else { return }
+                            self.status = String(
+                                format: "Leveling to %.1f LUFS… %.0f%%",
+                                target,
+                                fraction * 100
+                            )
+                        }
                     }
                 }
                 await MainActor.run {
@@ -384,6 +400,14 @@ final class LevelerSession: ObservableObject {
 
     private func readyStatus() -> String {
         if hasResult {
+            if preset.isMaximizer {
+                return String(
+                    format: "Ready · MUSIC LOUD · gain %+.1f dB → %.1f LUFS · TP %.1f dBTP",
+                    appliedGainDb,
+                    after.integratedLUFS,
+                    after.truePeakDbTP
+                )
+            }
             return String(
                 format: "Ready · gain %+.1f dB → %.1f LUFS · TP %.1f dBTP",
                 appliedGainDb,
