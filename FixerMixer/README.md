@@ -1,6 +1,6 @@
 # Fixer Mixer
 
-Mac mixer for Podcast Stripper exports: **5 mono speaker channels** + **1 stereo Music/SFX** channel.
+Mac mixer for **Podcast Stripper** exports **or any audio files you drop**: speaker strips plus an optional stereo Music/SFX channel.
 
 Native DSP (inspired by, not affiliated with): De-verb, Wetter (Drum / Studio / Stage rooms for dry voices), Leveler, **EQ 2520** (10-band graphic with 560-style proportional Q and extra fader travel in ±4 dB), plus a speaker-only proportional-Q parametric band (Notch / Narrow / Wide).
 
@@ -12,8 +12,8 @@ Needs **macOS 14 Sonoma or newer**. Mixer is light compared with Stripper; any A
 
 ## Use
 
-1. Run Podcast Stripper on an episode
-2. Drop the `_speakers` folder onto Fixer Mixer
-3. Tweak per-channel processing
-4. **SAVE MIX** writes `FixerMixer.mix.json` into that folder — drop the folder later and the mix comes back
+1. Drop a Podcast Stripper `_speakers` folder, **or** drop one or more audio files (WAV, AIFF, MP3, M4A…)
+2. Each audio file becomes a channel. A file with “music” or “sfx” in the name becomes the MUSIC strip; everything else is a speaker strip (stereo files are summed to mono for that strip).
+3. Tweak per-channel processing. **ADD TRACKS…** (or drop more files) adds channels to the mix that’s already open.
+4. **SAVE MIX** writes `FixerMixer.mix.json` into the folder — drop that folder later and the mix comes back
 5. Play to audition, then **Bounce** for processed stems + `mix.wav`

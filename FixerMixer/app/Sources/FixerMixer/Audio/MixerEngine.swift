@@ -146,7 +146,7 @@ final class MixerEngine: @unchecked Sendable {
 
         for (i, url) in voiceURLs.enumerated() {
             guard let url else { continue }
-            let buf = try WAVIO.load(url: url)
+            let buf = try MixerAudioIO.load(url: url, targetSampleRate: rate)
             if let r = rate, abs(r - buf.sampleRate) > 0.5 {
                 throw MixerError.loadFailed("Sample rate mismatch in \(url.lastPathComponent)")
             }
@@ -172,7 +172,7 @@ final class MixerEngine: @unchecked Sendable {
         musicChannels = 2
         hasMusicTrack = false
         if let musicURL {
-            let buf = try WAVIO.load(url: musicURL)
+            let buf = try MixerAudioIO.load(url: musicURL, targetSampleRate: rate)
             if let r = rate, abs(r - buf.sampleRate) > 0.5 {
                 throw MixerError.loadFailed("Sample rate mismatch in music track")
             }
