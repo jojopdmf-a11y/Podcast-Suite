@@ -416,6 +416,8 @@ final class LevelerSession: ObservableObject {
         liveGR = 0
         peakGR = filePeakGR
     }
+
+    func stopPlayback() {
         playback.stop(resetPlayhead: true)
         isPlaying = false
         isScrubbing = false
