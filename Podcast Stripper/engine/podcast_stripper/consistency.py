@@ -17,10 +17,13 @@ Segment = tuple[float, float, str]
 EmbedFn = Callable[[float, float], np.ndarray]
 ProgressFn = Callable[[str, float, str], None]
 
-MIN_TURN_SECONDS = 0.8
+MIN_TURN_SECONDS = 0.55
 SIM_MARGIN = 0.08
 MIN_BEST_SIM = 0.25
 MAX_ITERATIONS = 2
+# Trailing slice checked at a speaker change (next person started while still labeled as the last one).
+HANDOFF_SECONDS = 1.1
+MIN_BODY_AFTER_HANDOFF = 0.7
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -154,6 +157,109 @@ def reassign_mismatched_turns(
     return result, moved
 
 
+def merge_adjacent_same_speaker(segments: list[Segment], *, gap: float = 0.05) -> list[Segment]:
+    if not segments:
+        return []
+    ordered = sorted(segments, key=lambda item: (item[0], item[1], item[2]))
+    merged: list[Segment] = [ordered[0]]
+    for start, end, speaker in ordered[1:]:
+        prev_start, prev_end, prev_speaker = merged[-1]
+        if speaker == prev_speaker and start <= prev_end + gap:
+            merged[-1] = (prev_start, max(prev_end, end), speaker)
+        else:
+            merged.append((start, end, speaker))
+    return merged
+
+
+def _speaker_centroids_from_segments(
+    segments: list[Segment],
+    embeddings: list[np.ndarray | None],
+) -> dict[str, np.ndarray]:
+    usable = [
+        (start, end, speaker, emb)
+        for (start, end, speaker), emb in zip(segments, embeddings)
+        if emb is not None
+    ]
+    if not usable:
+        return {}
+    return duration_weighted_centroids(
+        [item[2] for item in usable],
+        [item[1] - item[0] for item in usable],
+        [item[3] for item in usable],
+    )
+
+
+def split_conversational_handoffs(
+    segments: list[Segment],
+    embed_fn: EmbedFn,
+    *,
+    margin: float = SIM_MARGIN,
+    min_best_sim: float = MIN_BEST_SIM,
+    edge_seconds: float = HANDOFF_SECONDS,
+    min_body: float = MIN_BODY_AFTER_HANDOFF,
+) -> tuple[list[Segment], int]:
+    """Move the last ~1s of a turn onto the next speaker when that slice is their voice.
+
+    Classic miss: guest's first words stay glued to the host track, then the guest
+    'jumps' to their own track. This is a voice-fingerprint check at the handoff,
+    not a transcript of the words.
+    """
+    if len(segments) < 2:
+        return list(segments), 0
+
+    ordered = sorted(segments, key=lambda item: (item[0], item[1]))
+    centroids = _speaker_centroids_from_segments(
+        ordered, embed_segments(ordered, embed_fn)
+    )
+    if len(centroids) < 2:
+        return list(ordered), 0
+
+    result: list[Segment] = []
+    moved = 0
+    pending = list(ordered)
+    index = 0
+    while index < len(pending):
+        start, end, speaker = pending[index]
+        if index + 1 >= len(pending):
+            result.append((start, end, speaker))
+            break
+
+        next_start, next_end, next_speaker = pending[index + 1]
+        duration = end - start
+        can_split = (
+            next_speaker != speaker
+            and duration >= edge_seconds + min_body
+            and speaker in centroids
+            and next_speaker in centroids
+        )
+        if not can_split:
+            result.append((start, end, speaker))
+            index += 1
+            continue
+
+        suffix_start = end - edge_seconds
+        try:
+            suffix_emb = embed_fn(suffix_start, end)
+        except Exception:
+            result.append((start, end, speaker))
+            index += 1
+            continue
+
+        sim_own = cosine_similarity(suffix_emb, centroids[speaker])
+        sim_next = cosine_similarity(suffix_emb, centroids[next_speaker])
+        if sim_next >= min_best_sim and (sim_next - sim_own) >= margin:
+            result.append((start, suffix_start, speaker))
+            pending[index + 1] = (min(suffix_start, next_start), next_end, next_speaker)
+            moved += 1
+            index += 1
+            continue
+
+        result.append((start, end, speaker))
+        index += 1
+
+    return merge_adjacent_same_speaker(result), moved
+
+
 def make_pipeline_embed_fn(pipeline, audio_file) -> EmbedFn:
     """Build an embed_fn(start, end) using the diarization pipeline's embedding model."""
     from pyannote.audio import Inference
@@ -189,10 +295,13 @@ def embed_segments(
     embed_fn: EmbedFn,
     *,
     min_duration: float = MIN_TURN_SECONDS,
+    early_window: float = 20.0,
+    early_min_duration: float = 0.45,
 ) -> list[np.ndarray | None]:
     embeddings: list[np.ndarray | None] = []
     for start, end, _speaker in segments:
-        if (end - start) < min_duration:
+        needed = early_min_duration if start < early_window else min_duration
+        if (end - start) < needed:
             embeddings.append(None)
             continue
         try:
@@ -259,10 +368,16 @@ def refine_speaker_consistency(
                 margin=margin,
                 min_best_sim=min_best_sim,
             )
+            updated, edge_moved = split_conversational_handoffs(
+                updated,
+                embed_fn,
+                margin=margin,
+                min_best_sim=min_best_sim,
+            )
             stats["iterations"] = iteration + 1
-            total_moved += moved
+            total_moved += moved + edge_moved
             current = updated
-            if moved == 0:
+            if moved == 0 and edge_moved == 0:
                 break
     except Exception as exc:
         stats["skipped"] = True
