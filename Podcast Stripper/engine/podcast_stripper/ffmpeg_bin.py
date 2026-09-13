@@ -24,6 +24,12 @@ def find_ffmpeg() -> str:
     if env and Path(env).is_file():
         return env
 
+    resources = os.environ.get("PODCAST_STRIPPER_RESOURCES")
+    if resources:
+        bundled = Path(resources) / "ffmpeg"
+        if bundled.is_file():
+            return str(bundled)
+
     which = shutil.which("ffmpeg")
     if which:
         return which
@@ -42,8 +48,7 @@ def find_ffmpeg() -> str:
         pass
 
     raise FFmpegError(
-        "ffmpeg was not found. Install it with Homebrew (`brew install ffmpeg`) "
-        "or wait for the app to finish installing its bundled copy.",
+        "ffmpeg was not found. Open Podcast Stripper once so it can finish installing its engine, then try again.",
         "missing_ffmpeg",
     )
 

@@ -6,11 +6,18 @@ struct EnginePaths {
     let engineDir: URL
     let uvBinary: URL
     let runnerScript: URL
+    /// When set, `uv` keeps the venv here (writable). Nil = repo `.venv` next to the engine.
+    let venvDir: URL?
+    let resourcesDir: URL?
+    let isBundled: Bool
 
     static func resolve() throws -> EnginePaths {
         let fileManager = FileManager.default
-        var searchRoots: [URL] = []
+        if let bundled = tryBundled(fileManager: fileManager) {
+            return bundled
+        }
 
+        var searchRoots: [URL] = []
         if let env = ProcessInfo.processInfo.environment["PODCAST_STRIPPER_ROOT"] {
             searchRoots.append(URL(fileURLWithPath: env, isDirectory: true))
         }
@@ -22,18 +29,58 @@ struct EnginePaths {
             let engine = root.appendingPathComponent("engine", isDirectory: true)
             let pyproject = engine.appendingPathComponent("pyproject.toml")
             if fileManager.fileExists(atPath: pyproject.path) {
-                let uv = try findUv(repoRoot: root)
+                let uv = try findUv(repoRoot: root, bundledUv: nil)
                 let runner = root.appendingPathComponent("scripts/run_engine.sh")
-                return EnginePaths(repoRoot: root, engineDir: engine, uvBinary: uv, runnerScript: runner)
+                return EnginePaths(
+                    repoRoot: root,
+                    engineDir: engine,
+                    uvBinary: uv,
+                    runnerScript: runner,
+                    venvDir: nil,
+                    resourcesDir: nil,
+                    isBundled: false
+                )
             }
         }
         throw EngineError.engineNotFound
     }
 
-    static func findUv(repoRoot: URL) throws -> URL {
+    private static func tryBundled(fileManager: FileManager) throws -> EnginePaths? {
+        guard let resources = Bundle.main.resourceURL else { return nil }
+        let engine = resources.appendingPathComponent("engine", isDirectory: true)
+        let pyproject = engine.appendingPathComponent("pyproject.toml")
+        guard fileManager.fileExists(atPath: pyproject.path) else { return nil }
+        let bundledUv = resources.appendingPathComponent("tools/uv")
+        guard fileManager.isExecutableFile(atPath: bundledUv.path) else {
+            throw EngineError.uvMissing
+        }
+        let support = applicationSupportDir()
+        try fileManager.createDirectory(at: support, withIntermediateDirectories: true)
+        return EnginePaths(
+            repoRoot: resources,
+            engineDir: engine,
+            uvBinary: bundledUv,
+            runnerScript: resources.appendingPathComponent("scripts/run_engine.sh"),
+            venvDir: support.appendingPathComponent(".venv", isDirectory: true),
+            resourcesDir: resources,
+            isBundled: true
+        )
+    }
+
+    static func applicationSupportDir() -> URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
+        return base.appendingPathComponent("CougarCalc/Podcast Stripper", isDirectory: true)
+    }
+
+    static func findUv(repoRoot: URL, bundledUv: URL?) throws -> URL {
         let fileManager = FileManager.default
         let home = fileManager.homeDirectoryForCurrentUser
-        let candidates = [
+        var candidates: [URL] = []
+        if let bundledUv {
+            candidates.append(bundledUv)
+        }
+        candidates += [
             repoRoot.appendingPathComponent("tools/uv"),
             repoRoot.appendingPathComponent("tools/uv-venv/bin/uv"),
             home.appendingPathComponent(".local/bin/uv"),
@@ -125,9 +172,9 @@ enum EngineError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .engineNotFound:
-            return "Could not find the engine folder. Keep Podcast Stripper.app inside the Podcast Stripper project folder."
+            return "Could not find the Stripper engine. Re-download Podcast Stripper, or keep this app next to the project folder if you are building from GitHub."
         case .uvMissing:
-            return "Python tooling (uv) is not installed yet. Run scripts/setup.sh from the project folder, then try again."
+            return "The Python helper (uv) is missing from this copy. Use Update Podcast Stripper, or re-download the app."
         case .startFailed(let message), .failed(let message):
             return message
         }
@@ -138,6 +185,7 @@ enum EngineError: LocalizedError {
 final class EngineRunner: ObservableObject {
     @Published var setup = EngineSetup()
     @Published var isRunning = false
+    @Published var isPreparingEngine = false
     @Published var percent: Double = 0
     @Published var message = "Drop a podcast file to start."
     @Published var errorMessage: String?
@@ -153,6 +201,7 @@ final class EngineRunner: ObservableObject {
     private var pulseTimer: Timer?
     private var lastEngineProgressAt = Date()
     private var jobStartedAt: Date?
+    private var prepareTask: Task<Void, Error>?
 
     var elapsedLabel: String { Self.formatElapsed(elapsedSeconds) }
 
@@ -177,6 +226,15 @@ final class EngineRunner: ObservableObject {
         Task {
             do {
                 let paths = try EnginePaths.resolve()
+                if paths.isBundled {
+                    if !Self.runtimeIsReady(paths: paths) {
+                        self.isPreparingEngine = true
+                        self.message = "Installing the engine on this Mac (once)…"
+                        self.setup.message = "First-time setup: installing the engine on this Mac (once, a couple of GB). Stay on Wi-Fi."
+                    }
+                    try await self.ensureRuntime(paths: paths)
+                    self.isPreparingEngine = false
+                }
                 let output = try await runTool(
                     paths: paths,
                     arguments: ["--check-setup", "--json-progress"],
@@ -197,11 +255,15 @@ final class EngineRunner: ObservableObject {
                         ffmpegPath: json["ffmpeg"] as? String,
                         message: summary(ffmpegOK: ffmpegOK, tokenOK: tokenOK)
                     )
+                    if message.hasPrefix("Installing the engine") {
+                        message = "Drop a podcast file to start."
+                    }
                 }
             } catch {
                 if isRunning {
                     return
                 }
+                self.isPreparingEngine = false
                 setup = EngineSetup(message: error.localizedDescription)
             }
         }
@@ -240,6 +302,14 @@ final class EngineRunner: ObservableObject {
         Task {
             do {
                 let paths = try EnginePaths.resolve()
+                if paths.isBundled {
+                    if !Self.runtimeIsReady(paths: paths) {
+                        self.isPreparingEngine = true
+                        self.message = "Installing the engine on this Mac (once)…"
+                    }
+                    try await self.ensureRuntime(paths: paths)
+                    self.isPreparingEngine = false
+                }
                 var arguments = [
                     input.path,
                     "-o",
@@ -285,6 +355,7 @@ final class EngineRunner: ObservableObject {
                 }
             }
             isRunning = false
+            isPreparingEngine = false
             process = nil
             freezeElapsed()
             restoreIdleSetupMessage()
@@ -298,9 +369,123 @@ final class EngineRunner: ObservableObject {
         case (true, false):
             return "Add your Hugging Face token in Settings before splitting."
         case (false, true):
-            return "ffmpeg is missing. Run scripts/setup.sh, or brew install ffmpeg."
+            return "ffmpeg is still missing after setup. Close this window, use Update Podcast Stripper, then open the new window."
         case (false, false):
-            return "Finish setup: install tools, then add your Hugging Face token in Settings."
+            return "Wait until the engine finishes installing, then add your Hugging Face token in Settings."
+        }
+    }
+
+    private static func runtimeIsReady(paths: EnginePaths) -> Bool {
+        guard paths.isBundled, let venv = paths.venvDir else { return true }
+        let fm = FileManager.default
+        let support = EnginePaths.applicationSupportDir()
+        let lockBundled = paths.engineDir.appendingPathComponent("uv.lock")
+        let stamp = support.appendingPathComponent("uv.lock")
+        let python = venv.appendingPathComponent("bin/python3")
+        guard fm.isExecutableFile(atPath: python.path),
+              fm.fileExists(atPath: stamp.path),
+              fm.fileExists(atPath: lockBundled.path),
+              let a = try? Data(contentsOf: stamp),
+              let b = try? Data(contentsOf: lockBundled),
+              a == b
+        else { return false }
+        return true
+    }
+
+    private func ensureRuntime(paths: EnginePaths) async throws {
+        guard paths.isBundled, paths.venvDir != nil else { return }
+        if Self.runtimeIsReady(paths: paths) {
+            return
+        }
+        if let prepareTask {
+            try await prepareTask.value
+            return
+        }
+        let task = Task { try await self.performUvSync(paths: paths) }
+        prepareTask = task
+        do {
+            try await task.value
+        } catch {
+            prepareTask = nil
+            throw error
+        }
+    }
+
+    private func performUvSync(paths: EnginePaths) async throws {
+        let fm = FileManager.default
+        let support = EnginePaths.applicationSupportDir()
+        try fm.createDirectory(at: support, withIntermediateDirectories: true)
+        try await runUv(
+            paths: paths,
+            arguments: ["sync", "--project", paths.engineDir.path, "--frozen", "--no-dev", "--no-editable"]
+        )
+        let lockBundled = paths.engineDir.appendingPathComponent("uv.lock")
+        let stamp = support.appendingPathComponent("uv.lock")
+        if fm.fileExists(atPath: lockBundled.path) {
+            try? fm.removeItem(at: stamp)
+            try? fm.copyItem(at: lockBundled, to: stamp)
+        }
+    }
+
+    private func runUv(paths: EnginePaths, arguments: [String]) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let process = Process()
+            process.executableURL = paths.uvBinary
+            process.arguments = arguments
+            process.currentDirectoryURL = paths.engineDir
+            var environment = ProcessInfo.processInfo.environment
+            if let venv = paths.venvDir {
+                environment["UV_PROJECT_ENVIRONMENT"] = venv.path
+            }
+            environment["PYTHONUNBUFFERED"] = "1"
+            if paths.isBundled {
+                environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            }
+            process.environment = environment
+            let stdout = Pipe()
+            let stderr = Pipe()
+            process.standardOutput = stdout
+            process.standardError = stderr
+            let gathered = OutputCollector()
+            let resume = OnceResume(continuation)
+
+            let pump: (FileHandle) -> Void = { handle in
+                let chunk = handle.availableData
+                gathered.append(chunk)
+                if let text = String(data: chunk, encoding: .utf8) {
+                    let clipped = text.split(whereSeparator: \.isNewline)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .last { !$0.isEmpty } ?? ""
+                    if !clipped.isEmpty {
+                        Task { @MainActor in
+                            self.setup.message = "Installing engine… \(clipped)"
+                        }
+                    }
+                }
+            }
+            stdout.fileHandleForReading.readabilityHandler = pump
+            stderr.fileHandleForReading.readabilityHandler = pump
+
+            process.terminationHandler = { finished in
+                stdout.fileHandleForReading.readabilityHandler = nil
+                stderr.fileHandleForReading.readabilityHandler = nil
+                gathered.append(stdout.fileHandleForReading.readDataToEndOfFile())
+                gathered.append(stderr.fileHandleForReading.readDataToEndOfFile())
+                if finished.terminationStatus == 0 {
+                    resume.resume(returning: ())
+                } else {
+                    let err = gathered.stringValue().trimmingCharacters(in: .whitespacesAndNewlines)
+                    let detail = err.isEmpty
+                        ? "Could not install the engine. Connect to the internet once (about 2 GB), then open the app again."
+                        : String(err.suffix(800))
+                    resume.resume(throwing: EngineError.failed(detail))
+                }
+            }
+            do {
+                try process.run()
+            } catch {
+                resume.resume(throwing: EngineError.startFailed(error.localizedDescription))
+            }
         }
     }
 
@@ -320,7 +505,12 @@ final class EngineRunner: ObservableObject {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = paths.uvBinary
-            process.arguments = ["run", "--project", paths.engineDir.path, "podcast-stripper"] + arguments
+            var uvArgs = ["run", "--project", paths.engineDir.path]
+            if paths.isBundled {
+                uvArgs.append("--no-sync")
+            }
+            uvArgs += ["podcast-stripper"] + arguments
+            process.arguments = uvArgs
             process.currentDirectoryURL = paths.repoRoot
             var environment = ProcessInfo.processInfo.environment
             let extraPath = [
@@ -333,6 +523,20 @@ final class EngineRunner: ObservableObject {
             environment["PATH"] = extraPath.joined(separator: ":") + ":" + (environment["PATH"] ?? "")
             environment["PYANNOTE_METRICS_ENABLED"] = "0"
             environment["PYTHONUNBUFFERED"] = "1"
+            if paths.isBundled {
+                environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            }
+            if let venv = paths.venvDir {
+                environment["UV_PROJECT_ENVIRONMENT"] = venv.path
+            }
+            if let resources = paths.resourcesDir {
+                environment["PODCAST_STRIPPER_RESOURCES"] = resources.path
+                let bundledFFmpeg = resources.appendingPathComponent("ffmpeg")
+                if FileManager.default.isExecutableFile(atPath: bundledFFmpeg.path) {
+                    environment["FFMPEG_BINARY"] = bundledFFmpeg.path
+                    environment["IMAGEIO_FFMPEG_EXE"] = bundledFFmpeg.path
+                }
+            }
             process.environment = environment
 
             let stdout = Pipe()

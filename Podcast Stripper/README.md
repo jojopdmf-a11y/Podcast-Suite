@@ -21,7 +21,9 @@ In the Podcast Suite folder, double-click **`Update Podcast Stripper.command`**.
 You also need:
 
 - A free [Hugging Face](https://huggingface.co/join) account (speaker detection)
-- About 2 GB of disk for Python packages and the speaker model
+- About 2 GB of disk and Wi-Fi the **first time** you open the app (it installs the engine on this Mac)
+
+You do **not** need Homebrew or Terminal for the Mac app.
 
 The suite README has the full Mac table (8 GB Air, Intel, etc.). In the app, **YOUR MAC** (next to Settings) reads this Mac’s chip and RAM and scales the wait estimate. Drop a file first to estimate that episode. The website copy lives in `docs/cougarcalc-system-requirements.md`.
 
@@ -41,43 +43,17 @@ On that same class of Mac, 2 voices, ballpark:
 | 90 minutes | ~27 minutes |
 | 2 hours | ~35–40 minutes |
 
-First run on a new Mac can be slower while models download (once). An M1 or M2 is often about 1.5–2× these times. More speakers add a little; music separation is most of the wait.
+First open of the app on a new Mac installs the engine (once). The first split can also download the speaker model. An M1 or M2 is often about 1.5–2× these times. More speakers add a little; music separation is most of the wait.
 
-## First-time setup
+## First-time setup (the Mac app)
 
-Do these steps once.
+Do these steps once. Stay on Wi-Fi.
 
-### 1. Install Homebrew, ffmpeg, and uv
+1. Double-click **Podcast Stripper**. The first open installs the engine on this Mac (about 2 GB). Wait until the status line says **Ready** (or asks for a Hugging Face token). Homebrew is not required.
+2. Add the Hugging Face token below.
+3. Drop a podcast file and click **Split into tracks**.
 
-Open **Terminal**, paste this, and press Return:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Follow the prompts. When it finishes, it may tell you to run two more lines that start with `echo` and `eval`. Run those too.
-
-Then install the tools:
-
-```bash
-brew install ffmpeg uv
-```
-
-If Homebrew is already installed, you only need that second command.
-
-### 2. Install this project’s Python engine
-
-In Terminal:
-
-```bash
-cd "/Users/audio/.cursor/Podcast Stripper"
-chmod +x scripts/setup.sh scripts/run_engine.sh app/scripts/build_app.sh
-./scripts/setup.sh
-```
-
-The first run downloads a large machine-learning stack. That can take several minutes.
-
-### 3. Hugging Face token (required for speaker detection)
+### Hugging Face token (required for speaker detection)
 
 The speaker model is free. Hugging Face still requires a login and a one-time “I agree” click.
 
@@ -88,25 +64,27 @@ The speaker model is free. Hugging Face still requires a login and a one-time �
 5. Copy the token (it starts with `hf_`)
 6. Open [pyannote/speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 7. Accept the user conditions
-8. Save the token, either:
-   - In the app: **Settings → paste token → Save token**, or
-   - In Terminal:
+8. In the app: **Settings → paste token → Save token**
+
+The token is stored in the **macOS Keychain**, not in this project. Never put it in a file you commit to git.
+
+## Working from the project folder
+
+This is only if you are building from GitHub, not for the downloaded app.
+
+```bash
+chmod +x scripts/setup.sh scripts/run_engine.sh app/scripts/build_app.sh scripts/bundle_runtime.sh
+./scripts/setup.sh
+./app/scripts/build_app.sh
+```
+
+`setup.sh` is for pytest and Terminal. The Mac window’s **build_app.sh** copies the engine and `uv` into `dist/Podcast Stripper.app`, so the app no longer has to sit next to this folder. You do not need the full Xcode app from the App Store. The Mac command-line developer tools are enough to compile it.
+
+To save a token from Terminal instead of Settings:
 
 ```bash
 ./scripts/run_engine.sh --save-token hf_your_token_here
 ```
-
-The token is stored in the **macOS Keychain**, not in this project. Never put it in a file you commit to git.
-
-### 4. Build the Mac window
-
-```bash
-./app/scripts/build_app.sh
-```
-
-That creates `dist/Podcast Stripper.app`. Keep that app **inside this project folder** so it can find the engine. Double-click it like any other Mac app.
-
-You do not need the full Xcode app from the App Store for this. The Mac command-line developer tools are enough to compile it.
 
 ## Use the app
 
@@ -136,9 +114,9 @@ Check that tools are ready:
 
 ## If something goes wrong
 
-- **No Hugging Face token** — complete step 3. The error text will say `missing_token`.
+- **No Hugging Face token** — complete the Hugging Face steps above. The error text will say `missing_token`.
 - **Cannot download the model** — you must be logged in and must accept the community-1 terms. Use a **Read** token.
-- **ffmpeg was not found** — run `brew install ffmpeg`, then `./scripts/setup.sh` again.
+- **ffmpeg was not found** — close the window, wait until the first-open install finished, then open the app again. From the project folder you can run `./scripts/setup.sh`.
 - **Speakers mixed up** — try setting the exact speaker count. Short clips and heavy music beds are harder. After detection, the app also fingerprint-checks turns and moves clear wrong-track moments to the matching speaker.
 - **Two people talking at once** — that moment is not unmixed into two clean voices. The main talker stays loud on their track; extras are ducked so the mix does not jump up.
 
@@ -146,5 +124,6 @@ Check that tools are ready:
 
 - `engine/` — Python that converts audio, detects speakers, and writes WAV tracks
 - `app/` — SwiftUI Mac window
-- `scripts/setup.sh` — install Python and packages
+- `scripts/setup.sh` — install Python and packages (project builds / pytest)
 - `scripts/run_engine.sh` — run the splitter from Terminal
+- `scripts/bundle_runtime.sh` — copy the engine and `uv` into the `.app`

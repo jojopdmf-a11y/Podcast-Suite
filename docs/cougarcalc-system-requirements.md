@@ -14,7 +14,7 @@ The **short** version also lives in Podcast Stripper: **YOUR MAC** (next to Sett
 
 Stripper is the wait. On a Mac mini M4, a **31-minute** two-person episode took **9 minutes 23 seconds** to strip (about **18 seconds of wait per minute of show**). Mixer and Leveler stay light.
 
-Everything runs **on this Mac**. Nothing is uploaded.
+Everything runs **on this Mac**. Nothing is uploaded. You do **not** need Homebrew. The first time you open Stripper, it installs its engine on this Mac (about 2 GB, once, needs Wi-Fi). The Hugging Face token is still a one-time Settings paste.
 
 ---
 
@@ -48,7 +48,7 @@ Apple calls the system **macOS** (not OS X). Check: Apple menu → About This Ma
 | Chip | **Apple Silicon** — M1, M2, M3, or M4 |
 | Memory | **16 GB RAM** or more |
 | A comfortable weekly machine | **Mac mini M4** (this is the machine we timed) |
-| Disk | A couple of GB free for Stripper’s models (one-time download) |
+| Disk | A couple of GB free the first time you open Stripper (engine + speaker model, one-time) |
 
 Apple Silicon matters most for **Stripper**. Mixer and Leveler are native audio and feel fine on any Apple Silicon Mac that meets the macOS 14 floor.
 
@@ -97,7 +97,7 @@ These are **estimates**, not a promise. Real time moves with:
 
 - **Episode length** (almost linear — twice the show is about twice the wait)
 - **Which Mac** (M1/M2 often 1.5–2× the table; Intel much more)
-- **First run on a new Mac** — extra time while models download (a couple of GB, **once**)
+- **First open on a new Mac** — extra time while Stripper installs its engine and, on the first split, the speaker model (a couple of GB, **once**). No Homebrew.
 - **Other apps open**, heat, and power mode
 - **Speaker count** — 3–5 voices add a little on “who spoke when.” Pulling music is most of the wait and does not really care how many voices you picked
 

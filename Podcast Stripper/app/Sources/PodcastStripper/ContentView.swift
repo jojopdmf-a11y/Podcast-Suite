@@ -183,13 +183,13 @@ struct ContentView: View {
                 Button {
                     startSplit()
                 } label: {
-                    Text(runner.isRunning ? "WORKING…" : "SPLIT INTO TRACKS")
+                    Text(splitButtonTitle)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .tracking(1.1)
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(StripperPrimaryButtonStyle())
-                .disabled(inputFile == nil || runner.isRunning)
+                .disabled(inputFile == nil || runner.isRunning || runner.isPreparingEngine)
                 .keyboardShortcut(.defaultAction)
 
                 if runner.isRunning {
@@ -240,6 +240,10 @@ struct ContentView: View {
                 Text(processingHint)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
+            } else if runner.isPreparingEngine {
+                Text("First open can take a few minutes and about 2 GB. Stay on Wi-Fi. Homebrew is not required.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
             } else if runner.result != nil, runner.elapsedSeconds > 0 {
                 Text("Finished in \(runner.elapsedLabel).")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -255,10 +259,19 @@ struct ContentView: View {
     }
 
     private var progressValue: Double {
+        if runner.isPreparingEngine && !runner.isRunning {
+            return 0.12
+        }
         if runner.isRunning {
             return min(1, max(0.02, runner.percent / 100))
         }
         return runner.result == nil ? 0 : 1
+    }
+
+    private var splitButtonTitle: String {
+        if runner.isRunning { return "WORKING…" }
+        if runner.isPreparingEngine { return "INSTALLING ENGINE…" }
+        return "SPLIT INTO TRACKS"
     }
 
     private var processingHint: String {
@@ -404,7 +417,7 @@ struct ContentView: View {
     }
 
     private func startSplit() {
-        guard let inputFile else { return }
+        guard let inputFile, !runner.isRunning, !runner.isPreparingEngine else { return }
         let dest = outputFolder ?? defaultOutput(for: inputFile)
         outputFolder = dest
         UserDefaults.standard.set(dest.path, forKey: "lastOutputFolder")

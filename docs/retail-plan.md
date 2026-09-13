@@ -97,16 +97,17 @@ Until that exists, Update.command / git remains the desk workflow. Customers sho
 
 ## Stripper’s extra install (Homebrew / Python)
 
-**Do we wait until Stripper is 100% bundled before anything can ship? No.**
+**Shipping is not a freeze.** Mixer and Leveler can be paid, notarized Mac apps while Stripper still grows.
 
-Mixer and Leveler can be paid, notarized Mac apps first. Stripper’s bundled engine is an **update**, not a freeze. Do not take money for Stripper while first run is still “install Homebrew.”
+The Mac app now **bundles** `uv` plus the engine source. First open installs the Python/ML stack into `~/Library/Application Support/CougarCalc/Podcast Stripper` (about 2 GB, once). Customers should not install Homebrew. Cosmetic and model updates can still ship after that.
+
+Do not take money for Stripper until a notarized build does this first-open install without Terminal.
 
 ---
 
 ## Next concrete slices (when Jeffrey says go)
 
 1. Port updated `privacy-policy.md` / `terms.md` to cougarcalc.com.  
-2. Apple Developer → notarized dmg.  
+2. Apple Developer → notarized dmg (sign the nested `uv` binary too).  
 3. Implement **demo marks** + license paste in each app (Buy URL per SKU).  
-4. Paddle catalog: 4 products → Novo; then fulfillment email.  
-5. Bundle Stripper’s engine.
+4. Paddle catalog: 4 products → Novo; then fulfillment email.
