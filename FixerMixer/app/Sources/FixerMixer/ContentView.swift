@@ -537,8 +537,8 @@ struct ContentView: View {
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
         let group = DispatchGroup()
+        let collected = NSMutableArray()
         let lock = NSLock()
-        var urls: [URL] = []
         for provider in providers {
             group.enter()
             provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
@@ -551,11 +551,12 @@ struct ContentView: View {
                 }
                 guard let url else { return }
                 lock.lock()
-                urls.append(url)
+                collected.add(url)
                 lock.unlock()
             }
         }
         group.notify(queue: .main) {
+            let urls = collected.compactMap { $0 as? URL }
             session.importDroppedURLs(urls)
         }
         return true

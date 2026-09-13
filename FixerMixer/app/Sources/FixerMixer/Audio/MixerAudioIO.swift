@@ -48,7 +48,6 @@ enum MixerAudioIO {
 
         var interleaved = try readInterleaved(file: file, format: srcFormat, frames: srcFrames, channels: channels)
         var rate = srcFormat.sampleRate
-        var frameCount = interleaved.count / max(1, channels)
 
         if let target = targetSampleRate, abs(target - rate) > 0.5 {
             interleaved = try resample(
@@ -58,7 +57,6 @@ enum MixerAudioIO {
                 to: target
             )
             rate = target
-            frameCount = interleaved.count / max(1, channels)
         }
 
         return WAVIO.Buffer(
@@ -165,7 +163,7 @@ enum MixerAudioIO {
         var convertError: NSError?
         let status = converter.convert(to: dstBuf, error: &convertError) { _, outStatus in
             if supplied {
-                outStatus.pointee = .end
+                outStatus.pointee = .endOfStream
                 return nil
             }
             supplied = true
