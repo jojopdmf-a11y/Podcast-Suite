@@ -37,10 +37,10 @@ We may add features and ship updates. Updates do not reduce the rights you alrea
 
 Until you enter a valid license for that app, it runs in **demo mode**. There is no free period of unlimited, deliverable output. You may evaluate as long as you like. You may not use demo output as a finished episode, mix, or master.
 
-Demo limits (we may tune the numbers; the idea stays the same):
+Demo limits:
 
-- **Podcast Stripper** — writes only a **portion** of the episode (the first few minutes of each stem). Enough to hear whether speakers and music split. Not enough to publish the show.
-- **Fixer Mixer** and **Lil Leveler** — the file you export has **short bursts of white noise** every few minutes. Playback is for judging the sound. The bounced/exported file is not a clean deliverable.
+- **Podcast Stripper** — writes only the **first 7 minutes** of each stem. Enough to hear whether speakers and music split. Not enough to publish the show.
+- **Fixer Mixer** and **Lil Leveler** — the file you bounce or export has **about 1 second of white noise every 2 minutes**. Playback is for judging the sound. The saved file is not a clean deliverable.
 
 Buying a license for that app (or a Suite license) turns the same copy into a licensed copy. You do not need a second download. Demo marks are not applied to licensed exports.
 

@@ -16,7 +16,7 @@ Last updated: September 13, 2026
 | Payments | **Paddle** → payout to **Novo** |
 | Products | **Each app sold separately**, plus a **Suite bundle** (all three, cheaper than buying à la carte) |
 | Demo | **No 14-day full trial.** Unlicensed = demo forever. Output is not a clean deliverable. |
-| Stripper demo | Export only the **first 3 minutes** of each stem (not the whole episode) |
+| Stripper demo | Export only the **first 7 minutes** of each stem (not the whole episode) |
 | Mixer / Leveler demo | Exported file gets **~1 second of white noise every 2 minutes** |
 | Macs per license | **Two** (studio + laptop) |
 | After purchase | Paste a license key; Buy opens the website checkout for that SKU |
@@ -37,7 +37,7 @@ Same download for demo and paid. About shows **DEMO** or **Licensed**. Buy / pas
 
 | App | Unlicensed output |
 |---|---|
-| **Podcast Stripper** | Writes only the **first 3 minutes** of each speaker stem and Music/SFX (files may still be named normally; duration is short or the rest is silence — prefer **short files** so it is obvious). Enough to hear split quality. Not a show. |
+| **Podcast Stripper** | Writes only the **first 7 minutes** of each speaker stem and Music/SFX (files may still be named normally; duration is short or the rest is silence — prefer **short files** so it is obvious). Enough to hear split quality. Not a show. |
 | **Fixer Mixer** | Play can stay clear so they can mix. **Bounce / export** inserts **1 second of white noise every 2 minutes** of program. Status line: “Demo — licensed bounce is clean.” |
 | **Lil Leveler** | Same as Mixer: hear POST while playing; **Export Leveled** is noised. |
 
