@@ -13,7 +13,7 @@ struct EnginePaths {
 
     static func resolve() throws -> EnginePaths {
         let fileManager = FileManager.default
-        if let bundled = tryBundled(fileManager: fileManager) {
+        if let bundled = try tryBundled(fileManager: fileManager) {
             return bundled
         }
 
@@ -449,7 +449,7 @@ final class EngineRunner: ObservableObject {
             let gathered = OutputCollector()
             let resume = OnceResume(continuation)
 
-            let pump: (FileHandle) -> Void = { handle in
+            stdout.fileHandleForReading.readabilityHandler = { handle in
                 let chunk = handle.availableData
                 gathered.append(chunk)
                 if let text = String(data: chunk, encoding: .utf8) {
@@ -463,8 +463,20 @@ final class EngineRunner: ObservableObject {
                     }
                 }
             }
-            stdout.fileHandleForReading.readabilityHandler = pump
-            stderr.fileHandleForReading.readabilityHandler = pump
+            stderr.fileHandleForReading.readabilityHandler = { handle in
+                let chunk = handle.availableData
+                gathered.append(chunk)
+                if let text = String(data: chunk, encoding: .utf8) {
+                    let clipped = text.split(whereSeparator: \.isNewline)
+                        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+                        .last { !$0.isEmpty } ?? ""
+                    if !clipped.isEmpty {
+                        Task { @MainActor in
+                            self.setup.message = "Installing engine… \(clipped)"
+                        }
+                    }
+                }
+            }
 
             process.terminationHandler = { finished in
                 stdout.fileHandleForReading.readabilityHandler = nil
