@@ -31,6 +31,9 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
     private var makeupLin: Float = 1
     private var liveMaximizer = false
     private var limiter = LiveLookaheadLimiter()
+    /// Display GR: instant attack, short hold, slow fall so a human can see it.
+    private var grDisplay: Float = 0
+    private var grHold: Int = 0
 
     func currentFrame() -> Int {
         lock.lock()
@@ -50,6 +53,8 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         postBall.reset()
         limiter.configure(sampleRate: sampleRate, ceilingDb: -0.1)
         liveMaximizer = false
+        grDisplay = 0
+        grHold = 0
         lock.unlock()
     }
 
@@ -79,6 +84,8 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
             }
         } else if was {
             limiter.reset()
+            grDisplay = 0
+            grHold = 0
         }
         lock.unlock()
     }
@@ -160,6 +167,23 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         audioEngine = nil
     }
 
+    /// Meter ballistics only. The limiter itself stays 1 ms; this is so the GR bar is readable.
+    private func tickGRMeter(instDb: Float, sampleRate: Double) {
+        let sr = max(sampleRate, 1)
+        if instDb >= grDisplay {
+            grDisplay = instDb
+            grHold = max(1, Int(0.180 * sr))
+        } else if grHold > 0 {
+            grHold -= 1
+        } else {
+            let rel = Float(1 - exp(-1.0 / (0.750 * sr)))
+            grDisplay += rel * (instDb - grDisplay)
+            if grDisplay < 0.03 && instDb < 0.03 {
+                grDisplay = 0
+            }
+        }
+    }
+
     /// Prefill the lookahead delay from audio before the playhead so seeks don’t click.
     private func warmLimiterLocked() {
         limiter.reset()
@@ -233,6 +257,7 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
                             outL = limited.0
                             outR = limited.1
                         }
+                        self.tickGRMeter(instDb: self.limiter.lastGRDb, sampleRate: srLocal)
                         self.postBall.process(left: postL, right: postR, sampleRate: srLocal)
                     } else if useBakedPost {
                         let postPair = postStore?.stereoFrame(at: head) ?? (0, 0)
@@ -274,11 +299,13 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
                 if live {
                     self.warmLimiterLocked()
                 }
+                self.grDisplay = 0
+                self.grHold = 0
             }
             let emitHead = ended ? 0 : head
             let emitPre = self.preBall.snapshot
             let emitPost = (live || hasBakedPost) ? self.postBall.snapshot : LiveMeterSample.silent
-            let emitGR = live ? self.limiter.lastGRDb : 0
+            let emitGR = live ? self.grDisplay : 0
             self.lock.unlock()
 
             if shouldEmitHead || ended {
