@@ -39,9 +39,11 @@ final class LevelerSession: ObservableObject {
     @Published var preOvers = false
     @Published var postOvers = false
 
-    private var sourceBuffer: WAVIO.Buffer?
-    private var leveledBuffer: WAVIO.Buffer?
+    private var sourceStore: PCMStore?
+    private var leveledStore: PCMStore?
     private let playback = LevelerPlaybackEngine()
+    private var loadGeneration: UInt64 = 0
+    private var processGeneration: UInt64 = 0
 
     var activeTargetLUFS: Float {
         preset.isCustom ? customLUFS : preset.targetLUFS
@@ -66,6 +68,7 @@ final class LevelerSession: ObservableObject {
     }
 
     init() {
+        PCMStore.sweepTemporaryFiles()
         userPresets = UserLoudnessPresetStore.load()
         playback.onPlayhead = { [weak self] frame in
             Task { @MainActor in
@@ -137,42 +140,60 @@ final class LevelerSession: ObservableObject {
 
     func load(url: URL) {
         stopPlayback()
+        loadGeneration += 1
+        processGeneration += 1
+        let gen = loadGeneration
         isBusy = true
-        status = "Analyzing…"
+        status = "Loading…"
         hasResult = false
+        before = .empty
         after = .empty
         appliedGainDb = 0
-        leveledBuffer = nil
+        sourceStore = nil
+        leveledStore = nil
+        playback.load(pre: nil, post: nil)
         playAfter = false
         playheadFrame = 0
         durationFrames = 0
         resetMeterUI()
+        sourceURL = url
+        sourceName = url.lastPathComponent
 
         Task.detached(priority: .userInitiated) {
             do {
-                let buf = try AudioFileIO.load(url: url)
-                let report = LoudnessEngine.analyze(buf)
+                let store = try AudioFileIO.ingest(url: url) { fraction in
+                    Task { @MainActor in
+                        guard self.loadGeneration == gen else { return }
+                        self.status = String(format: "Loading… %.0f%%", fraction * 100)
+                    }
+                }
+                let report = LoudnessEngine.analyze(store) { fraction in
+                    Task { @MainActor in
+                        guard self.loadGeneration == gen else { return }
+                        self.status = String(format: "Analyzing… %.0f%%", fraction * 100)
+                    }
+                }
                 await MainActor.run {
+                    guard self.loadGeneration == gen else { return }
                     self.sourceURL = url
                     self.sourceName = url.lastPathComponent
-                    self.sourceBuffer = buf
+                    self.sourceStore = store
                     self.before = report
-                    self.sampleRate = buf.sampleRate
-                    self.durationFrames = buf.frameCount
-                    self.playback.load(pre: buf, post: nil)
-                    self.isBusy = false
+                    self.sampleRate = store.sampleRate
+                    self.durationFrames = store.frameCount
+                    self.playback.load(pre: store, post: nil)
                     self.status = String(
-                        format: "Loaded · %.0fs · %d ch · %.0f Hz · integrated %.1f LUFS",
-                        report.durationSec,
+                        format: "Loaded · %@ · %d ch · %.0f Hz · integrated %.1f LUFS",
+                        Self.formatTime(seconds: report.durationSec),
                         report.channelCount,
                         report.sampleRate,
                         report.integratedLUFS
                     )
-                    // Auto-preview level to active preset
                     self.process()
                 }
             } catch {
                 await MainActor.run {
+                    guard self.loadGeneration == gen else { return }
                     self.isBusy = false
                     self.status = error.localizedDescription
                 }
@@ -181,25 +202,37 @@ final class LevelerSession: ObservableObject {
     }
 
     func process() {
-        guard let sourceBuffer else {
+        guard let sourceStore else {
             status = "Load a file first."
             return
         }
+        processGeneration += 1
+        let gen = processGeneration
         isBusy = true
         status = "Leveling to \(String(format: "%.1f", activeTargetLUFS)) LUFS…"
         let target = activeTargetLUFS
         let tp = activeTruePeak
-        let buf = sourceBuffer
+        let store = sourceStore
 
         Task.detached(priority: .userInitiated) {
             do {
                 let (out, report, gain) = try LoudnessEngine.normalize(
-                    buf,
+                    store,
                     targetLUFS: target,
                     truePeakCeilingDbTP: tp
-                )
+                ) { fraction in
+                    Task { @MainActor in
+                        guard self.processGeneration == gen else { return }
+                        self.status = String(
+                            format: "Leveling to %.1f LUFS… %.0f%%",
+                            target,
+                            fraction * 100
+                        )
+                    }
+                }
                 await MainActor.run {
-                    self.leveledBuffer = out
+                    guard self.processGeneration == gen else { return }
+                    self.leveledStore = out
                     self.after = report
                     self.appliedGainDb = gain
                     self.hasResult = true
@@ -209,6 +242,7 @@ final class LevelerSession: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    guard self.processGeneration == gen else { return }
                     self.isBusy = false
                     self.status = error.localizedDescription
                 }
@@ -217,7 +251,7 @@ final class LevelerSession: ObservableObject {
     }
 
     func exportLeveled() {
-        guard let leveledBuffer, let sourceURL else {
+        guard let leveledStore, let sourceURL else {
             status = "Nothing to export yet."
             return
         }
@@ -239,12 +273,32 @@ final class LevelerSession: ObservableObject {
         if dest.pathExtension.lowercased() != "wav" {
             dest = dest.appendingPathExtension("wav")
         }
-        do {
-            try WAVIO.write(url: dest, buffer: leveledBuffer)
-            status = "Exported → \(dest.lastPathComponent)"
-            NSWorkspace.shared.activateFileViewerSelecting([dest])
-        } catch {
-            status = error.localizedDescription
+        isBusy = true
+        status = "Exporting…"
+        let store = leveledStore
+        let destURL = dest
+        let gen = loadGeneration
+        Task.detached(priority: .userInitiated) {
+            do {
+                try WAVIO.write(url: destURL, store: store) { fraction in
+                    Task { @MainActor in
+                        guard self.loadGeneration == gen else { return }
+                        self.status = String(format: "Exporting… %.0f%%", fraction * 100)
+                    }
+                }
+                await MainActor.run {
+                    guard self.loadGeneration == gen else { return }
+                    self.isBusy = false
+                    self.status = "Exported → \(destURL.lastPathComponent)"
+                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.loadGeneration == gen else { return }
+                    self.isBusy = false
+                    self.status = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -256,7 +310,7 @@ final class LevelerSession: ObservableObject {
             status = "Paused · \(Self.formatTime(seconds: playheadSeconds))"
             return
         }
-        guard sourceBuffer != nil else { return }
+        guard sourceStore != nil else { return }
         do {
             try playback.start()
             isPlaying = true
@@ -315,7 +369,13 @@ final class LevelerSession: ObservableObject {
     static func formatTime(seconds: Double) -> String {
         let safe = max(0, seconds)
         let total = Int(safe.rounded(.down))
-        return String(format: "%d:%02d", total / 60, total % 60)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, secs)
+        }
+        return String(format: "%d:%02d", minutes, secs)
     }
 
     private func playingStatus() -> String {

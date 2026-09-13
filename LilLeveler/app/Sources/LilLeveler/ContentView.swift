@@ -208,6 +208,7 @@ struct ContentView: View {
                                 )
                             }
                             .buttonStyle(.plain)
+                            .disabled(session.isBusy)
 
                             if UserLoudnessPreset.isUserID(p.id) {
                                 Button("✕") {
@@ -229,6 +230,7 @@ struct ContentView: View {
                                 set: { session.customLUFS = Float($0) }
                             ), in: -24...(-10))
                             .tint(LevelerTheme.cyan)
+                            .disabled(session.isBusy)
                             .onChange(of: session.customLUFS) { _, _ in session.process() }
 
                             Text("TRUE PEAK  \(String(format: "%.1f", session.customTP)) dBTP")
@@ -239,6 +241,7 @@ struct ContentView: View {
                                 set: { session.customTP = Float($0) }
                             ), in: -3...(-0.1))
                             .tint(LevelerTheme.lime)
+                            .disabled(session.isBusy)
                             .onChange(of: session.customTP) { _, _ in session.process() }
 
                             Button("SAVE PRESET") { promptSavePreset() }
@@ -287,13 +290,13 @@ struct ContentView: View {
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(session.sourceURL == nil)
+                .disabled(session.sourceURL == nil || session.isBusy)
                 .help("Spacebar toggles play/pause")
 
                 Text(LevelerSession.formatTime(seconds: session.playheadSeconds))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.cyan)
-                    .frame(minWidth: 44, alignment: .trailing)
+                    .frame(minWidth: 62, alignment: .trailing)
 
                 Slider(
                     value: Binding(
@@ -314,7 +317,7 @@ struct ContentView: View {
                 Text(LevelerSession.formatTime(seconds: session.durationSeconds))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.textSecondary)
-                    .frame(minWidth: 44, alignment: .leading)
+                    .frame(minWidth: 62, alignment: .leading)
             }
 
             HStack(spacing: 10) {

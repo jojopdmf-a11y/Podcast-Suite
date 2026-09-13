@@ -13,9 +13,8 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
     private var sourceNode: AVAudioSourceNode?
 
     private var sampleRate: Double = 44100
-    private var channelCount: Int = 2
-    private var pre: [Float] = []
-    private var post: [Float] = []
+    private var pre: PCMStore?
+    private var post: PCMStore?
     private var frameCount: Int = 0
     private var playhead: Int = 0
     private var playing = false
@@ -36,13 +35,12 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         return playhead
     }
 
-    func load(pre buffer: WAVIO.Buffer, post leveled: WAVIO.Buffer?) {
+    func load(pre buffer: PCMStore?, post leveled: PCMStore?) {
         lock.lock()
-        sampleRate = max(1, buffer.sampleRate)
-        channelCount = max(1, buffer.channelCount)
-        pre = buffer.samples
-        post = leveled?.samples ?? []
-        frameCount = buffer.frameCount
+        sampleRate = max(1, buffer?.sampleRate ?? 44100)
+        pre = buffer
+        post = leveled
+        frameCount = buffer?.frameCount ?? 0
         playhead = 0
         playPost = false
         preBall.reset()
@@ -50,9 +48,9 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         lock.unlock()
     }
 
-    func setPost(_ leveled: WAVIO.Buffer?) {
+    func setPost(_ leveled: PCMStore?) {
         lock.lock()
-        post = leveled?.samples ?? []
+        post = leveled
         postBall.reset()
         lock.unlock()
     }
@@ -145,12 +143,11 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
             self.lock.lock()
             let isPlaying = self.playing
             var head = self.playhead
-            let usePost = self.playPost && !self.post.isEmpty
-            let playSamples = usePost ? self.post : self.pre
-            let preSamples = self.pre
-            let postSamples = self.post
-            let hasPost = !self.post.isEmpty
-            let ch = max(1, self.channelCount)
+            let preStore = self.pre
+            let postStore = self.post
+            let usePost = self.playPost && postStore != nil
+            let playStore = usePost ? postStore : preStore
+            let hasPost = postStore != nil
             let total = self.frameCount
             let srLocal = self.sampleRate
 
@@ -165,13 +162,13 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
 
             for i in 0..<n {
                 if head < total {
-                    let (l, r) = Self.stereoFrame(samples: playSamples, channels: ch, frame: head)
+                    let (l, r) = playStore?.stereoFrame(at: head) ?? (0, 0)
                     lPtr[i] = l
                     rPtr[i] = r
-                    let prePair = Self.stereoFrame(samples: preSamples, channels: ch, frame: head)
+                    let prePair = preStore?.stereoFrame(at: head) ?? (0, 0)
                     self.preBall.process(left: prePair.0, right: prePair.1, sampleRate: srLocal)
                     if hasPost {
-                        let postPair = Self.stereoFrame(samples: postSamples, channels: ch, frame: head)
+                        let postPair = postStore?.stereoFrame(at: head) ?? (0, 0)
                         self.postBall.process(left: postPair.0, right: postPair.1, sampleRate: srLocal)
                     }
                     head += 1
@@ -229,13 +226,4 @@ final class LevelerPlaybackEngine: @unchecked Sendable {
         sourceNode = node
     }
 
-    /// Read one stereo pair from interleaved PCM (mono is doubled to L/R).
-    static func stereoFrame(samples: [Float], channels: Int, frame: Int) -> (Float, Float) {
-        let ch = max(1, channels)
-        let base = frame * ch
-        guard base < samples.count else { return (0, 0) }
-        let left = samples[base]
-        let right = ch >= 2 && base + 1 < samples.count ? samples[base + 1] : left
-        return (left, right)
-    }
 }

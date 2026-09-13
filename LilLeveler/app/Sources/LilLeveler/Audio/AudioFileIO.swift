@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 import UniformTypeIdentifiers
 
-/// Load common audio containers via AVFoundation into interleaved float PCM.
+/// Load common audio containers via AVFoundation into a mapped PCM working copy.
 enum AudioFileIO {
     /// Formats we advertise in the open panel / docs.
     /// Prefer broad `audio` so the macOS panel doesn’t grey out MP3/M4A.
@@ -10,18 +10,19 @@ enum AudioFileIO {
 
     static let importExtensions = ["wav", "wave", "aif", "aiff", "mp3", "m4a", "aac", "caf", "flac", "ogg", "wma"]
 
+    private static let decodeChunkFrames: AVAudioFrameCount = 65_536
+
     static func isSupportedAudioURL(_ url: URL) -> Bool {
         let ext = url.pathExtension.lowercased()
         if importExtensions.contains(ext) { return true }
         return (try? AVAudioFile(forReading: url)) != nil
     }
 
-    static func load(url: URL) throws -> WAVIO.Buffer {
-        // Fast path for plain PCM/float WAV
-        if url.pathExtension.lowercased() == "wav", let buf = try? WAVIO.load(url: url) {
-            return buf
-        }
-
+    /// Decode `url` in modest chunks so a 4-hour MP3 is not inflated into RAM at once.
+    static func ingest(
+        url: URL,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws -> PCMStore {
         let file: AVAudioFile
         do {
             file = try AVAudioFile(forReading: url)
@@ -30,44 +31,60 @@ enum AudioFileIO {
         }
 
         let format = file.processingFormat
-        let frameCount = AVAudioFrameCount(file.length)
-        guard frameCount > 0 else {
+        let channels = Int(format.channelCount)
+        let frames64 = file.length
+        guard frames64 > 0 else {
             throw LevelerError.loadFailed("File has no audio frames.")
         }
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw LevelerError.loadFailed("Out of memory reading audio.")
+        guard frames64 <= Int64(Int.max) else {
+            throw LevelerError.loadFailed("This show is too long to open.")
         }
-        do {
-            try file.read(into: buffer)
-        } catch {
-            throw LevelerError.loadFailed("Read failed: \(error.localizedDescription)")
-        }
-        buffer.frameLength = frameCount
-
-        let channels = Int(format.channelCount)
-        let rate = format.sampleRate
-        let frames = Int(buffer.frameLength)
-        guard channels >= 1, channels <= 8, frames > 0 else {
+        let frames = Int(frames64)
+        guard channels >= 1, channels <= 8 else {
             throw LevelerError.loadFailed("Unsupported audio layout (\(channels) ch, \(frames) frames).")
         }
-        guard let channelsPtr = buffer.floatChannelData else {
-            throw LevelerError.loadFailed("Expected float PCM from decoder.")
+
+        let store = try PCMStore.createTemporary(
+            sampleRate: format.sampleRate,
+            channelCount: channels,
+            frameCount: frames
+        )
+        store.adviseSequential()
+
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: Self.decodeChunkFrames) else {
+            throw LevelerError.loadFailed("Out of memory reading audio.")
         }
 
-        var interleaved = [Float](repeating: 0, count: frames * channels)
-        if format.isInterleaved {
-            let ptr = channelsPtr[0]
-            for i in 0..<(frames * channels) {
-                interleaved[i] = ptr[i]
+        var written = 0
+        var lastReported = -1
+        while written < frames {
+            let remaining = frames - written
+            let want = min(Int(Self.decodeChunkFrames), remaining)
+            buffer.frameLength = 0
+            do {
+                try file.read(into: buffer, frameCount: AVAudioFrameCount(want))
+            } catch {
+                throw LevelerError.loadFailed("Read failed: \(error.localizedDescription)")
             }
-        } else {
-            for f in 0..<frames {
-                for c in 0..<channels {
-                    interleaved[f * channels + c] = channelsPtr[c][f]
-                }
+            let got = Int(buffer.frameLength)
+            if got <= 0 { break }
+            try store.write(from: buffer, atFrame: written)
+            written += got
+            let pct = Int((Double(written) / Double(frames)) * 100.0)
+            if pct != lastReported {
+                lastReported = pct
+                progress?(Double(written) / Double(frames))
             }
         }
 
-        return WAVIO.Buffer(sampleRate: rate, channelCount: channels, samples: interleaved)
+        guard written > 0 else {
+            throw LevelerError.loadFailed("File has no audio frames.")
+        }
+        if written < frames {
+            try store.shrinkFrameCount(to: written)
+        }
+        store.sync()
+        progress?(1)
+        return store
     }
 }
