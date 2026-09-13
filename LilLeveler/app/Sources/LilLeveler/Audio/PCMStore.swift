@@ -106,17 +106,11 @@ final class PCMStore: @unchecked Sendable {
         guard fd >= 0 else {
             throw LevelerError.loadFailed("Could not open a working copy of this audio.")
         }
+        defer { close(fd) }
         if ftruncate(fd, off_t(total)) != 0 {
-            close(fd)
             throw LevelerError.loadFailed(Self.diskFullMessage(needed: total))
         }
-        let ptr = mmap(nil, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-        close(fd)
-        guard ptr != MAP_FAILED else {
-            throw LevelerError.loadFailed(
-                "This Mac ran out of memory mapping a \(Self.gb(total)) GB working copy. Close other apps and try again."
-            )
-        }
+        let ptr = try Self.mapWritable(fd: fd, size: total, failure: .memory(total))
         mapped = ptr
         mappedSize = total
         samples = ptr.advanced(by: Self.headerSize).assumingMemoryBound(to: Float.self)
@@ -147,15 +141,11 @@ final class PCMStore: @unchecked Sendable {
         guard fd >= 0 else {
             throw LevelerError.loadFailed("Could not finish reading this audio.")
         }
+        defer { close(fd) }
         if ftruncate(fd, off_t(total)) != 0 {
-            close(fd)
             throw LevelerError.loadFailed("Could not finish reading this audio.")
         }
-        let ptr = mmap(nil, total, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
-        close(fd)
-        guard ptr != MAP_FAILED else {
-            throw LevelerError.loadFailed("Out of memory finishing this audio.")
-        }
+        let ptr = try Self.mapWritable(fd: fd, size: total, failure: .finish)
         frameCount = newCount
         mapped = ptr
         mappedSize = total
@@ -283,5 +273,28 @@ final class PCMStore: @unchecked Sendable {
 
     static func gb(_ bytes: Int) -> String {
         String(format: "%.1f", Double(max(0, bytes)) / 1_000_000_000.0)
+    }
+
+    private enum MapFailure {
+        case memory(Int)
+        case finish
+
+        var message: String {
+            switch self {
+            case .memory(let total):
+                "This Mac ran out of memory mapping a \(PCMStore.gb(total)) GB working copy. Close other apps and try again."
+            case .finish:
+                "Out of memory finishing this audio."
+            }
+        }
+    }
+
+    /// Darwin `mmap` is optional here; unwrap before calling `.advanced`.
+    private static func mapWritable(fd: Int32, size: Int, failure: MapFailure) throws -> UnsafeMutableRawPointer {
+        let ptr = mmap(nil, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0)
+        guard let ptr, ptr != MAP_FAILED else {
+            throw LevelerError.loadFailed(failure.message)
+        }
+        return ptr
     }
 }
