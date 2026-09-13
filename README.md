@@ -50,7 +50,7 @@ Ballpark on that same class of Mac, 2 voices:
 | 90 minutes | ~27 minutes |
 | 2 hours | ~35–40 minutes |
 
-The first split on a new Mac can add extra time while models download (a couple of GB, once). Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The Stripper window shows a live clock and what step it is on, then keeps the total when it finishes.
+The first time you open Stripper, it installs the engine on this Mac (about 2 GB, once). Homebrew is not required. The first split can add extra time while the speaker model downloads. Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The Stripper window shows a live clock and what step it is on, then keeps the total when it finishes.
 
 Fixer Mixer and Lil Leveler are light: mix and level in real time on any Apple Silicon Mac that meets the macOS 14 floor. Mixer loads the whole episode into memory, so long shows with several speaker tracks are happier with 16 GB.
 
