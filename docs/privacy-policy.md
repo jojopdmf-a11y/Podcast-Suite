@@ -58,7 +58,7 @@ Typical local data:
 | Leveler personal loudness presets | On this Mac |
 | Stripper output folder preference | On this Mac |
 | Hugging Face token (Stripper) | **macOS Keychain** (not in the project, not on our servers) |
-| Future license key / trial clock | **macOS Keychain** on this Mac |
+| License key for an app you bought | **macOS Keychain** on this Mac |
 
 Uninstalling the app does not automatically delete your audio. The Keychain item can be removed from Stripper **Settings → Remove**, or from Keychain Access.
 
