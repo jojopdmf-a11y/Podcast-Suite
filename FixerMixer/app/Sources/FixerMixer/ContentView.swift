@@ -43,6 +43,7 @@ struct ContentView: View {
             }
             .padding(18)
         }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
         .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: session.frameCount == 0 ? 620 : 760)
         .preferredColorScheme(.dark)
         .onAppear {
@@ -68,7 +69,7 @@ struct ContentView: View {
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
                 appName: "Fixer Mixer",
-                tagline: "Polish Stripper stems · bounce mix + stems",
+                tagline: "Drop stems or any audio · bounce mix + stems",
                 accent: MixerTheme.cyan
             )
         }
@@ -126,7 +127,7 @@ struct ContentView: View {
                     .tracking(1.4)
                     .foregroundStyle(MixerTheme.cyan)
                     .shadow(color: MixerTheme.cyan.opacity(0.4), radius: 10)
-                Text("Stripper stems → polish → export")
+                Text("Stripper stems or any audio → polish → export")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                 Text(CougarCalcBrand.versionLabel)
@@ -148,6 +149,9 @@ struct ContentView: View {
                     .help("Choose a folder and name for this mix. Audio stays in the WAV files.")
                 Button("LOAD OTHER FOLDER…") { pickFolder() }
                     .buttonStyle(MixerGhostButtonStyle())
+                Button("ADD TRACKS…") { pickFiles(append: true) }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Drop or choose more audio files. Each file becomes a channel.")
             }
         }
     }
@@ -166,23 +170,27 @@ struct ContentView: View {
                 Image(systemName: "rectangle.stack.badge.play")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(MixerTheme.cyan)
-                Text("DROP STRIPPER _SPEAKERS FOLDER")
+                Text("DROP AUDIO OR A STRIPPER FOLDER")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Builds strips for whatever Speaker_*.wav (+ music) is in the folder")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel. A _speakers folder still builds the Stripper layout.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
                 Button("CHOOSE FOLDER…") { pickFolder() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
+                Button("CHOOSE FILES…") { pickFiles(append: false) }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Pick one or more audio files. Each one becomes a strip.")
                 Button("LOAD MIX…") { pickMixFile() }
                     .buttonStyle(MixerGhostButtonStyle())
             }
         }
         .frame(maxWidth: .infinity, minHeight: 280)
         .onTapGesture { pickFolder() }
-        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
     }
 
     private var mixerRow: some View {
@@ -499,6 +507,21 @@ struct ContentView: View {
         }
     }
 
+    private func pickFiles(append: Bool) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.audio]
+        panel.message = append
+            ? "Add audio files — each file becomes a channel"
+            : "Choose audio files — each file becomes a channel"
+        panel.begin { response in
+            guard response == .OK else { return }
+            session.importAudioFiles(panel.urls, append: append)
+        }
+    }
+
     private func pickMixFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -513,27 +536,27 @@ struct ContentView: View {
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
-            let url: URL?
-            if let data = item as? Data {
-                url = URL(dataRepresentation: data, relativeTo: nil)
-            } else {
-                url = item as? URL
-            }
-            guard let url else { return }
-            DispatchQueue.main.async {
-                if MixerMixFile.isMixFile(url) {
-                    session.openMixFile(url)
-                    return
-                }
-                var isDir: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                    session.loadStripperFolder(url)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for provider in providers {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                defer { group.leave() }
+                let url: URL?
+                if let data = item as? Data {
+                    url = URL(dataRepresentation: data, relativeTo: nil)
                 } else {
-                    session.loadStripperFolder(url.deletingLastPathComponent())
+                    url = item as? URL
                 }
+                guard let url else { return }
+                lock.lock()
+                urls.append(url)
+                lock.unlock()
             }
+        }
+        group.notify(queue: .main) {
+            session.importDroppedURLs(urls)
         }
         return true
     }

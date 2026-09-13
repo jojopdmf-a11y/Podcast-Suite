@@ -226,10 +226,10 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.dspOrder == rhs.dspOrder
     }
 
-    static func voice(slot: Int, speakerNumber: Int) -> ChannelStripState {
+    static func voice(slot: Int, speakerNumber: Int, name: String? = nil) -> ChannelStripState {
         ChannelStripState(
             id: slot,
-            name: "SPK \(speakerNumber)",
+            name: name ?? "SPK \(speakerNumber)",
             isStereo: false,
             speakerNumber: speakerNumber,
             dspOrder: ChannelDSPSlot.voiceDefault
@@ -293,7 +293,7 @@ final class MixerSession: ObservableObject {
     /// Live auto-mix gains in dB (one per voice). Fader display = this + autoBiasDb.
     @Published var autoGainDb: [Float] = []
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
-    @Published var status: String = "Drop a Podcast Stripper _speakers folder to load tracks."
+    @Published var status: String = "Drop audio files or a Podcast Stripper _speakers folder."
     @Published var isPlaying = false
     @Published var isBouncing = false
     @Published var sourceFolder: URL?
@@ -485,9 +485,184 @@ final class MixerSession: ObservableObject {
                 lastMixURL = nil
             }
             status = line
+        } catch MixerError.noTracks {
+            let audio = (try? FileManager.default.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil
+            ))?.filter {
+                MixerAudioIO.isSupportedAudioURL($0) && !$0.lastPathComponent.hasPrefix(".")
+            } ?? []
+            if audio.isEmpty {
+                status = MixerError.noTracks.localizedDescription
+                return
+            }
+            importAudioFiles(audio.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }, append: false)
         } catch {
             status = error.localizedDescription
         }
+    }
+
+    /// Dropped Finder items: mix JSON, Stripper folder, or any audio files.
+    func importDroppedURLs(_ urls: [URL]) {
+        let unique = Self.dedupeURLs(urls)
+        guard !unique.isEmpty else { return }
+
+        if let mix = unique.first(where: { MixerMixFile.isMixFile($0) }) {
+            openMixFile(mix)
+            return
+        }
+
+        let folders = unique.filter { url in
+            var isDir: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+        }
+        if let folder = folders.first {
+            loadStripperFolder(folder)
+            return
+        }
+
+        let audio = unique.filter { MixerAudioIO.isSupportedAudioURL($0) }
+        if audio.isEmpty {
+            status = "Drop audio (WAV, AIFF, MP3, M4A…) or a Stripper _speakers folder."
+            return
+        }
+        importAudioFiles(audio, append: frameCount > 0)
+    }
+
+    func importAudioFiles(_ urls: [URL], append: Bool) {
+        let incoming = Self.dedupeURLs(urls).filter {
+            MixerAudioIO.isSupportedAudioURL($0) && !$0.lastPathComponent.hasPrefix(".")
+        }
+        guard !incoming.isEmpty else {
+            status = "Those files aren’t audio Mixer can open."
+            return
+        }
+
+        if isPlaying {
+            engine.stop()
+            isPlaying = false
+        }
+
+        var nextVoices = append ? voices : []
+        var nextMusic = append ? music : .music()
+        var nextHasMusic = append && hasMusic
+        var extraStereoAsVoice = 0
+        var hitCap = false
+
+        for url in incoming {
+            if nextVoices.contains(where: { $0.fileURL == url }) { continue }
+            if nextHasMusic, nextMusic.fileURL == url { continue }
+
+            let wantsMusic = MixerAudioIO.looksLikeMusic(url: url)
+            if wantsMusic, !nextHasMusic {
+                nextMusic = .music()
+                nextMusic.fileURL = url
+                nextMusic.name = MixerAudioIO.displayName(url: url)
+                nextHasMusic = true
+                continue
+            }
+
+            if nextVoices.count >= StripperFolderLoader.maxSpeakers {
+                hitCap = true
+                break
+            }
+
+            let slot = nextVoices.count
+            var ch = ChannelStripState.voice(
+                slot: slot,
+                speakerNumber: slot + 1,
+                name: MixerAudioIO.displayName(url: url)
+            )
+            ch.fileURL = url
+            nextVoices.append(ch)
+            if wantsMusic { extraStereoAsVoice += 1 }
+        }
+
+        guard !nextVoices.isEmpty || nextHasMusic else {
+            status = "No tracks to load."
+            return
+        }
+
+        let startedVoices = append ? voices.count : 0
+        let startedMusic = append && hasMusic
+        if nextVoices.count == startedVoices, nextHasMusic == startedMusic {
+            status = hitCap
+                ? "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
+                : "Those tracks are already on the mixer."
+            return
+        }
+
+        // Re-index ids so strips stay 0..<n after append.
+        for i in nextVoices.indices {
+            let url = nextVoices[i].fileURL
+            let name = nextVoices[i].name
+            let kept = nextVoices[i]
+            var ch = ChannelStripState.voice(slot: i, speakerNumber: kept.speakerNumber ?? (i + 1), name: name)
+            ch.fileURL = url
+            ch.mute = kept.mute
+            ch.dspBypass = kept.dspBypass
+            ch.faderDb = kept.faderDb
+            ch.autoBiasDb = kept.autoBiasDb
+            ch.pan = kept.pan
+            ch.eq = kept.eq
+            ch.para = kept.para
+            ch.voice = kept.voice
+            ch.dspOrder = kept.dspOrder
+            nextVoices[i] = ch
+        }
+
+        do {
+            voices = nextVoices
+            music = nextMusic
+            hasMusic = nextHasMusic
+            if !append || sourceFolder == nil {
+                sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
+            }
+            try engine.load(
+                voiceURLs: voices.map(\.fileURL),
+                speakerNumbers: voices.map { $0.speakerNumber ?? ($0.id + 1) },
+                musicURL: hasMusic ? music.fileURL : nil,
+                sampleRateHint: nil
+            )
+            sampleRate = engine.sampleRate
+            frameCount = engine.frameCount
+            playheadFrame = 0
+            if !append {
+                lastMixURL = nil
+                autoBalanceEnabled = false
+                autoGainDb = []
+            }
+            if let first = voices.first {
+                selectedChannelID = first.id
+            } else if hasMusic {
+                selectedChannelID = ChannelStripState.musicID
+            }
+            refreshWaveform()
+            syncRTASource()
+            syncParamsToEngine()
+            var line = "Loaded \(voices.count + (hasMusic ? 1 : 0)) track(s) · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            if extraStereoAsVoice > 0, hasMusic {
+                line += " · extra music-named files became speaker strips"
+            }
+            if hitCap {
+                line += " · stopped at \(StripperFolderLoader.maxSpeakers) speaker strips"
+            }
+            status = line
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    private static func dedupeURLs(_ urls: [URL]) -> [URL] {
+        var seen = Set<String>()
+        var out: [URL] = []
+        for url in urls {
+            let key = url.standardizedFileURL.path
+            if seen.insert(key).inserted {
+                out.append(url.standardizedFileURL)
+            }
+        }
+        return out
     }
 
     func syncParamsToEngine() {
@@ -535,7 +710,7 @@ final class MixerSession: ObservableObject {
     /// First time writes `FixerMixer.mix.json` in the `_speakers` folder.
     func updateMix() {
         guard frameCount > 0, let folder = sourceFolder else {
-            status = "Load a Stripper folder before saving a mix."
+            status = "Load tracks before saving a mix."
             return
         }
         let dest = lastMixURL ?? MixerMixFile.sidecarURL(in: folder)
@@ -545,7 +720,7 @@ final class MixerSession: ObservableObject {
     /// Opens a Save panel so you pick the folder and file name for the mix JSON.
     func saveMix() {
         guard frameCount > 0, let folder = sourceFolder else {
-            status = "Load a Stripper folder before saving a mix."
+            status = "Load tracks before saving a mix."
             return
         }
         let panel = NSSavePanel()
@@ -777,8 +952,8 @@ enum MixerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAFolder: return "Drop a folder (the Stripper _speakers output), not a single file."
-        case .noTracks: return "No Speaker_*.wav or Music_and_SFX.wav found in that folder."
+        case .notAFolder: return "Drop audio files, or a Stripper _speakers folder."
+        case .noTracks: return "No audio tracks found in that folder."
         case .loadFailed(let m): return "Could not load audio: \(m)"
         case .engine(let m): return m
         case .mixFailed(let m): return m
