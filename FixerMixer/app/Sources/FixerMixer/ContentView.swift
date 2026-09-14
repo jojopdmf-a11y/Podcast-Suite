@@ -75,8 +75,12 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear {
             session.bindEngine()
-            session.refreshInputDevices()
             installSpacebarMonitor()
+        }
+        .onChange(of: session.hasSession) { _, open in
+            if open {
+                session.refreshInputDevices()
+            }
         }
         .onDisappear {
             session.engine.stop()

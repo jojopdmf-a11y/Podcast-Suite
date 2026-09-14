@@ -474,9 +474,22 @@ final class MixerSession: ObservableObject {
             return
         }
         ensureSessionFolder()
-        AVAudioApplication.requestRecordPermission { granted in
-            Task { @MainActor [weak self] in
-                self?.continueRecordIfMicAllowed(granted)
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            continueRecordIfMicAllowed(true)
+        case .denied:
+            continueRecordIfMicAllowed(false)
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor [weak self] in
+                    self?.continueRecordIfMicAllowed(granted)
+                }
+            }
+        @unknown default:
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor [weak self] in
+                    self?.continueRecordIfMicAllowed(granted)
+                }
             }
         }
     }
