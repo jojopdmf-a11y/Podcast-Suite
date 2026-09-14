@@ -228,6 +228,6 @@ struct ChannelProcessor {
 
 struct MixerParamsSnapshot {
     var voices: [ChannelProcessor]
-    var music: ChannelProcessor
+    var stereos: [ChannelProcessor]
     var masterGain: Float
 }

@@ -176,7 +176,7 @@ struct ContentView: View {
                 }
                 Button("ADD STRIP") { session.addBlankStrip() }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Adds an empty speaker strip. Pick IN on it to record.")
+                    .help("Adds an empty speaker strip (up to 8). Pick IN on it to record.")
                 Button("UPDATE MIX") { session.updateMix() }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
@@ -187,7 +187,7 @@ struct ContentView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                 Button("ADD TRACKS…") { pickFiles(append: true) }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Drop or choose more audio files. Each file becomes a channel.")
+                    .help("Drop or choose more audio files. Speakers cap at 8; files named music or sfx become stereo beds (up to 2).")
             }
         }
     }
@@ -210,7 +210,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel. A _speakers folder still builds the Stripper layout. Or start empty and Record.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — up to 8 speakers and 2 stereo beds (music / SFX). A _speakers folder still builds the Stripper layout. Or start empty and Record.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -223,7 +223,7 @@ struct ContentView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Pick one or more audio files. Each one becomes a strip.")
+                    .help("Pick one or more audio files. Speakers cap at 8; names with music or sfx become stereo beds (up to 2).")
                 Button("LOAD MIX…") { pickMixFile() }
                     .buttonStyle(MixerGhostButtonStyle())
             }
@@ -252,13 +252,13 @@ struct ContentView: View {
                                 onChange: { session.syncParamsToEngine() }
                             )
                         }
-                        if session.hasMusic {
+                        ForEach(Array(session.stereos.indices), id: \.self) { index in
                             ChannelStripView(
-                                channel: $session.music,
-                                faderDb: $session.music.faderDb,
+                                channel: $session.stereos[index],
+                                faderDb: $session.stereos[index].faderDb,
                                 autoDriven: false,
-                                isSelected: session.selectedChannelID == session.music.id,
-                                onSelect: { focusChannel(session.music.id) },
+                                isSelected: session.selectedChannelID == session.stereos[index].id,
+                                onSelect: { focusChannel(session.stereos[index].id) },
                                 onChange: { session.syncParamsToEngine() }
                             )
                         }
@@ -274,9 +274,9 @@ struct ContentView: View {
         .frame(height: ChannelStripView.stripHeight + 8)
     }
 
-    /// Speaker + music strips are 156pt; master is 110pt.
+    /// Speaker + stereo strips are 156pt; master is 110pt.
     private var mixerClusterWidth: CGFloat {
-        let channels = session.voices.count + (session.hasMusic ? 1 : 0)
+        let channels = session.voices.count + session.stereos.count
         let gaps = CGFloat(max(0, channels)) * 10 // between channels, and before master
         return CGFloat(channels) * 156 + 110 + gaps
     }
@@ -339,9 +339,9 @@ struct ContentView: View {
                 grDb: session.masterCompGRDb,
                 onChange: { session.syncParamsToEngine() }
             )
-        } else if session.selectedChannelID == ChannelStripState.musicID {
+        } else if let idx = session.stereos.firstIndex(where: { $0.id == session.selectedChannelID }) {
             SelectedChannelPanel(
-                channel: $session.music,
+                channel: $session.stereos[idx],
                 rtaBins: session.rtaBins,
                 onChange: { session.syncParamsToEngine() }
             )
@@ -572,7 +572,7 @@ struct ContentView: View {
             }
             .buttonStyle(MixerGhostButtonStyle())
             .disabled(session.isBouncing || session.frameCount == 0)
-            .help("Choose speaker stems, music, and the master 2-mix, then name and save them")
+            .help("Choose speaker stems, stereo beds, and the master 2-mix, then name and save them")
         }
         .padding(12)
         .mixerPanel()

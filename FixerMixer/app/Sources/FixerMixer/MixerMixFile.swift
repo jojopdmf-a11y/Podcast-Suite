@@ -22,7 +22,10 @@ enum MixerMixFile {
         var formatVersion: Int
         var folderName: String
         var voices: [Strip]
+        /// First stereo bed. Kept so older mix files still open.
         var music: Strip?
+        /// MUSIC then SFX (up to 2). Newer mixes write this; older files omit it.
+        var stereos: [Strip]?
         var masterDb: Float
         var autoBalanceEnabled: Bool
         var autoBalanceTargetDb: Float
@@ -74,7 +77,8 @@ enum MixerMixFile {
             formatVersion: formatVersion,
             folderName: session.sourceFolder?.lastPathComponent ?? "",
             voices: session.voices.map { snapshot($0) },
-            music: session.hasMusic ? snapshot(session.music) : nil,
+            music: session.stereos.first.map { snapshot($0) },
+            stereos: session.stereos.isEmpty ? nil : session.stereos.map { snapshot($0) },
             masterDb: session.masterDb,
             autoBalanceEnabled: session.autoBalanceEnabled,
             autoBalanceTargetDb: session.autoBalanceTargetDb,
@@ -163,8 +167,12 @@ enum MixerMixFile {
             guard let snap = doc.voices.first(where: { $0.speakerNumber == number }) else { continue }
             apply(snap, to: &session.voices[i])
         }
-        if session.hasMusic, let musicSnap = doc.music {
-            apply(musicSnap, to: &session.music)
+        if let snaps = doc.stereos, !snaps.isEmpty {
+            for i in session.stereos.indices where i < snaps.count {
+                apply(snaps[i], to: &session.stereos[i])
+            }
+        } else if let musicSnap = doc.music, !session.stereos.isEmpty {
+            apply(musicSnap, to: &session.stereos[0])
         }
         session.masterDb = doc.masterDb
         session.autoBalanceEnabled = doc.autoBalanceEnabled

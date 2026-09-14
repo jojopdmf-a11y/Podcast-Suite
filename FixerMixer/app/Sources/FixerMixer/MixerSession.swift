@@ -244,9 +244,13 @@ struct ChannelStripState: Identifiable, Equatable {
     }
 
     static func music() -> ChannelStripState {
+        stereo(slot: 0)
+    }
+
+    static func stereo(slot: Int, name: String? = nil) -> ChannelStripState {
         ChannelStripState(
-            id: musicID,
-            name: "MUSIC",
+            id: musicID + slot,
+            name: name ?? (slot == 0 ? "MUSIC" : "SFX"),
             isStereo: true,
             dspOrder: ChannelDSPSlot.musicDefault
         )
@@ -284,8 +288,8 @@ struct ChannelStripState: Identifiable, Equatable {
 @MainActor
 final class MixerSession: ObservableObject {
     @Published var voices: [ChannelStripState] = []
-    @Published var music: ChannelStripState = .music()
-    @Published var hasMusic = false
+    @Published var stereos: [ChannelStripState] = []
+    var hasMusic: Bool { !stereos.isEmpty }
     @Published var masterDb: Float = 0
     @Published var masterPeakL: Float = 0
     @Published var masterPeakR: Float = 0
@@ -311,7 +315,7 @@ final class MixerSession: ObservableObject {
     @Published private(set) var lastMixURL: URL?
     @Published var sampleRate: Double = 44100
     @Published var frameCount: Int = 0
-    /// Voice slot id, or `ChannelStripState.musicID`
+    /// Voice slot id, stereo bed id (`musicID + slot`), or master.
     @Published var selectedChannelID: Int = 0
     @Published var playheadFrame: Int = 0
     @Published var waveformPeaks: [Float] = []
@@ -327,9 +331,12 @@ final class MixerSession: ObservableObject {
                     self.voices[i].prePeak = pre[i]
                     self.voices[i].postPeak = post[i]
                 }
-                if self.hasMusic, pre.count > n {
-                    self.music.prePeak = pre[n]
-                    self.music.postPeak = post[n]
+                for i in self.stereos.indices {
+                    let slot = n + i
+                    if slot < pre.count {
+                        self.stereos[i].prePeak = pre[slot]
+                        self.stereos[i].postPeak = post[slot]
+                    }
                 }
                 self.masterPeakL = masterL
                 self.masterPeakR = masterR
@@ -371,7 +378,7 @@ final class MixerSession: ObservableObject {
             ?? 0
     }
 
-    var hasSession: Bool { !voices.isEmpty }
+    var hasSession: Bool { !voices.isEmpty || !stereos.isEmpty }
 
     func refreshInputDevices() {
         inputDevices = MixerInputDevices.list()
@@ -404,8 +411,7 @@ final class MixerSession: ObservableObject {
         ]
         if selectedInputChannelCount >= 1 { voices[0].inputChannel = 0 }
         if selectedInputChannelCount >= 2 { voices[1].inputChannel = 1 }
-        hasMusic = false
-        music = .music()
+        stereos = []
         sourceFolder = folder
         lastMixURL = nil
         sampleRate = engine.sampleRate
@@ -425,7 +431,7 @@ final class MixerSession: ObservableObject {
             status = "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
             return
         }
-        if voices.isEmpty {
+        if voices.isEmpty && stereos.isEmpty {
             newRecordSession()
             return
         }
@@ -527,8 +533,8 @@ final class MixerSession: ObservableObject {
         let b = Int((max(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
         guard b > a else { return }
         let span = MuteSpan(startFrame: a, endFrame: b)
-        if selectedChannelID == ChannelStripState.musicID {
-            music.muteSpans = MuteSpanStore.adding(span, to: music.muteSpans)
+        if let idx = stereos.firstIndex(where: { $0.id == selectedChannelID }) {
+            stereos[idx].muteSpans = MuteSpanStore.adding(span, to: stereos[idx].muteSpans)
         } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
             voices[idx].muteSpans = MuteSpanStore.adding(span, to: voices[idx].muteSpans)
         }
@@ -547,8 +553,8 @@ final class MixerSession: ObservableObject {
         let b = Int((max(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
         guard b > a else { return }
         let span = MuteSpan(startFrame: a, endFrame: b)
-        if selectedChannelID == ChannelStripState.musicID {
-            music.muteSpans = MuteSpanStore.removing(span, from: music.muteSpans)
+        if let idx = stereos.firstIndex(where: { $0.id == selectedChannelID }) {
+            stereos[idx].muteSpans = MuteSpanStore.removing(span, from: stereos[idx].muteSpans)
         } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
             voices[idx].muteSpans = MuteSpanStore.removing(span, from: voices[idx].muteSpans)
         }
@@ -621,8 +627,8 @@ final class MixerSession: ObservableObject {
     func syncRTASource() {
         if selectedChannelID == ChannelStripState.masterID {
             engine.setRTASource(isMusic: false, voiceIndex: 0, isMaster: true)
-        } else if selectedChannelID == ChannelStripState.musicID {
-            engine.setRTASource(isMusic: true, voiceIndex: 0, isMaster: false)
+        } else if let idx = stereos.firstIndex(where: { $0.id == selectedChannelID }) {
+            engine.setRTASource(isMusic: true, voiceIndex: idx, isMaster: false)
         } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
             engine.setRTASource(isMusic: false, voiceIndex: idx, isMaster: false)
         }
@@ -630,10 +636,9 @@ final class MixerSession: ObservableObject {
 
     func refreshWaveform() {
         if selectedChannelID == ChannelStripState.masterID {
-            // Bus overview: max envelope across loaded voices (+ music)
             waveformPeaks = engine.waveformPeaks(channelIndex: nil, music: false, masterMix: true, binCount: 900)
-        } else if selectedChannelID == ChannelStripState.musicID {
-            waveformPeaks = engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, binCount: 900)
+        } else if let idx = stereos.firstIndex(where: { $0.id == selectedChannelID }) {
+            waveformPeaks = engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, stereoIndex: idx, binCount: 900)
         } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
             waveformPeaks = engine.waveformPeaks(channelIndex: idx, music: false, masterMix: false, binCount: 900)
         } else {
@@ -655,14 +660,14 @@ final class MixerSession: ObservableObject {
 
     var selectedChannelName: String {
         if selectedChannelID == ChannelStripState.masterID { return "MASTER" }
-        if selectedChannelID == ChannelStripState.musicID { return music.name }
+        if let s = stereos.first(where: { $0.id == selectedChannelID }) { return s.name }
         if let v = voices.first(where: { $0.id == selectedChannelID }) { return v.name }
         return "—"
     }
 
     var selectedMuteSpansNormalized: [(Double, Double)] {
-        if selectedChannelID == ChannelStripState.musicID {
-            return muteSpansNormalized(music.muteSpans)
+        if let s = stereos.first(where: { $0.id == selectedChannelID }) {
+            return muteSpansNormalized(s.muteSpans)
         }
         if let v = voices.first(where: { $0.id == selectedChannelID }) {
             return muteSpansNormalized(v.muteSpans)
@@ -670,7 +675,7 @@ final class MixerSession: ObservableObject {
         return []
     }
 
-    /// Speaker strips top to bottom, then music. Visual overview — not an editor.
+    /// Speaker strips top to bottom, then stereo beds. Visual overview — not an editor.
     var waveformLanes: [MixerWaveformLane] {
         var lanes: [MixerWaveformLane] = []
         for (index, voice) in voices.enumerated() {
@@ -683,13 +688,13 @@ final class MixerSession: ObservableObject {
                 )
             )
         }
-        if hasMusic {
+        for (index, bed) in stereos.enumerated() {
             lanes.append(
                 MixerWaveformLane(
-                    id: music.id,
-                    name: music.name,
-                    peaks: engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, binCount: 900),
-                    muteSpans: muteSpansNormalized(music.muteSpans)
+                    id: bed.id,
+                    name: bed.name,
+                    peaks: engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, stereoIndex: index, binCount: 900),
+                    muteSpans: muteSpansNormalized(bed.muteSpans)
                 )
             )
         }
@@ -715,14 +720,16 @@ final class MixerSession: ObservableObject {
                 ch.fileURL = item.url
                 return ch
             }
-            hasMusic = mapped.music != nil
-            music = .music()
-            music.fileURL = mapped.music
+            stereos = mapped.music.enumerated().map { slot, url in
+                var bed = ChannelStripState.stereo(slot: slot, name: MixerAudioIO.displayName(url: url))
+                bed.fileURL = url
+                return bed
+            }
             sourceFolder = folder
             try engine.load(
                 voiceURLs: voices.map(\.fileURL),
                 speakerNumbers: voices.map { $0.speakerNumber ?? ($0.id + 1) },
-                musicURL: music.fileURL,
+                stereoURLs: stereos.compactMap(\.fileURL),
                 sampleRateHint: nil
             )
             sampleRate = engine.sampleRate
@@ -730,15 +737,22 @@ final class MixerSession: ObservableObject {
             playheadFrame = 0
             if let first = voices.first {
                 selectedChannelID = first.id
-            } else if hasMusic {
-                selectedChannelID = ChannelStripState.musicID
+            } else if let firstBed = stereos.first {
+                selectedChannelID = firstBed.id
             }
             refreshWaveform()
             syncRTASource()
             syncParamsToEngine()
-            let loaded = voices.count + (hasMusic ? 1 : 0)
+            let loaded = voices.count + stereos.count
             let spkLabel = voices.isEmpty ? "no speakers" : "\(voices.count) speaker\(voices.count == 1 ? "" : "s")"
-            var line = "Loaded \(loaded) track(s) · \(spkLabel)\(hasMusic ? " + music" : "") · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            let bedLabel = stereos.isEmpty ? "" : " + \(stereos.count) stereo"
+            var line = "Loaded \(loaded) track(s) · \(spkLabel)\(bedLabel) · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            if mapped.skippedSpeakers > 0 {
+                line += " · stopped at \(StripperFolderLoader.maxSpeakers) speaker strips"
+            }
+            if mapped.skippedStereo > 0 {
+                line += " · stopped at \(StripperFolderLoader.maxStereo) stereo strips"
+            }
             if FileManager.default.fileExists(atPath: MixerMixFile.sidecarURL(in: folder).path) {
                 if restoreMixIfPresent(in: folder) {
                     line += " · mix restored"
@@ -809,27 +823,38 @@ final class MixerSession: ObservableObject {
         }
 
         var nextVoices = append ? voices : []
-        var nextMusic = append ? music : .music()
-        var nextHasMusic = append && hasMusic
-        var extraStereoAsVoice = 0
+        var nextStereos = append ? stereos : []
         var hitCap = false
+        var hitStereoCap = false
 
         for url in incoming {
             if nextVoices.contains(where: { $0.fileURL == url }) { continue }
-            if nextHasMusic, nextMusic.fileURL == url { continue }
+            if nextStereos.contains(where: { $0.fileURL == url }) { continue }
+            if nextVoices.count >= StripperFolderLoader.maxSpeakers,
+               nextStereos.count >= StripperFolderLoader.maxStereo {
+                hitCap = true
+                hitStereoCap = true
+                break
+            }
 
             let wantsMusic = MixerAudioIO.looksLikeMusic(url: url)
-            if wantsMusic, !nextHasMusic {
-                nextMusic = .music()
-                nextMusic.fileURL = url
-                nextMusic.name = MixerAudioIO.displayName(url: url)
-                nextHasMusic = true
+            if wantsMusic {
+                if nextStereos.count < StripperFolderLoader.maxStereo {
+                    var bed = ChannelStripState.stereo(
+                        slot: nextStereos.count,
+                        name: MixerAudioIO.displayName(url: url)
+                    )
+                    bed.fileURL = url
+                    nextStereos.append(bed)
+                } else {
+                    hitStereoCap = true
+                }
                 continue
             }
 
             if nextVoices.count >= StripperFolderLoader.maxSpeakers {
                 hitCap = true
-                break
+                continue
             }
 
             let slot = nextVoices.count
@@ -840,20 +865,23 @@ final class MixerSession: ObservableObject {
             )
             ch.fileURL = url
             nextVoices.append(ch)
-            if wantsMusic { extraStereoAsVoice += 1 }
         }
 
-        guard !nextVoices.isEmpty || nextHasMusic else {
+        guard !nextVoices.isEmpty || !nextStereos.isEmpty else {
             status = "No tracks to load."
             return
         }
 
         let startedVoices = append ? voices.count : 0
-        let startedMusic = append && hasMusic
-        if nextVoices.count == startedVoices, nextHasMusic == startedMusic {
-            status = hitCap
-                ? "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
-                : "Those tracks are already on the mixer."
+        let startedStereos = append ? stereos.count : 0
+        if nextVoices.count == startedVoices, nextStereos.count == startedStereos {
+            if hitStereoCap {
+                status = "Mixer already has \(StripperFolderLoader.maxStereo) stereo strips (music / SFX)."
+            } else {
+                status = hitCap
+                    ? "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
+                    : "Those tracks are already on the mixer."
+            }
             return
         }
 
@@ -877,18 +905,31 @@ final class MixerSession: ObservableObject {
             ch.muteSpans = kept.muteSpans
             nextVoices[i] = ch
         }
+        for i in nextStereos.indices {
+            let kept = nextStereos[i]
+            var bed = ChannelStripState.stereo(slot: i, name: kept.name)
+            bed.fileURL = kept.fileURL
+            bed.mute = kept.mute
+            bed.dspBypass = kept.dspBypass
+            bed.faderDb = kept.faderDb
+            bed.pan = kept.pan
+            bed.eq = kept.eq
+            bed.para = kept.para
+            bed.dspOrder = kept.dspOrder
+            bed.muteSpans = kept.muteSpans
+            nextStereos[i] = bed
+        }
 
         do {
             voices = nextVoices
-            music = nextMusic
-            hasMusic = nextHasMusic
+            stereos = nextStereos
             if !append || sourceFolder == nil {
                 sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
             }
             try engine.load(
                 voiceURLs: voices.map(\.fileURL),
                 speakerNumbers: voices.map { $0.speakerNumber ?? ($0.id + 1) },
-                musicURL: hasMusic ? music.fileURL : nil,
+                stereoURLs: stereos.compactMap(\.fileURL),
                 sampleRateHint: nil
             )
             sampleRate = engine.sampleRate
@@ -901,15 +942,15 @@ final class MixerSession: ObservableObject {
             }
             if let first = voices.first {
                 selectedChannelID = first.id
-            } else if hasMusic {
-                selectedChannelID = ChannelStripState.musicID
+            } else if let firstBed = stereos.first {
+                selectedChannelID = firstBed.id
             }
             refreshWaveform()
             syncRTASource()
             syncParamsToEngine()
-            var line = "Loaded \(voices.count + (hasMusic ? 1 : 0)) track(s) · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
-            if extraStereoAsVoice > 0, hasMusic {
-                line += " · extra music-named files became speaker strips"
+            var line = "Loaded \(voices.count + stereos.count) track(s) · \(Int(sampleRate)) Hz · \(formatDuration(frames: frameCount, rate: sampleRate))"
+            if hitStereoCap {
+                line += " · stopped at \(StripperFolderLoader.maxStereo) stereo strips"
             }
             if hitCap {
                 line += " · stopped at \(StripperFolderLoader.maxSpeakers) speaker strips"
@@ -935,7 +976,7 @@ final class MixerSession: ObservableObject {
     func syncParamsToEngine() {
         engine.updateParams(
             voices: voices,
-            music: music,
+            stereos: stereos,
             masterDb: masterDb,
             autoBalanceEnabled: autoBalanceEnabled,
             autoBalanceTargetDb: autoBalanceTargetDb,
@@ -984,7 +1025,7 @@ final class MixerSession: ObservableObject {
     /// Overwrite the current mix file with no naming window.
     /// First time writes `FixerMixer.mix.json` in the `_speakers` folder.
     func updateMix() {
-        guard (frameCount > 0 || !voices.isEmpty), let folder = sourceFolder else {
+        guard (frameCount > 0 || hasSession), let folder = sourceFolder else {
             status = "Load tracks or start a session before saving a mix."
             return
         }
@@ -994,7 +1035,7 @@ final class MixerSession: ObservableObject {
 
     /// Opens a Save panel so you pick the folder and file name for the mix JSON.
     func saveMix() {
-        guard (frameCount > 0 || !voices.isEmpty), let folder = sourceFolder else {
+        guard (frameCount > 0 || hasSession), let folder = sourceFolder else {
             status = "Load tracks or start a session before saving a mix."
             return
         }
@@ -1086,15 +1127,15 @@ final class MixerSession: ObservableObject {
                 )
             )
         }
-        if hasMusic {
+        for (index, bed) in stereos.enumerated() {
             items.append(
                 MixerExportItem(
-                    id: "music",
-                    kind: .music,
+                    id: "stereo-\(bed.id)",
+                    kind: .stereo(index),
                     enabled: true,
-                    name: "\(music.bounceStemBaseName)_fixed",
-                    label: music.name,
-                    role: "Music + SFX"
+                    name: "\(bed.bounceStemBaseName)_fixed",
+                    label: bed.name,
+                    role: index == 0 ? "Music" : "Stereo bed"
                 )
             )
         }
@@ -1126,21 +1167,21 @@ final class MixerSession: ObservableObject {
             return
         }
         var voiceFiles: [Int: String] = [:]
-        var musicFile: String?
+        var stereoFiles: [Int: String] = [:]
         var mixFile: String?
         for item in items where item.enabled {
             switch item.kind {
             case .voice(let index):
                 voiceFiles[index] = item.name
-            case .music:
-                musicFile = item.name
+            case .stereo(let index):
+                stereoFiles[index] = item.name
             case .mix:
                 mixFile = item.name
             }
         }
         let plan = MixerEngine.BounceWritePlan(
             voiceFiles: voiceFiles,
-            musicFile: musicFile,
+            stereoFiles: stereoFiles,
             mixFile: mixFile
         )
         guard !plan.isEmpty else {
@@ -1201,9 +1242,10 @@ struct StripperSpeakerFile: Equatable {
 }
 
 enum StripperFolderLoader {
-    static let maxSpeakers = 16
+    static let maxSpeakers = 8
+    static let maxStereo = 2
 
-    static func load(folder: URL) throws -> (speakers: [StripperSpeakerFile], music: URL?) {
+    static func load(folder: URL) throws -> (speakers: [StripperSpeakerFile], music: [URL], skippedSpeakers: Int, skippedStereo: Int) {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: folder.path, isDirectory: &isDir), isDir.boolValue else {
@@ -1213,11 +1255,12 @@ enum StripperFolderLoader {
             .filter { $0.pathExtension.lowercased() == "wav" }
 
         var byNumber: [Int: URL] = [:]
-        var music: URL?
+        var beds: [URL] = []
+        var skippedSpeakers = 0
         for file in files {
             let name = file.deletingPathExtension().lastPathComponent.lowercased()
-            if name.contains("music") {
-                music = file
+            if name.contains("music") || name.contains("sfx") {
+                beds.append(file)
                 continue
             }
             guard name.contains("speaker") else { continue }
@@ -1225,13 +1268,25 @@ enum StripperFolderLoader {
             let parts = digits.split(separator: " ").compactMap { Int($0) }
             if let n = parts.last, (1...maxSpeakers).contains(n) {
                 byNumber[n] = file
+            } else if let n = parts.last, n > maxSpeakers {
+                skippedSpeakers += 1
             }
         }
+        beds.sort { a, b in
+            let an = a.deletingPathExtension().lastPathComponent.lowercased()
+            let bn = b.deletingPathExtension().lastPathComponent.lowercased()
+            let am = an.contains("music")
+            let bm = bn.contains("music")
+            if am != bm { return am && !bm }
+            return an.localizedStandardCompare(bn) == .orderedAscending
+        }
+        let skippedStereo = max(0, beds.count - maxStereo)
+        beds = Array(beds.prefix(maxStereo))
         let speakers = byNumber.keys.sorted().map { StripperSpeakerFile(number: $0, url: byNumber[$0]!) }
-        if speakers.isEmpty && music == nil {
+        if speakers.isEmpty && beds.isEmpty {
             throw MixerError.noTracks
         }
-        return (speakers, music)
+        return (speakers, beds, skippedSpeakers, skippedStereo)
     }
 }
 

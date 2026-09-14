@@ -8,9 +8,11 @@ final class MixerEngine: @unchecked Sendable {
     private var speakerNumbers: [Int] = []
     /// Per-voice bounce stem base names (user-facing channel names, sanitized at write).
     private var stemNames: [String] = []
-    private var musicBuffer: [Float] = []
-    private var musicChannels: Int = 2
-    private var hasMusicTrack = false
+    private var stereoBuffers: [[Float]] = []
+    private var stereoChannelCounts: [Int] = []
+    private var stereoProcessors: [ChannelProcessor] = []
+    private var stereoMuteSpans: [[MuteSpan]] = []
+    private var cachedStereoPeaks: [[Float]] = []
 
     private(set) var sampleRate: Double = 44100
     private(set) var frameCount: Int = 0
@@ -20,7 +22,6 @@ final class MixerEngine: @unchecked Sendable {
     private var playing = false
 
     private var processors: [ChannelProcessor] = []
-    private var musicProcessor = ChannelProcessor(isStereo: true, hasVoiceFX: false)
     private var autoBalancer = AutoBalancer()
     private var masterComp = MasterCompressorDSP()
     private var masterGain: Float = 1
@@ -49,12 +50,10 @@ final class MixerEngine: @unchecked Sendable {
     /// Separate from the audio lock so channel-select waveform swaps never stall the render thread.
     private let waveformLock = NSLock()
     private var cachedVoicePeaks: [[Float]] = []
-    private var cachedMusicPeaks: [Float] = []
     private var cachedMasterPeaks: [Float] = []
     private let waveformBinCount = 2048
 
     private var voiceMuteSpans: [[MuteSpan]] = []
-    private var musicMuteSpans: [MuteSpan] = []
     private var recording = false
     /// Voice index → hardware input channel (0-based). Empty = not recording that strip.
     private var recordMap: [Int: Int] = [:]
@@ -68,7 +67,7 @@ final class MixerEngine: @unchecked Sendable {
     private var recSilentMixer: AVAudioMixerNode?
     private var lengthEmitCounter = 0
 
-    private var meterSlotCount: Int { voiceCount + 1 } // last slot always music
+    private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
 
     func setRTASource(isMusic: Bool, voiceIndex: Int, isMaster: Bool = false) {
         lock.lock()
@@ -83,12 +82,16 @@ final class MixerEngine: @unchecked Sendable {
     }
 
     /// Peak envelope for UI waveform (0…1). Precomputed at load so channel select never stalls audio.
-    func waveformPeaks(channelIndex: Int?, music: Bool, masterMix: Bool = false, binCount: Int = 800) -> [Float] {
+    func waveformPeaks(channelIndex: Int?, music: Bool, masterMix: Bool = false, stereoIndex: Int? = nil, binCount: Int = 800) -> [Float] {
         _ = binCount
         waveformLock.lock()
         defer { waveformLock.unlock() }
         if masterMix { return cachedMasterPeaks }
-        if music { return cachedMusicPeaks }
+        if music {
+            let idx = stereoIndex ?? 0
+            guard cachedStereoPeaks.indices.contains(idx) else { return [] }
+            return cachedStereoPeaks[idx]
+        }
         guard let channelIndex, cachedVoicePeaks.indices.contains(channelIndex) else {
             return []
         }
@@ -108,8 +111,10 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].reset()
             processors[i].configure(sampleRate: sampleRate)
         }
-        musicProcessor.reset()
-        musicProcessor.configure(sampleRate: sampleRate)
+        for i in stereoProcessors.indices {
+            stereoProcessors[i].reset()
+            stereoProcessors[i].configure(sampleRate: sampleRate)
+        }
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
@@ -149,7 +154,7 @@ final class MixerEngine: @unchecked Sendable {
         return out
     }
 
-    func load(voiceURLs: [URL?], speakerNumbers: [Int], musicURL: URL?, sampleRateHint: Double?) throws {
+    func load(voiceURLs: [URL?], speakerNumbers: [Int], stereoURLs: [URL], sampleRateHint: Double?) throws {
         stop()
         lock.lock()
         defer { lock.unlock() }
@@ -188,35 +193,36 @@ final class MixerEngine: @unchecked Sendable {
             frames = max(frames, mono.count)
         }
 
-        musicBuffer = []
-        musicChannels = 2
-        hasMusicTrack = false
-        if let musicURL {
-            let buf = try MixerAudioIO.load(url: musicURL, targetSampleRate: rate)
+        stereoBuffers = []
+        stereoChannelCounts = []
+        stereoProcessors = []
+        stereoMuteSpans = []
+        for url in stereoURLs.prefix(StripperFolderLoader.maxStereo) {
+            let buf = try MixerAudioIO.load(url: url, targetSampleRate: rate)
             if let r = rate, abs(r - buf.sampleRate) > 0.5 {
-                throw MixerError.loadFailed("Sample rate mismatch in music track")
+                throw MixerError.loadFailed("Sample rate mismatch in \(url.lastPathComponent)")
             }
             rate = buf.sampleRate
-            if buf.channelCount == 1 {
-                var stereo: [Float] = []
-                stereo.reserveCapacity(buf.frameCount * 2)
-                for s in buf.samples {
-                    stereo.append(s)
-                    stereo.append(s)
-                }
-                musicBuffer = stereo
-                musicChannels = 2
-            } else {
-                musicBuffer = buf.samples
-                musicChannels = buf.channelCount
-            }
+            let stereo = Self.interleavedStereo(buf)
+            stereoBuffers.append(stereo.samples)
+            stereoChannelCounts.append(stereo.channels)
             frames = max(frames, buf.frameCount)
-            hasMusicTrack = true
+            var proc = ChannelProcessor(isStereo: true, hasVoiceFX: false)
+            proc.configure(sampleRate: rate ?? sampleRateHint ?? 44100)
+            stereoProcessors.append(proc)
+            stereoMuteSpans.append([])
         }
 
         for i in voiceBuffers.indices {
             if voiceBuffers[i].count < frames {
                 voiceBuffers[i].append(contentsOf: repeatElement(Float(0), count: frames - voiceBuffers[i].count))
+            }
+        }
+        for i in stereoBuffers.indices {
+            let ch = max(1, stereoChannelCounts.indices.contains(i) ? stereoChannelCounts[i] : 2)
+            let need = frames * ch
+            if stereoBuffers[i].count < need {
+                stereoBuffers[i].append(contentsOf: repeatElement(Float(0), count: need - stereoBuffers[i].count))
             }
         }
 
@@ -226,53 +232,77 @@ final class MixerEngine: @unchecked Sendable {
         playhead = 0
 
         processors = (0..<voiceCount).map { _ in ChannelProcessor(isStereo: false, hasVoiceFX: true) }
-        musicProcessor = ChannelProcessor(isStereo: true, hasVoiceFX: false)
         for i in processors.indices {
             processors[i].configure(sampleRate: sampleRate)
             processors[i].reset()
         }
-        musicProcessor.configure(sampleRate: sampleRate)
-        musicProcessor.reset()
+        for i in stereoProcessors.indices {
+            stereoProcessors[i].configure(sampleRate: sampleRate)
+            stereoProcessors[i].reset()
+        }
 
         meterPre = Array(repeating: 0, count: meterSlotCount)
         meterPost = Array(repeating: 0, count: meterSlotCount)
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
+        voiceMuteSpans = Array(repeating: [], count: voiceCount)
         rebuildWaveformCache()
+    }
+
+    private static func interleavedStereo(_ buf: WAVIO.Buffer) -> (samples: [Float], channels: Int) {
+        if buf.channelCount == 1 {
+            var stereo: [Float] = []
+            stereo.reserveCapacity(buf.frameCount * 2)
+            for s in buf.samples {
+                stereo.append(s)
+                stereo.append(s)
+            }
+            return (stereo, 2)
+        }
+        if buf.channelCount == 2 {
+            return (buf.samples, 2)
+        }
+        var stereo: [Float] = []
+        stereo.reserveCapacity(buf.frameCount * 2)
+        let ch = buf.channelCount
+        for f in 0..<buf.frameCount {
+            stereo.append(buf.samples[f * ch])
+            stereo.append(buf.samples[f * ch + 1])
+        }
+        return (stereo, 2)
     }
 
     func prepareBlankSession(voiceCount: Int, sampleRate: Double) {
         stop()
         lock.lock()
         defer { lock.unlock() }
-        let n = max(1, voiceCount)
+        let n = max(1, min(voiceCount, StripperFolderLoader.maxSpeakers))
         voiceBuffers = Array(repeating: [], count: n)
         speakerNumbers = Array(1...n)
         stemNames = (1...n).map { "SPK \($0)" }
-        musicBuffer = []
-        musicChannels = 2
-        hasMusicTrack = false
+        stereoBuffers = []
+        stereoChannelCounts = []
+        stereoProcessors = []
+        stereoMuteSpans = []
         self.voiceCount = n
         self.sampleRate = sampleRate
         frameCount = 0
         playhead = 0
         processors = (0..<n).map { _ in ChannelProcessor(isStereo: false, hasVoiceFX: true) }
-        musicProcessor = ChannelProcessor(isStereo: true, hasVoiceFX: false)
         for i in processors.indices {
             processors[i].configure(sampleRate: sampleRate)
             processors[i].reset()
         }
-        musicProcessor.configure(sampleRate: sampleRate)
         meterPre = Array(repeating: 0, count: meterSlotCount)
         meterPost = Array(repeating: 0, count: meterSlotCount)
         autoBalancer.resize(to: n)
         autoBalancer.reset()
         masterComp.reset()
         voiceMuteSpans = Array(repeating: [], count: n)
-        musicMuteSpans = []
         rebuildWaveformCache()
     }
+
 
     func appendSilentVoice(speakerNumber: Int) {
         lock.lock()
@@ -299,17 +329,15 @@ final class MixerEngine: @unchecked Sendable {
     private func rebuildWaveformCache() {
         let bins = waveformBinCount
         let voicePeaks = voiceBuffers.map { downsampleAbs($0, binCount: bins, frameCount: $0.count, channelCount: 1) }
-        let musicPeaks: [Float]
-        if !musicBuffer.isEmpty {
-            let frames = musicBuffer.count / max(1, musicChannels)
-            musicPeaks = downsampleAbs(musicBuffer, binCount: bins, frameCount: frames, channelCount: musicChannels)
-        } else {
-            musicPeaks = []
+        var stereoPeaks: [[Float]] = []
+        for i in stereoBuffers.indices {
+            let ch = max(1, stereoChannelCounts.indices.contains(i) ? stereoChannelCounts[i] : 2)
+            let frames = stereoBuffers[i].count / ch
+            stereoPeaks.append(downsampleAbs(stereoBuffers[i], binCount: bins, frameCount: frames, channelCount: ch))
         }
 
         var master = [Float](repeating: 0, count: bins)
         let total = max(1, frameCount)
-        let ch = max(1, musicChannels)
         for i in 0..<bins {
             let start = i * total / bins
             let end = max(start + 1, (i + 1) * total / bins)
@@ -318,12 +346,14 @@ final class MixerEngine: @unchecked Sendable {
                 for buf in voiceBuffers {
                     if f < buf.count { peak = max(peak, abs(buf[f])) }
                 }
-                if !musicBuffer.isEmpty {
+                for s in stereoBuffers.indices {
+                    let ch = max(1, stereoChannelCounts.indices.contains(s) ? stereoChannelCounts[s] : 2)
+                    let buf = stereoBuffers[s]
                     let base = f * ch
-                    if ch >= 2, base + 1 < musicBuffer.count {
-                        peak = max(peak, abs(musicBuffer[base]), abs(musicBuffer[base + 1]))
-                    } else if base < musicBuffer.count {
-                        peak = max(peak, abs(musicBuffer[base]))
+                    if ch >= 2, base + 1 < buf.count {
+                        peak = max(peak, abs(buf[base]), abs(buf[base + 1]))
+                    } else if base < buf.count {
+                        peak = max(peak, abs(buf[base]))
                     }
                 }
             }
@@ -336,14 +366,14 @@ final class MixerEngine: @unchecked Sendable {
 
         waveformLock.lock()
         cachedVoicePeaks = voicePeaks
-        cachedMusicPeaks = musicPeaks
+        cachedStereoPeaks = stereoPeaks
         cachedMasterPeaks = master
         waveformLock.unlock()
     }
 
     func updateParams(
         voices: [ChannelStripState],
-        music: ChannelStripState,
+        stereos: [ChannelStripState],
         masterDb: Float,
         autoBalanceEnabled: Bool,
         autoBalanceTargetDb: Float,
@@ -394,17 +424,32 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].dspOrder = voices[i].dspOrder
             processors[i].configure(sampleRate: sampleRate)
         }
-        musicProcessor.mute = music.mute || !hasMusicTrack
-        musicProcessor.faderDb = music.faderDb
-        musicProcessor.pan = music.pan
-        musicProcessor.dspBypass = false
-        musicProcessor.eqGains = music.eq.gains
-        musicProcessor.eqBypass = music.eq.bypass
-        musicProcessor.dspOrder = music.dspOrder.isEmpty ? ChannelDSPSlot.musicDefault : music.dspOrder
-        musicProcessor.configure(sampleRate: sampleRate)
+        while stereoProcessors.count < stereos.count {
+            var p = ChannelProcessor(isStereo: true, hasVoiceFX: false)
+            p.configure(sampleRate: sampleRate)
+            stereoProcessors.append(p)
+            stereoMuteSpans.append([])
+        }
+        if stereoProcessors.count > stereos.count {
+            stereoProcessors = Array(stereoProcessors.prefix(stereos.count))
+            stereoMuteSpans = Array(stereoMuteSpans.prefix(stereos.count))
+        }
+        for i in 0..<stereos.count {
+            guard stereoProcessors.indices.contains(i) else { continue }
+            stereoProcessors[i].mute = stereos[i].mute
+            stereoProcessors[i].faderDb = stereos[i].faderDb
+            stereoProcessors[i].pan = stereos[i].pan
+            stereoProcessors[i].dspBypass = false
+            stereoProcessors[i].eqGains = stereos[i].eq.gains
+            stereoProcessors[i].eqBypass = stereos[i].eq.bypass
+            stereoProcessors[i].dspOrder = stereos[i].dspOrder.isEmpty ? ChannelDSPSlot.musicDefault : stereos[i].dspOrder
+            stereoProcessors[i].configure(sampleRate: sampleRate)
+            if stereoMuteSpans.indices.contains(i) {
+                stereoMuteSpans[i] = stereos[i].muteSpans
+            }
+        }
         stemNames = voices.map(\.bounceStemBaseName)
         voiceMuteSpans = voices.map(\.muteSpans)
-        musicMuteSpans = music.muteSpans
         recordMap = [:]
         for (index, voice) in voices.enumerated() {
             if let ch = voice.inputChannel {
@@ -435,8 +480,10 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].reset()
             processors[i].configure(sampleRate: sampleRate)
         }
-        musicProcessor.reset()
-        musicProcessor.configure(sampleRate: sampleRate)
+        for i in stereoProcessors.indices {
+            stereoProcessors[i].reset()
+            stereoProcessors[i].configure(sampleRate: sampleRate)
+        }
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
@@ -485,11 +532,10 @@ final class MixerEngine: @unchecked Sendable {
 
             // Copy buffers after the record write so CoW does not play a stale take.
             let voices = self.voiceBuffers
-            let music = self.musicBuffer
-            let musicCh = self.musicChannels
+            let stereos = self.stereoBuffers
+            let stereoChs = self.stereoChannelCounts
             let master = self.masterGain
             let voiceN = self.voiceCount
-            let musicMeterIdx = voiceN
             let fadeFrames = MuteSpanStore.fadeFrames(sampleRate: self.sampleRate)
             let liveRecord = self.recording
 
@@ -548,28 +594,36 @@ final class MixerEngine: @unchecked Sendable {
                             }
                         }
                     }
-                    let ml: Float
-                    let mr: Float
-                    let musicGain = MuteSpanStore.gain(
-                        at: head,
-                        spans: self.musicMuteSpans,
-                        fadeFrames: fadeFrames
-                    )
-                    if musicCh >= 2, head * 2 + 1 < music.count {
-                        ml = music[head * 2] * musicGain
-                        mr = music[head * 2 + 1] * musicGain
-                    } else if head < music.count {
-                        ml = music[head] * musicGain
-                        mr = music[head] * musicGain
-                    } else {
-                        ml = 0
-                        mr = 0
-                    }
-                    let (ol, orr) = self.musicProcessor.processStereo(ml, mr, prePeak: &pre[musicMeterIdx], postPeak: &post[musicMeterIdx])
-                    mixL += ol
-                    mixR += orr
-                    if self.rtaIsMusic && !self.rtaIsMaster {
-                        self.rta.push(0.5 * (ol + orr))
+                    for s in stereos.indices {
+                        let ch = max(1, stereoChs.indices.contains(s) ? stereoChs[s] : 2)
+                        let buf = stereos[s]
+                        let spans = s < self.stereoMuteSpans.count ? self.stereoMuteSpans[s] : []
+                        let gain = MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
+                        let ml: Float
+                        let mr: Float
+                        if ch >= 2, head * ch + 1 < buf.count {
+                            ml = buf[head * ch] * gain
+                            mr = buf[head * ch + 1] * gain
+                        } else if head < buf.count {
+                            ml = buf[head] * gain
+                            mr = buf[head] * gain
+                        } else {
+                            ml = 0
+                            mr = 0
+                        }
+                        let meterIdx = voiceN + s
+                        var preS = meterIdx < pre.count ? pre[meterIdx] : Float(0)
+                        var postS = meterIdx < post.count ? post[meterIdx] : Float(0)
+                        if self.stereoProcessors.indices.contains(s) {
+                            let (ol, orr) = self.stereoProcessors[s].processStereo(ml, mr, prePeak: &preS, postPeak: &postS)
+                            mixL += ol
+                            mixR += orr
+                            if meterIdx < pre.count { pre[meterIdx] = preS }
+                            if meterIdx < post.count { post[meterIdx] = postS }
+                            if self.rtaIsMusic, !self.rtaIsMaster, s == self.rtaVoiceIndex {
+                                self.rta.push(0.5 * (ol + orr))
+                            }
+                        }
                     }
                     head += 1
                 }
@@ -717,10 +771,10 @@ final class MixerEngine: @unchecked Sendable {
     /// Which rendered buffers to write, and the `.wav` file names inside `folder`.
     struct BounceWritePlan: Sendable {
         var voiceFiles: [Int: String]
-        var musicFile: String?
+        var stereoFiles: [Int: String]
         var mixFile: String?
         var isEmpty: Bool {
-            voiceFiles.isEmpty && musicFile == nil && mixFile == nil
+            voiceFiles.isEmpty && stereoFiles.isEmpty && mixFile == nil
         }
     }
 
@@ -731,16 +785,17 @@ final class MixerEngine: @unchecked Sendable {
         let voices = voiceBuffers
         let nums = speakerNumbers
         let names = stemNames
-        let music = musicBuffer
-        let musicCh = musicChannels
+        let stereos = stereoBuffers
+        let stereoChs = stereoChannelCounts
         var procs = processors
-        var musicProc = musicProcessor
+        var stereoProcs = stereoProcessors
         var balancer = autoBalancer
         var busComp = masterComp
         let master = masterGain
         let voiceN = voiceCount
+        let stereoN = stereos.count
         let voiceMuteSpansCopy = voiceMuteSpans
-        let musicMuteSpansCopy = musicMuteSpans
+        let stereoMuteSpansCopy = stereoMuteSpans
         let fade = MuteSpanStore.fadeFrames(sampleRate: sr)
         lock.unlock()
 
@@ -751,16 +806,18 @@ final class MixerEngine: @unchecked Sendable {
             procs[i].reset()
             procs[i].configure(sampleRate: sr)
         }
-        musicProc.reset()
-        musicProc.configure(sampleRate: sr)
+        for i in stereoProcs.indices {
+            stereoProcs[i].reset()
+            stereoProcs[i].configure(sampleRate: sr)
+        }
         balancer.resize(to: voiceN)
         balancer.reset()
         busComp.reset()
 
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 
-        var stemBuffers: [[Float]] = Array(repeating: [], count: voiceN + 1)
-        for i in 0..<(voiceN + 1) { stemBuffers[i].reserveCapacity(total * 2) }
+        var stemBuffers: [[Float]] = Array(repeating: [], count: voiceN + stereoN)
+        for i in 0..<(voiceN + stereoN) { stemBuffers[i].reserveCapacity(total * 2) }
         var mixL = [Float](repeating: 0, count: total)
         var mixR = [Float](repeating: 0, count: total)
 
@@ -799,25 +856,35 @@ final class MixerEngine: @unchecked Sendable {
                 busL += l
                 busR += r
             }
-            let ml: Float
-            let mr: Float
-            let musicGain = MuteSpanStore.gain(at: head, spans: musicMuteSpansCopy, fadeFrames: fade)
-            if musicCh >= 2, head * 2 + 1 < music.count {
-                ml = music[head * 2] * musicGain
-                mr = music[head * 2 + 1] * musicGain
-            } else if head < music.count {
-                ml = music[head] * musicGain
-                mr = music[head] * musicGain
-            } else {
-                ml = 0
-                mr = 0
+            for s in 0..<stereoN {
+                let ch = max(1, stereoChs.indices.contains(s) ? stereoChs[s] : 2)
+                let buf = stereos[s]
+                let spans = s < stereoMuteSpansCopy.count ? stereoMuteSpansCopy[s] : []
+                let gain = MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fade)
+                let ml: Float
+                let mr: Float
+                if ch >= 2, head * ch + 1 < buf.count {
+                    ml = buf[head * ch] * gain
+                    mr = buf[head * ch + 1] * gain
+                } else if head < buf.count {
+                    ml = buf[head] * gain
+                    mr = buf[head] * gain
+                } else {
+                    ml = 0
+                    mr = 0
+                }
+                pre = 0; post = 0
+                let (ol, orr): (Float, Float)
+                if stereoProcs.indices.contains(s) {
+                    (ol, orr) = stereoProcs[s].processStereo(ml, mr, prePeak: &pre, postPeak: &post)
+                } else {
+                    (ol, orr) = (ml, mr)
+                }
+                stemBuffers[voiceN + s].append(ol)
+                stemBuffers[voiceN + s].append(orr)
+                busL += ol
+                busR += orr
             }
-            pre = 0; post = 0
-            let (ol, orr) = musicProc.processStereo(ml, mr, prePeak: &pre, postPeak: &post)
-            stemBuffers[voiceN].append(ol)
-            stemBuffers[voiceN].append(orr)
-            busL += ol
-            busR += orr
             let (cL, cR) = busComp.process(left: busL, right: busR, sampleRate: sr)
             busL = tanhf(cL * master)
             busR = tanhf(cR * master)
@@ -856,11 +923,16 @@ final class MixerEngine: @unchecked Sendable {
                 fileCount += 1
             }
         }
-        if let requested = plan.musicFile, !music.isEmpty {
-            let filename = uniqueName(requested, fallback: "Music_and_SFX_fixed")
-            let url = folder.appendingPathComponent(filename)
-            try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[voiceN]))
-            fileCount += 1
+        for s in 0..<stereoN {
+            guard let requested = plan.stereoFiles[s] else { continue }
+            let has = s < stereos.count && !stereos[s].isEmpty
+            if has {
+                let fallback = s == 0 ? "Music_and_SFX_fixed" : "SFX_fixed"
+                let filename = uniqueName(requested, fallback: fallback)
+                let url = folder.appendingPathComponent(filename)
+                try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[voiceN + s]))
+                fileCount += 1
+            }
         }
         if let requested = plan.mixFile {
             var mixInterleaved: [Float] = []
@@ -909,10 +981,11 @@ final class MixerEngine: @unchecked Sendable {
                 voiceBuffers[i].append(contentsOf: repeatElement(Float(0), count: need - voiceBuffers[i].count))
             }
         }
-        if hasMusicTrack {
-            let stereoNeed = need * max(1, musicChannels)
-            if musicBuffer.count < stereoNeed {
-                musicBuffer.append(contentsOf: repeatElement(Float(0), count: stereoNeed - musicBuffer.count))
+        for i in stereoBuffers.indices {
+            let ch = max(1, stereoChannelCounts.indices.contains(i) ? stereoChannelCounts[i] : 2)
+            let stereoNeed = need * ch
+            if stereoBuffers[i].count < stereoNeed {
+                stereoBuffers[i].append(contentsOf: repeatElement(Float(0), count: stereoNeed - stereoBuffers[i].count))
             }
         }
         frameCount = max(frameCount, need)

@@ -4,7 +4,7 @@ import SwiftUI
 struct MixerExportItem: Identifiable, Equatable {
     enum Kind: Equatable {
         case voice(Int)
-        case music
+        case stereo(Int)
         case mix
     }
 
