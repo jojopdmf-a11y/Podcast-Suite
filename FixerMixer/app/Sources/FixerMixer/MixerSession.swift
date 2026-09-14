@@ -378,7 +378,9 @@ final class MixerSession: ObservableObject {
             ?? 0
     }
 
-    var hasSession: Bool { !voices.isEmpty || !stereos.isEmpty }
+    /// True after NEW SESSION, even with no strips. Launch still shows the drop splash.
+    @Published private(set) var mixerOpen = false
+    var hasSession: Bool { mixerOpen || !voices.isEmpty || !stereos.isEmpty }
 
     func refreshInputDevices() {
         inputDevices = MixerInputDevices.list()
@@ -395,6 +397,26 @@ final class MixerSession: ObservableObject {
             isRecording = false
         }
         refreshInputDevices()
+        engine.prepareBlankSession(voiceCount: 0, sampleRate: 48_000)
+        voices = []
+        stereos = []
+        mixerOpen = true
+        sourceFolder = nil
+        lastMixURL = nil
+        sampleRate = engine.sampleRate
+        frameCount = 0
+        playheadFrame = 0
+        selectedChannelID = ChannelStripState.masterID
+        autoBalanceEnabled = false
+        autoGainDb = []
+        refreshWaveform()
+        syncRTASource()
+        syncParamsToEngine()
+        status = "Empty mixer. Drop audio or ADD STRIP. Pick IN on a speaker, then Record. Monitor through your interface."
+    }
+
+    private func ensureSessionFolder() {
+        guard sourceFolder == nil else { return }
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: ":", with: "-")
@@ -404,26 +426,7 @@ final class MixerSession: ObservableObject {
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
         let folder = desktop.appendingPathComponent("FixerMixer-\(stamp)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        engine.prepareBlankSession(voiceCount: 2, sampleRate: 48_000)
-        voices = [
-            .voice(slot: 0, speakerNumber: 1, name: "SPK 1"),
-            .voice(slot: 1, speakerNumber: 2, name: "SPK 2"),
-        ]
-        if selectedInputChannelCount >= 1 { voices[0].inputChannel = 0 }
-        if selectedInputChannelCount >= 2 { voices[1].inputChannel = 1 }
-        stereos = []
         sourceFolder = folder
-        lastMixURL = nil
-        sampleRate = engine.sampleRate
-        frameCount = 0
-        playheadFrame = 0
-        selectedChannelID = voices[0].id
-        autoBalanceEnabled = false
-        autoGainDb = []
-        refreshWaveform()
-        syncRTASource()
-        syncParamsToEngine()
-        status = "New session on the Desktop. Monitor through your interface — Mixer does not play the mic back. Arm IN 1 / IN 2, then Record."
     }
 
     func addBlankStrip() {
@@ -431,10 +434,7 @@ final class MixerSession: ObservableObject {
             status = "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
             return
         }
-        if voices.isEmpty && stereos.isEmpty {
-            newRecordSession()
-            return
-        }
+        mixerOpen = true
         if isPlaying || isRecording {
             engine.stop()
             isPlaying = false
@@ -462,12 +462,12 @@ final class MixerSession: ObservableObject {
         }
         refreshInputDevices()
         guard voices.contains(where: { $0.inputChannel != nil }) else {
-            status = "Pick IN 1 / IN 2 on a speaker strip, then Record. Monitor through your interface."
+            status = voices.isEmpty
+                ? "ADD STRIP, pick IN 1 / IN 2, then Record. Monitor through your interface."
+                : "Pick IN 1 / IN 2 on a speaker strip, then Record. Monitor through your interface."
             return
         }
-        if voices.isEmpty {
-            newRecordSession()
-        }
+        ensureSessionFolder()
         AVAudioApplication.requestRecordPermission { granted in
             Task { @MainActor [weak self] in
                 self?.continueRecordIfMicAllowed(granted)

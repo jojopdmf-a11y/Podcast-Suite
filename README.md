@@ -59,7 +59,7 @@ The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requ
 ## Saving your work
 
 - **Podcast Stripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
-- **Fixer Mixer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks. Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** then **RECORD** from your interface. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
+- **Fixer Mixer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks. Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer, no channels) then **ADD STRIP** / **RECORD**. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
 - **Lil Leveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
 
 ## Build
