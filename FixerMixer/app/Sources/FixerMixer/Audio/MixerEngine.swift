@@ -993,7 +993,7 @@ final class MixerEngine: @unchecked Sendable {
               let device = MixerInputDevices.list().first(where: { $0.uid == uid })
         else { return }
         var id = device.id
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let size = UInt32(MemoryLayout<AudioDeviceID>.size)
         guard let audioUnit = engine.inputNode.audioUnit else { return }
         _ = AudioUnitSetProperty(
             audioUnit,
