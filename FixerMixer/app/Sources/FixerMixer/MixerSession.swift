@@ -462,25 +462,30 @@ final class MixerSession: ObservableObject {
         if voices.isEmpty {
             newRecordSession()
         }
-        requestMic { [weak self] granted in
-            guard let self else { return }
-            guard granted else {
-                self.status = "Microphone access is off. System Settings → Privacy & Security → Microphone → Fixer Mixer."
-                return
+        AVAudioApplication.requestRecordPermission { granted in
+            Task { @MainActor [weak self] in
+                self?.continueRecordIfMicAllowed(granted)
             }
-            self.syncParamsToEngine()
-            do {
-                try self.engine.start(
-                    fromBeginning: false,
-                    recording: true,
-                    inputDeviceUID: self.selectedInputUID
-                )
-                self.isPlaying = true
-                self.isRecording = true
-                self.status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through Mixer."
-            } catch {
-                self.status = error.localizedDescription
-            }
+        }
+    }
+
+    private func continueRecordIfMicAllowed(_ granted: Bool) {
+        guard granted else {
+            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → Fixer Mixer."
+            return
+        }
+        syncParamsToEngine()
+        do {
+            try engine.start(
+                fromBeginning: false,
+                recording: true,
+                inputDeviceUID: selectedInputUID
+            )
+            isPlaying = true
+            isRecording = true
+            status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through Mixer."
+        } catch {
+            status = error.localizedDescription
         }
     }
 
@@ -550,14 +555,6 @@ final class MixerSession: ObservableObject {
         syncParamsToEngine()
         persistMixIfPossible()
         status = "Unmuted that span on \(selectedChannelName)."
-    }
-
-    private func requestMic(_ body: @escaping (Bool) -> Void) {
-        AVAudioApplication.requestRecordPermission { granted in
-            Task { @MainActor in
-                body(granted)
-            }
-        }
     }
 
     private func persistMixIfPossible() {
