@@ -393,34 +393,37 @@ struct ContentView: View {
     }
 
     private var masterStrip: some View {
-        VStack(spacing: 8) {
-            HStack(alignment: .center, spacing: 6) {
-                Text("MASTER")
+        VStack(spacing: 10) {
+            // Own line so MASTER is never split next to SEL on the narrow strip.
+            Text("MASTER")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .tracking(0.6)
+                .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.lime.opacity(0.85))
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
+
+            Button {
+                session.selectChannel(ChannelStripState.masterID)
+                showAllWaveforms = false
+            } label: {
+                Text(session.selectedChannelID == ChannelStripState.masterID ? "SEL●" : "SEL")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .tracking(1)
-                    .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.lime.opacity(0.85))
-                Spacer(minLength: 0)
-                Button {
-                    session.selectChannel(ChannelStripState.masterID)
-                    showAllWaveforms = false
-                } label: {
-                    Text(session.selectedChannelID == ChannelStripState.masterID ? "SEL●" : "SEL")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .tracking(0.4)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.bgBottom : MixerTheme.cyan)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
+                    .tracking(0.4)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 7)
+                    .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.bgBottom : MixerTheme.cyan)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.panelRaised)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
+                    )
             }
+            .buttonStyle(.plain)
+            .help("Select master for the compressor panel")
 
             HStack(spacing: 4) {
                 BypassToggle(bypass: $session.masterComp.bypass)
@@ -460,7 +463,7 @@ struct ContentView: View {
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 10)
                 .foregroundStyle(session.autoBalanceEnabled ? MixerTheme.bgBottom : MixerTheme.cyan)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -475,7 +478,7 @@ struct ContentView: View {
             .help("Auto Balance rides speaker faders. Drag a fader to favor that speaker.")
 
             if session.autoBalanceEnabled {
-                VStack(spacing: 2) {
+                VStack(spacing: 4) {
                     Text("TARGET")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .foregroundStyle(MixerTheme.cyanDim)
@@ -490,18 +493,19 @@ struct ContentView: View {
                         }
                     ), in: -30...(-6))
                     .tint(MixerTheme.cyan)
+                    .padding(.bottom, 4)
                 }
             }
 
-            Spacer(minLength: 4)
+            Spacer(minLength: 8)
 
             HStack(spacing: 6) {
                 LevelMeter(level: session.masterPeakL, label: "L")
                 LevelMeter(level: session.masterPeakR, label: "R")
             }
-            .frame(height: 112)
+            .frame(height: 128)
 
-            VStack(spacing: 1) {
+            VStack(spacing: 2) {
                 Text(masterOutLabel)
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(masterOutColor)
@@ -511,6 +515,7 @@ struct ContentView: View {
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.cyanDim)
             }
+            .padding(.vertical, 2)
             .help("Live peak on the master bus after the OUT fader")
 
             VerticalFader(
