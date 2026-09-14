@@ -13,7 +13,7 @@ Needs **macOS 14 Sonoma or newer**. Mixer is light compared with Stripper; any A
 ## Use
 
 1. Drop a Podcast Stripper `_speakers` folder, **or** drop one or more audio files (WAV, AIFF, MP3, M4A…), **or** click **NEW SESSION**.
-2. **NEW SESSION** makes two empty speaker strips at 48 kHz and a folder on the Desktop (`FixerMixer-…`). Pick **INPUT** (the interface). On each speaker strip pick **IN 1 / IN 2 / …**. Stereo beds have no record.
+2. **NEW SESSION** opens an empty mixer (no channels) at 48 kHz. **ADD STRIP** for a speaker. Pick **INPUT** (the interface). On each speaker strip pick **IN 1 / IN 2 / …**. Stereo beds have no record. A Desktop folder is created when you Record.
 3. **RECORD** writes every armed strip from the playhead. It overwrites that span. The show can grow. **Monitor mics on your interface.** Mixer does not play the mic back (that would be late and confusing).
 4. Click the waveform to seek. **ALL TRACKS** stacks every strip in one view (speakers top to bottom, then stereo beds). Extra tracks scroll inside that box; extra speaker strips scroll sideways. Mixer does not grow off the screen. Click a lane to zoom in on that channel. **Shift-drag** paints mute (silence — the show stays the same length). **Option-drag** clears a mute. The strip **MUTE** button is the whole channel; it cannot punch a cough.
 5. Each audio file you drop becomes a channel. A file with “music” or “sfx” in the name becomes a stereo bed (first MUSIC, second SFX — Mixer stops at two). Everything else is a speaker strip, **capped at 8**. Extra files past those caps are skipped, not dumped onto another strip. Stereo files on a speaker strip are summed to mono.

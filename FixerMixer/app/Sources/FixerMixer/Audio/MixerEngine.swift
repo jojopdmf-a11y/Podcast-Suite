@@ -277,10 +277,16 @@ final class MixerEngine: @unchecked Sendable {
         stop()
         lock.lock()
         defer { lock.unlock() }
-        let n = max(1, min(voiceCount, StripperFolderLoader.maxSpeakers))
-        voiceBuffers = Array(repeating: [], count: n)
-        speakerNumbers = Array(1...n)
-        stemNames = (1...n).map { "SPK \($0)" }
+        let n = max(0, min(voiceCount, StripperFolderLoader.maxSpeakers))
+        if n == 0 {
+            voiceBuffers = []
+            speakerNumbers = []
+            stemNames = []
+        } else {
+            voiceBuffers = Array(repeating: [], count: n)
+            speakerNumbers = Array(1...n)
+            stemNames = (1...n).map { "SPK \($0)" }
+        }
         stereoBuffers = []
         stereoChannelCounts = []
         stereoProcessors = []
@@ -462,7 +468,7 @@ final class MixerEngine: @unchecked Sendable {
         lock.lock()
         if !recording, frameCount <= 0 {
             lock.unlock()
-            throw MixerError.engine("Load tracks first, or start a new session and Record.")
+            throw MixerError.engine("Load tracks first, or ADD STRIP and Record.")
         }
         if recording, recordMap.isEmpty {
             lock.unlock()

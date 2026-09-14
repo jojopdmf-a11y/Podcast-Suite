@@ -218,7 +218,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — up to 8 speakers and 2 stereo beds (music / SFX). A _speakers folder still builds the Stripper layout. Or start empty and Record.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — up to 8 speakers and 2 stereo beds (music / SFX). A _speakers folder still builds the Stripper layout. Or NEW SESSION for an empty mixer.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -226,7 +226,7 @@ struct ContentView: View {
                 Button("NEW SESSION") { session.newRecordSession() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
-                    .help("Two empty speaker strips, 48 kHz, folder on the Desktop. Arm IN, then Record. Monitor through your interface.")
+                    .help("Empty mixer, no channels. ADD STRIP or drop audio. Arm IN, then Record. Monitor through your interface.")
                 Button("CHOOSE FOLDER…") { pickFolder() }
                     .buttonStyle(MixerGhostButtonStyle())
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
