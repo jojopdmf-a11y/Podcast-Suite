@@ -31,6 +31,8 @@ enum MixerMixFile {
         var autoBalanceTargetDb: Float
         var masterComp: Comp
         var inputDeviceUID: String?
+        /// Left-to-right strip ids. Older mix files omit this.
+        var channelOrder: [Int]?
     }
 
     struct Strip: Codable {
@@ -93,7 +95,8 @@ enum MixerMixFile {
                 outputDb: session.masterComp.outputDb,
                 autoMakeup: session.masterComp.autoMakeup
             ),
-            inputDeviceUID: session.selectedInputUID
+            inputDeviceUID: session.selectedInputUID,
+            channelOrder: session.displayChannelOrder.isEmpty ? nil : session.displayChannelOrder
         )
     }
 
@@ -190,6 +193,12 @@ enum MixerMixFile {
         session.masterComp.autoMakeup = doc.masterComp.autoMakeup
         if let uid = doc.inputDeviceUID {
             session.selectedInputUID = uid
+        }
+        if let order = doc.channelOrder, !order.isEmpty {
+            session.channelOrder = order
+            session.syncChannelOrder()
+        } else {
+            session.replaceChannelOrderFromCurrentStrips()
         }
     }
 
