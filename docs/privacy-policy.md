@@ -26,7 +26,7 @@ Questions: **hello@cougarcalc.com**
 ## What the apps do
 
 1. **Podcast Stripper** — one mixed episode in; one WAV per speaker plus a Music/SFX track, out.
-2. **Fixer Mixer** — polish those stems (or other audio you drop) and bounce.
+2. **Fixer Mixer** — polish those stems (or other audio you drop) and bounce. You can also record from an audio interface on this Mac. That audio stays in the folder you chose. Mixer asks for Microphone permission only to reach that interface; it does not upload the take.
 3. **Lil Leveler** — loudness / maximizer on a finished mix.
 
 They are Mac apps you download and run locally. They are not a website tool that uploads a file to us.

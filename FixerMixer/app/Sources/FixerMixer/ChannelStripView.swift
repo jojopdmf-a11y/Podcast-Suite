@@ -357,11 +357,13 @@ struct ChannelStripView: View {
     var faderDb: Binding<Float>
     var autoDriven: Bool
     var isSelected: Bool
+    var hardwareInputChannels: Int = 0
+    var isRecording: Bool = false
     var onSelect: () -> Void
     var onChange: () -> Void
 
     /// Keeps music strip the same height as full speaker strips.
-    static let stripHeight: CGFloat = 484
+    static let stripHeight: CGFloat = 528
 
     @State private var dropTargetSlot: ChannelDSPSlot?
     @State private var isRenaming = false
@@ -401,6 +403,9 @@ struct ChannelStripView: View {
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if !channel.isStereo {
+                    inputRow
+                }
             }
 
             if !channel.isStereo {
@@ -502,6 +507,7 @@ struct ChannelStripView: View {
                     )
             }
             .buttonStyle(.plain)
+            .help("Mutes the whole strip. To punch a cough, select this strip and Shift-drag on the waveform.")
 
             VStack(spacing: 2) {
                 Text("PAN")
@@ -525,6 +531,41 @@ struct ChannelStripView: View {
                 .shadow(color: isSelected ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
         )
         .onChange(of: channel) { _, _ in onChange() }
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 4) {
+            Text("IN")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+            Picker(
+                "Input",
+                selection: Binding(
+                    get: { channel.inputChannel.map { $0 + 1 } ?? 0 },
+                    set: { channel.inputChannel = $0 == 0 ? nil : $0 - 1 }
+                )
+            ) {
+                Text("—").tag(0)
+                if hardwareInputChannels > 0 {
+                    ForEach(1...hardwareInputChannels, id: \.self) { n in
+                        Text("\(n)").tag(n)
+                    }
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+            .disabled(isRecording || hardwareInputChannels <= 0)
+            .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through Mixer.")
+            if isRecording, channel.inputChannel != nil {
+                Text("REC")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.bgBottom)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(MixerTheme.danger))
+            }
+        }
     }
 
     @ViewBuilder
@@ -611,10 +652,20 @@ struct TimelineWaveformView: View {
     var channelName: String
     var currentTime: String
     var duration: String
+    var muteSpans: [(Double, Double)] = []
     var onSeek: (Double) -> Void
+    var onPaintMute: (Double, Double) -> Void = { _, _ in }
+    var onClearMute: (Double, Double) -> Void = { _, _ in }
 
     @State private var zoom: Double = 1
     @State private var start: Double = 0
+    @State private var dragKind: WaveDragKind?
+    @State private var dragStart: Double?
+    @State private var dragCurrent: Double?
+
+    private enum WaveDragKind {
+        case seek, mute, clear
+    }
 
     private var window: Double { 1 / max(1, zoom) }
 
@@ -681,6 +732,18 @@ struct TimelineWaveformView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+                    ForEach(Array(muteSpans.enumerated()), id: \.offset) { _, span in
+                        muteOverlay(span: span, width: w, color: MixerTheme.danger.opacity(0.32))
+                    }
+
+                    if let kind = dragKind, kind != .seek, let a = dragStart, let b = dragCurrent {
+                        muteOverlay(
+                            span: (min(a, b), max(a, b)),
+                            width: w,
+                            color: kind == .mute ? MixerTheme.danger.opacity(0.45) : MixerTheme.lime.opacity(0.35)
+                        )
+                    }
+
                     if localPlayhead >= 0, localPlayhead <= 1 {
                         Rectangle()
                             .fill(MixerTheme.lime)
@@ -694,8 +757,39 @@ struct TimelineWaveformView: View {
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
-                                    let tVis = max(0, min(1, value.location.x / max(w, 1)))
-                                    onSeek(start + tVis * window)
+                                    let t = xToNormalized(value.location.x, width: w)
+                                    if dragKind == nil {
+                                        let flags = NSEvent.modifierFlags
+                                        if flags.contains(.shift) {
+                                            dragKind = .mute
+                                        } else if flags.contains(.option) {
+                                            dragKind = .clear
+                                        } else {
+                                            dragKind = .seek
+                                        }
+                                        dragStart = t
+                                    }
+                                    dragCurrent = t
+                                    if dragKind == .seek {
+                                        onSeek(t)
+                                    }
+                                }
+                                .onEnded { value in
+                                    let t = xToNormalized(value.location.x, width: w)
+                                    let a = dragStart ?? t
+                                    let b = t
+                                    let kind = dragKind
+                                    dragKind = nil
+                                    dragStart = nil
+                                    dragCurrent = nil
+                                    let minNorm = (3.0 / max(Double(w), 1)) * window
+                                    if kind == .mute, abs(b - a) >= minNorm {
+                                        onPaintMute(a, b)
+                                    } else if kind == .clear, abs(b - a) >= minNorm {
+                                        onClearMute(a, b)
+                                    } else {
+                                        onSeek(b)
+                                    }
                                 }
                         )
                         .overlay {
@@ -706,7 +800,7 @@ struct TimelineWaveformView: View {
                 }
             }
             .frame(height: 88)
-            .help("Scroll or pinch to zoom · − / + / RESET also work")
+            .help("Click to seek · Shift-drag to mute a cough (silence, same length) · Option-drag to clear · scroll or pinch to zoom")
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
@@ -717,6 +811,27 @@ struct TimelineWaveformView: View {
         }
         .padding(12)
         .mixerPanel()
+    }
+
+    @ViewBuilder
+    private func muteOverlay(span: (Double, Double), width w: CGFloat, color: Color) -> some View {
+        let left = (span.0 - start) / window
+        let right = (span.1 - start) / window
+        let lo = max(0.0, min(1.0, left))
+        let hi = max(0.0, min(1.0, right))
+        if hi > lo {
+            Rectangle()
+                .fill(color)
+                .frame(width: max(1, CGFloat(hi - lo) * w))
+                .frame(maxHeight: .infinity)
+                .offset(x: CGFloat(lo) * w)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func xToNormalized(_ x: CGFloat, width w: CGFloat) -> Double {
+        let tVis = max(0, min(1, x / max(w, 1)))
+        return start + tVis * window
     }
 
     private func nudgeZoom(_ factor: Double) {

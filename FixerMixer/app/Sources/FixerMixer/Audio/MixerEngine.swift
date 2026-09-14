@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
 final class MixerEngine: @unchecked Sendable {
@@ -35,6 +36,7 @@ final class MixerEngine: @unchecked Sendable {
     var onMeters: (([Float], [Float], Float, Float, [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
     var onPlayhead: ((Int) -> Void)?
     var onPlaybackEnded: (() -> Void)?
+    var onSessionLength: ((Int) -> Void)?
 
     private var meterPre: [Float] = []
     private var meterPost: [Float] = []
@@ -50,6 +52,21 @@ final class MixerEngine: @unchecked Sendable {
     private var cachedMusicPeaks: [Float] = []
     private var cachedMasterPeaks: [Float] = []
     private let waveformBinCount = 2048
+
+    private var voiceMuteSpans: [[MuteSpan]] = []
+    private var musicMuteSpans: [MuteSpan] = []
+    private var recording = false
+    /// Voice index → hardware input channel (0-based). Empty = not recording that strip.
+    private var recordMap: [Int: Int] = [:]
+    private var inputDeviceUID: String?
+    private let recLock = NSLock()
+    private var recPending: [Float] = []
+    private var recPendingChannels = 1
+    private var recConverter: AVAudioConverter?
+    private var recSourceFormat: AVAudioFormat?
+    private var recDestFormat: AVAudioFormat?
+    private var recSilentMixer: AVAudioMixerNode?
+    private var lengthEmitCounter = 0
 
     private var meterSlotCount: Int { voiceCount + 1 } // last slot always music
 
@@ -145,7 +162,13 @@ final class MixerEngine: @unchecked Sendable {
         voiceBuffers.reserveCapacity(voiceURLs.count)
 
         for (i, url) in voiceURLs.enumerated() {
-            guard let url else { continue }
+            let num = speakerNumbers.indices.contains(i) ? speakerNumbers[i] : (i + 1)
+            self.speakerNumbers.append(num)
+            self.stemNames.append("Speaker_\(num)")
+            guard let url else {
+                voiceBuffers.append([])
+                continue
+            }
             let buf = try MixerAudioIO.load(url: url, targetSampleRate: rate)
             if let r = rate, abs(r - buf.sampleRate) > 0.5 {
                 throw MixerError.loadFailed("Sample rate mismatch in \(url.lastPathComponent)")
@@ -162,9 +185,6 @@ final class MixerEngine: @unchecked Sendable {
                 mono.append(sum / Float(ch))
             }
             voiceBuffers.append(mono)
-            let num = speakerNumbers.indices.contains(i) ? speakerNumbers[i] : (i + 1)
-            self.speakerNumbers.append(num)
-            self.stemNames.append("Speaker_\(num)")
             frames = max(frames, mono.count)
         }
 
@@ -194,6 +214,12 @@ final class MixerEngine: @unchecked Sendable {
             hasMusicTrack = true
         }
 
+        for i in voiceBuffers.indices {
+            if voiceBuffers[i].count < frames {
+                voiceBuffers[i].append(contentsOf: repeatElement(Float(0), count: frames - voiceBuffers[i].count))
+            }
+        }
+
         voiceCount = voiceBuffers.count
         sampleRate = rate ?? sampleRateHint ?? 44100
         frameCount = frames
@@ -214,6 +240,60 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.reset()
         masterComp.reset()
         rebuildWaveformCache()
+    }
+
+    func prepareBlankSession(voiceCount: Int, sampleRate: Double) {
+        stop()
+        lock.lock()
+        defer { lock.unlock() }
+        let n = max(1, voiceCount)
+        voiceBuffers = Array(repeating: [], count: n)
+        speakerNumbers = Array(1...n)
+        stemNames = (1...n).map { "SPK \($0)" }
+        musicBuffer = []
+        musicChannels = 2
+        hasMusicTrack = false
+        self.voiceCount = n
+        self.sampleRate = sampleRate
+        frameCount = 0
+        playhead = 0
+        processors = (0..<n).map { _ in ChannelProcessor(isStereo: false, hasVoiceFX: true) }
+        musicProcessor = ChannelProcessor(isStereo: true, hasVoiceFX: false)
+        for i in processors.indices {
+            processors[i].configure(sampleRate: sampleRate)
+            processors[i].reset()
+        }
+        musicProcessor.configure(sampleRate: sampleRate)
+        meterPre = Array(repeating: 0, count: meterSlotCount)
+        meterPost = Array(repeating: 0, count: meterSlotCount)
+        autoBalancer.resize(to: n)
+        autoBalancer.reset()
+        masterComp.reset()
+        voiceMuteSpans = Array(repeating: [], count: n)
+        musicMuteSpans = []
+        rebuildWaveformCache()
+    }
+
+    func appendSilentVoice(speakerNumber: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        let silent = [Float](repeating: 0, count: frameCount)
+        voiceBuffers.append(silent)
+        speakerNumbers.append(speakerNumber)
+        stemNames.append("SPK \(speakerNumber)")
+        voiceCount = voiceBuffers.count
+        var p = ChannelProcessor(isStereo: false, hasVoiceFX: true)
+        p.configure(sampleRate: sampleRate)
+        processors.append(p)
+        voiceMuteSpans.append([])
+        autoBalancer.resize(to: voiceCount)
+        rebuildWaveformCache()
+    }
+
+    func rebuildPeaks() {
+        lock.lock()
+        rebuildWaveformCache()
+        lock.unlock()
     }
 
     private func rebuildWaveformCache() {
@@ -323,18 +403,32 @@ final class MixerEngine: @unchecked Sendable {
         musicProcessor.dspOrder = music.dspOrder.isEmpty ? ChannelDSPSlot.musicDefault : music.dspOrder
         musicProcessor.configure(sampleRate: sampleRate)
         stemNames = voices.map(\.bounceStemBaseName)
+        voiceMuteSpans = voices.map(\.muteSpans)
+        musicMuteSpans = music.muteSpans
+        recordMap = [:]
+        for (index, voice) in voices.enumerated() {
+            if let ch = voice.inputChannel {
+                recordMap[index] = ch
+            }
+        }
     }
 
-    func start(fromBeginning: Bool = false) throws {
+    func start(fromBeginning: Bool = false, recording: Bool = false, inputDeviceUID: String? = nil) throws {
         lock.lock()
-        guard frameCount > 0 else {
+        if !recording, frameCount <= 0 {
             lock.unlock()
-            throw MixerError.engine("Load tracks first.")
+            throw MixerError.engine("Load tracks first, or start a new session and Record.")
         }
+        if recording, recordMap.isEmpty {
+            lock.unlock()
+            throw MixerError.engine("Pick an input on a speaker strip (IN 1, IN 2…) before Record.")
+        }
+        self.recording = recording
+        self.inputDeviceUID = inputDeviceUID
         if fromBeginning {
             playhead = 0
         }
-        if playhead >= frameCount {
+        if !recording, playhead >= frameCount {
             playhead = 0
         }
         for i in processors.indices {
@@ -346,10 +440,17 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
+        recLock.lock()
+        recPending = []
+        recLock.unlock()
+        lengthEmitCounter = 0
         lock.unlock()
 
         if audioEngine != nil {
             stopKeepingPlayhead()
+            lock.lock()
+            self.recording = recording
+            lock.unlock()
         }
 
         let engine = AVAudioEngine()
@@ -373,14 +474,24 @@ final class MixerEngine: @unchecked Sendable {
             var post = Array(repeating: Float(0), count: slots)
             var mL: Float = 0
             var mR: Float = 0
+            var total = self.frameCount
+            let n = Int(frameCount)
+
+            if self.recording {
+                self.ensureCapacityLocked(head + n)
+                self.consumeRecordLocked(from: head, frames: n)
+                total = self.frameCount
+            }
+
+            // Copy buffers after the record write so CoW does not play a stale take.
             let voices = self.voiceBuffers
             let music = self.musicBuffer
             let musicCh = self.musicChannels
-            let total = self.frameCount
             let master = self.masterGain
             let voiceN = self.voiceCount
             let musicMeterIdx = voiceN
-            let n = Int(frameCount)
+            let fadeFrames = MuteSpanStore.fadeFrames(sampleRate: self.sampleRate)
+            let liveRecord = self.recording
 
             for i in 0..<n {
                 var mixL: Float = 0
@@ -390,7 +501,14 @@ final class MixerEngine: @unchecked Sendable {
                     var levels = [Float](repeating: 0, count: voiceN)
                     var muted = [Bool](repeating: false, count: voiceN)
                     for c in 0..<voiceN {
-                        let sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                        var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                        if liveRecord, self.recordMap[c] != nil {
+                            // Armed strips write to disk but stay silent in Mixer — monitor on the interface.
+                            sample = 0
+                        } else {
+                            let spans = c < self.voiceMuteSpans.count ? self.voiceMuteSpans[c] : []
+                            sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
+                        }
                         if self.processors.indices.contains(c) {
                             muted[c] = self.processors[c].mute
                             let fx = self.processors[c].processEffects(sample)
@@ -407,7 +525,13 @@ final class MixerEngine: @unchecked Sendable {
                         20 * log10(max(g, 1e-6))
                     }
                     for c in 0..<voiceN {
-                        let sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                        var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                        if liveRecord, self.recordMap[c] != nil {
+                            sample = 0
+                        } else {
+                            let spans = c < self.voiceMuteSpans.count ? self.voiceMuteSpans[c] : []
+                            sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
+                        }
                         if self.processors.indices.contains(c) {
                             let g = autoGains.indices.contains(c) ? autoGains[c] : 1
                             let (l, r) = self.processors[c].finishMono(
@@ -426,12 +550,17 @@ final class MixerEngine: @unchecked Sendable {
                     }
                     let ml: Float
                     let mr: Float
+                    let musicGain = MuteSpanStore.gain(
+                        at: head,
+                        spans: self.musicMuteSpans,
+                        fadeFrames: fadeFrames
+                    )
                     if musicCh >= 2, head * 2 + 1 < music.count {
-                        ml = music[head * 2]
-                        mr = music[head * 2 + 1]
+                        ml = music[head * 2] * musicGain
+                        mr = music[head * 2 + 1] * musicGain
                     } else if head < music.count {
-                        ml = music[head]
-                        mr = music[head]
+                        ml = music[head] * musicGain
+                        mr = music[head] * musicGain
                     } else {
                         ml = 0
                         mr = 0
@@ -499,7 +628,13 @@ final class MixerEngine: @unchecked Sendable {
             if shouldEmitHead {
                 self.playheadEmitCounter = 0
             }
-            let ended = head >= total
+            let ended = !self.recording && head >= total
+            let emitLength = self.recording && (self.lengthEmitCounter >= Int(self.sampleRate / 4))
+            if emitLength { self.lengthEmitCounter = 0 }
+            let newLength = self.frameCount
+            if self.recording {
+                self.lengthEmitCounter += n
+            }
             self.lock.unlock()
 
             if shouldEmit {
@@ -510,6 +645,9 @@ final class MixerEngine: @unchecked Sendable {
             }
             if shouldEmitHead {
                 self.onPlayhead?(emitHead)
+            }
+            if emitLength {
+                self.onSessionLength?(newLength)
             }
             if ended {
                 DispatchQueue.main.async {
@@ -523,10 +661,18 @@ final class MixerEngine: @unchecked Sendable {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 1
+        if recording {
+            try attachSilentInput(engine)
+        }
         try engine.start()
         audioEngine = engine
         sourceNode = node
         playing = true
+        if recording {
+            lock.lock()
+            self.recording = true
+            lock.unlock()
+        }
     }
 
     func stop() {
@@ -535,14 +681,32 @@ final class MixerEngine: @unchecked Sendable {
 
     private func stopKeepingPlayhead() {
         lock.lock()
+        let wasRecording = recording
         playing = false
+        recording = false
         lock.unlock()
+        if let engine = audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            recSilentMixer.map { engine.disconnectNodeOutput($0) }
+        }
         audioEngine?.stop()
         if let node = sourceNode {
             audioEngine?.detach(node)
         }
+        if let mixer = recSilentMixer {
+            audioEngine?.detach(mixer)
+        }
         sourceNode = nil
+        recSilentMixer = nil
+        recConverter = nil
+        recSourceFormat = nil
+        recDestFormat = nil
         audioEngine = nil
+        if wasRecording {
+            lock.lock()
+            rebuildWaveformCache()
+            lock.unlock()
+        }
     }
 
     struct BounceResult {
@@ -575,6 +739,9 @@ final class MixerEngine: @unchecked Sendable {
         var busComp = masterComp
         let master = masterGain
         let voiceN = voiceCount
+        let voiceMuteSpansCopy = voiceMuteSpans
+        let musicMuteSpansCopy = musicMuteSpans
+        let fade = MuteSpanStore.fadeFrames(sampleRate: sr)
         lock.unlock()
 
         guard total > 0 else { throw MixerError.engine("Nothing to bounce.") }
@@ -607,7 +774,9 @@ final class MixerEngine: @unchecked Sendable {
             var levels = [Float](repeating: 0, count: voiceN)
             var muted = [Bool](repeating: false, count: voiceN)
             for c in 0..<voiceN {
-                let sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
+                let spans = c < voiceMuteSpansCopy.count ? voiceMuteSpansCopy[c] : []
+                sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fade)
                 muted[c] = procs[c].mute
                 let fx = procs[c].processEffects(sample)
                 fxSamples[c] = fx
@@ -632,12 +801,13 @@ final class MixerEngine: @unchecked Sendable {
             }
             let ml: Float
             let mr: Float
+            let musicGain = MuteSpanStore.gain(at: head, spans: musicMuteSpansCopy, fadeFrames: fade)
             if musicCh >= 2, head * 2 + 1 < music.count {
-                ml = music[head * 2]
-                mr = music[head * 2 + 1]
+                ml = music[head * 2] * musicGain
+                mr = music[head * 2 + 1] * musicGain
             } else if head < music.count {
-                ml = music[head]
-                mr = music[head]
+                ml = music[head] * musicGain
+                mr = music[head] * musicGain
             } else {
                 ml = 0
                 mr = 0
@@ -707,5 +877,203 @@ final class MixerEngine: @unchecked Sendable {
             fileCount += 1
         }
         return BounceResult(folder: folder, fileCount: fileCount)
+    }
+
+    /// Writes each non-empty speaker buffer as `Speaker_N.wav` so the folder can be dropped later.
+    func writeWorkingTakes(to folder: URL) throws -> [Int: URL] {
+        lock.lock()
+        let sr = sampleRate
+        let voices = voiceBuffers
+        let nums = speakerNumbers
+        lock.unlock()
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var written: [Int: URL] = [:]
+        for (i, buf) in voices.enumerated() {
+            guard !buf.isEmpty else { continue }
+            let num = nums.indices.contains(i) ? nums[i] : (i + 1)
+            let url = folder.appendingPathComponent("Speaker_\(num).wav")
+            try WAVIO.write(
+                url: url,
+                buffer: .init(sampleRate: sr, channelCount: 1, samples: buf)
+            )
+            written[i] = url
+        }
+        return written
+    }
+
+    private func ensureCapacityLocked(_ frames: Int) {
+        let need = max(0, frames)
+        guard need > 0 else { return }
+        for i in voiceBuffers.indices {
+            if voiceBuffers[i].count < need {
+                voiceBuffers[i].append(contentsOf: repeatElement(Float(0), count: need - voiceBuffers[i].count))
+            }
+        }
+        if hasMusicTrack {
+            let stereoNeed = need * max(1, musicChannels)
+            if musicBuffer.count < stereoNeed {
+                musicBuffer.append(contentsOf: repeatElement(Float(0), count: stereoNeed - musicBuffer.count))
+            }
+        }
+        frameCount = max(frameCount, need)
+    }
+
+    private func consumeRecordLocked(from head: Int, frames n: Int) {
+        recLock.lock()
+        let pending = recPending
+        let ch = max(1, recPendingChannels)
+        recPending.removeAll(keepingCapacity: true)
+        recLock.unlock()
+        let pendingFrames = ch > 0 ? pending.count / ch : 0
+        guard n > 0 else { return }
+        if pendingFrames > n {
+            recLock.lock()
+            recPending = Array(pending[(n * ch)...])
+            recPendingChannels = ch
+            recLock.unlock()
+        }
+        for i in 0..<n {
+            let src = i < pendingFrames ? i : -1
+            for (voiceIndex, hwCh) in recordMap {
+                guard voiceBuffers.indices.contains(voiceIndex) else { continue }
+                let dest = head + i
+                guard dest < voiceBuffers[voiceIndex].count else { continue }
+                var sample: Float = 0
+                if src >= 0 {
+                    let idx = src * ch + min(max(0, hwCh), ch - 1)
+                    if idx < pending.count {
+                        sample = pending[idx]
+                    }
+                }
+                voiceBuffers[voiceIndex][dest] = sample
+            }
+        }
+    }
+
+    private func attachSilentInput(_ engine: AVAudioEngine) throws {
+        applyInputDevice(engine, uid: inputDeviceUID)
+        let input = engine.inputNode
+        let hwFormat = input.inputFormat(forBus: 0)
+        guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
+            throw MixerError.engine("No input from that interface. Pick another INPUT.")
+        }
+        let silent = AVAudioMixerNode()
+        engine.attach(silent)
+        engine.connect(input, to: silent, format: hwFormat)
+        let silentOut = AVAudioFormat(standardFormatWithSampleRate: hwFormat.sampleRate, channels: 2)
+        engine.connect(silent, to: engine.mainMixerNode, format: silentOut)
+        silent.outputVolume = 0
+        recSilentMixer = silent
+
+        recSourceFormat = hwFormat
+        recDestFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: sampleRate,
+            channels: hwFormat.channelCount,
+            interleaved: true
+        )
+        if let dest = recDestFormat, abs(hwFormat.sampleRate - sampleRate) > 0.5 || hwFormat.channelCount != dest.channelCount || !hwFormat.isInterleaved {
+            recConverter = AVAudioConverter(from: hwFormat, to: dest)
+        } else {
+            recConverter = nil
+        }
+
+        recLock.lock()
+        recPending = []
+        recPendingChannels = Int(hwFormat.channelCount)
+        recLock.unlock()
+
+        input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
+            self?.ingestRecordBuffer(buffer)
+        }
+    }
+
+    private func applyInputDevice(_ engine: AVAudioEngine, uid: String?) {
+        guard let uid,
+              let device = MixerInputDevices.list().first(where: { $0.uid == uid })
+        else { return }
+        var id = device.id
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard let audioUnit = engine.inputNode.audioUnit else { return }
+        _ = AudioUnitSetProperty(
+            audioUnit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &id,
+            size
+        )
+    }
+
+    private func ingestRecordBuffer(_ buffer: AVAudioPCMBuffer) {
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return }
+        let ch = Int(buffer.format.channelCount)
+        var interleaved = [Float](repeating: 0, count: frames * max(1, ch))
+        if let planar = buffer.floatChannelData {
+            for f in 0..<frames {
+                for c in 0..<ch {
+                    interleaved[f * ch + c] = planar[c][f]
+                }
+            }
+        } else if buffer.format.isInterleaved, let data = buffer.audioBufferList.pointee.mBuffers.mData {
+            let ptr = data.assumingMemoryBound(to: Float.self)
+            interleaved = Array(UnsafeBufferPointer(start: ptr, count: frames * ch))
+        }
+
+        var out = interleaved
+        var outCh = ch
+        if let converter = recConverter, let dest = recDestFormat, let src = recSourceFormat,
+           let srcBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: AVAudioFrameCount(frames))
+        {
+            srcBuf.frameLength = AVAudioFrameCount(frames)
+            if let dstData = srcBuf.floatChannelData {
+                for c in 0..<ch {
+                    for f in 0..<frames {
+                        dstData[c][f] = interleaved[f * ch + c]
+                    }
+                }
+            }
+            let ratio = dest.sampleRate / src.sampleRate
+            let outFrames = max(1, Int((Double(frames) * ratio).rounded(.up)) + 4)
+            guard let destBuf = AVAudioPCMBuffer(pcmFormat: dest, frameCapacity: AVAudioFrameCount(outFrames)) else {
+                recLock.lock()
+                recPending.append(contentsOf: interleaved)
+                recPendingChannels = ch
+                recLock.unlock()
+                return
+            }
+            var error: NSError?
+            var consumed = false
+            converter.convert(to: destBuf, error: &error) { _, status in
+                if consumed {
+                    status.pointee = .endOfStream
+                    return nil
+                }
+                consumed = true
+                status.pointee = .haveData
+                return srcBuf
+            }
+            if error == nil, destBuf.frameLength > 0 {
+                let nf = Int(destBuf.frameLength)
+                outCh = Int(dest.channelCount)
+                if dest.isInterleaved, let data = destBuf.audioBufferList.pointee.mBuffers.mData {
+                    let ptr = data.assumingMemoryBound(to: Float.self)
+                    out = Array(UnsafeBufferPointer(start: ptr, count: nf * outCh))
+                } else if let planar = destBuf.floatChannelData {
+                    out = [Float](repeating: 0, count: nf * outCh)
+                    for f in 0..<nf {
+                        for c in 0..<outCh {
+                            out[f * outCh + c] = planar[c][f]
+                        }
+                    }
+                }
+            }
+        }
+
+        recLock.lock()
+        recPending.append(contentsOf: out)
+        recPendingChannels = outCh
+        recLock.unlock()
     }
 }

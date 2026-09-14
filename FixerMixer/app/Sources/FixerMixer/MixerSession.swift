@@ -1,4 +1,5 @@
 import AppKit
+import AVFoundation
 import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
@@ -205,6 +206,10 @@ struct ChannelStripState: Identifiable, Equatable {
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
     var prePeak: Float = 0
     var postPeak: Float = 0
+    /// Hardware input channel (0-based) this strip records. Nil = not armed.
+    var inputChannel: Int? = nil
+    /// Painted silence ranges. The show does not get shorter.
+    var muteSpans: [MuteSpan] = []
 
     static let musicID = 1000
     static let masterID = 2000
@@ -224,6 +229,8 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.para == rhs.para
             && lhs.voice == rhs.voice
             && lhs.dspOrder == rhs.dspOrder
+            && lhs.inputChannel == rhs.inputChannel
+            && lhs.muteSpans == rhs.muteSpans
     }
 
     static func voice(slot: Int, speakerNumber: Int, name: String? = nil) -> ChannelStripState {
@@ -293,9 +300,12 @@ final class MixerSession: ObservableObject {
     /// Live auto-mix gains in dB (one per voice). Fader display = this + autoBiasDb.
     @Published var autoGainDb: [Float] = []
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
-    @Published var status: String = "Drop audio files or a Podcast Stripper _speakers folder."
+    @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
     @Published var isPlaying = false
+    @Published var isRecording = false
     @Published var isBouncing = false
+    @Published var inputDevices: [MixerInputDevice] = []
+    @Published var selectedInputUID: String?
     @Published var sourceFolder: URL?
     /// Last mix JSON the user saved or opened, used as the Save panel default.
     @Published private(set) var lastMixURL: URL?
@@ -342,8 +352,222 @@ final class MixerSession: ObservableObject {
         engine.onPlaybackEnded = { [weak self] in
             Task { @MainActor in
                 self?.isPlaying = false
+                self?.isRecording = false
                 self?.status = "Reached end."
             }
+        }
+        engine.onSessionLength = { [weak self] frames in
+            Task { @MainActor in
+                guard let self else { return }
+                self.frameCount = frames
+                self.refreshWaveform()
+            }
+        }
+    }
+
+    var selectedInputChannelCount: Int {
+        MixerInputDevices.device(uid: selectedInputUID ?? "", in: inputDevices)?.inputChannels
+            ?? inputDevices.first?.inputChannels
+            ?? 0
+    }
+
+    var hasSession: Bool { !voices.isEmpty }
+
+    func refreshInputDevices() {
+        inputDevices = MixerInputDevices.list()
+        if selectedInputUID == nil || MixerInputDevices.device(uid: selectedInputUID ?? "", in: inputDevices) == nil {
+            selectedInputUID = MixerInputDevices.defaultInputUID()
+                ?? inputDevices.first?.uid
+        }
+    }
+
+    func newRecordSession() {
+        if isPlaying || isRecording {
+            engine.stop()
+            isPlaying = false
+            isRecording = false
+        }
+        refreshInputDevices()
+        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: ", ", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+        let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
+        let folder = desktop.appendingPathComponent("FixerMixer-\(stamp)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        engine.prepareBlankSession(voiceCount: 2, sampleRate: 48_000)
+        voices = [
+            .voice(slot: 0, speakerNumber: 1, name: "SPK 1"),
+            .voice(slot: 1, speakerNumber: 2, name: "SPK 2"),
+        ]
+        if selectedInputChannelCount >= 1 { voices[0].inputChannel = 0 }
+        if selectedInputChannelCount >= 2 { voices[1].inputChannel = 1 }
+        hasMusic = false
+        music = .music()
+        sourceFolder = folder
+        lastMixURL = nil
+        sampleRate = engine.sampleRate
+        frameCount = 0
+        playheadFrame = 0
+        selectedChannelID = voices[0].id
+        autoBalanceEnabled = false
+        autoGainDb = []
+        refreshWaveform()
+        syncRTASource()
+        syncParamsToEngine()
+        status = "New session on the Desktop. Monitor through your interface — Mixer does not play the mic back. Arm IN 1 / IN 2, then Record."
+    }
+
+    func addBlankStrip() {
+        guard voices.count < StripperFolderLoader.maxSpeakers else {
+            status = "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
+            return
+        }
+        if voices.isEmpty {
+            newRecordSession()
+            return
+        }
+        if isPlaying || isRecording {
+            engine.stop()
+            isPlaying = false
+            isRecording = false
+        }
+        let n = voices.count + 1
+        var ch = ChannelStripState.voice(slot: voices.count, speakerNumber: n, name: "SPK \(n)")
+        if selectedInputChannelCount >= n {
+            ch.inputChannel = n - 1
+        }
+        engine.appendSilentVoice(speakerNumber: n)
+        voices.append(ch)
+        sampleRate = engine.sampleRate
+        frameCount = engine.frameCount
+        selectedChannelID = ch.id
+        refreshWaveform()
+        syncParamsToEngine()
+        status = "Added \(ch.name). Pick IN on the strip to record it."
+    }
+
+    func toggleRecord() {
+        if isRecording {
+            stopRecord()
+            return
+        }
+        refreshInputDevices()
+        guard voices.contains(where: { $0.inputChannel != nil }) else {
+            status = "Pick IN 1 / IN 2 on a speaker strip, then Record. Monitor through your interface."
+            return
+        }
+        if voices.isEmpty {
+            newRecordSession()
+        }
+        requestMic { [weak self] granted in
+            guard let self else { return }
+            guard granted else {
+                self.status = "Microphone access is off. System Settings → Privacy & Security → Microphone → Fixer Mixer."
+                return
+            }
+            self.syncParamsToEngine()
+            do {
+                try self.engine.start(
+                    fromBeginning: false,
+                    recording: true,
+                    inputDeviceUID: self.selectedInputUID
+                )
+                self.isPlaying = true
+                self.isRecording = true
+                self.status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through Mixer."
+            } catch {
+                self.status = error.localizedDescription
+            }
+        }
+    }
+
+    func stopRecord() {
+        engine.stop()
+        isPlaying = false
+        isRecording = false
+        frameCount = engine.frameCount
+        playheadFrame = engine.currentFrame()
+        engine.rebuildPeaks()
+        refreshWaveform()
+        if let folder = sourceFolder {
+            do {
+                let written = try engine.writeWorkingTakes(to: folder)
+                for (index, url) in written {
+                    if voices.indices.contains(index) {
+                        voices[index].fileURL = url
+                    }
+                }
+                let mixURL = MixerMixFile.sidecarURL(in: folder)
+                try MixerMixFile.write(MixerMixFile.make(from: self), to: mixURL)
+                lastMixURL = mixURL
+                status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through Mixer."
+            } catch {
+                status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription)"
+            }
+        } else {
+            status = "Recorded in this window. Export to keep it. Shift-drag the waveform to mute a cough."
+        }
+    }
+
+    func paintMute(normalizedFrom: Double, to normalizedTo: Double) {
+        guard selectedChannelID != ChannelStripState.masterID else {
+            status = "Select a speaker strip, then Shift-drag the waveform to mute a cough."
+            return
+        }
+        guard frameCount > 1 else { return }
+        let a = Int((min(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
+        let b = Int((max(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
+        guard b > a else { return }
+        let span = MuteSpan(startFrame: a, endFrame: b)
+        if selectedChannelID == ChannelStripState.musicID {
+            music.muteSpans = MuteSpanStore.adding(span, to: music.muteSpans)
+        } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
+            voices[idx].muteSpans = MuteSpanStore.adding(span, to: voices[idx].muteSpans)
+        }
+        syncParamsToEngine()
+        persistMixIfPossible()
+        status = "Muted that span on \(selectedChannelName) (silence, same length). Option-drag to clear."
+    }
+
+    func clearMute(normalizedFrom: Double, to normalizedTo: Double) {
+        guard selectedChannelID != ChannelStripState.masterID else {
+            status = "Select a speaker strip, then Option-drag to clear a mute."
+            return
+        }
+        guard frameCount > 1 else { return }
+        let a = Int((min(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
+        let b = Int((max(normalizedFrom, normalizedTo) * Double(frameCount - 1)).rounded())
+        guard b > a else { return }
+        let span = MuteSpan(startFrame: a, endFrame: b)
+        if selectedChannelID == ChannelStripState.musicID {
+            music.muteSpans = MuteSpanStore.removing(span, from: music.muteSpans)
+        } else if let idx = voices.firstIndex(where: { $0.id == selectedChannelID }) {
+            voices[idx].muteSpans = MuteSpanStore.removing(span, from: voices[idx].muteSpans)
+        }
+        syncParamsToEngine()
+        persistMixIfPossible()
+        status = "Unmuted that span on \(selectedChannelName)."
+    }
+
+    private func requestMic(_ body: @escaping (Bool) -> Void) {
+        AVAudioApplication.requestRecordPermission { granted in
+            Task { @MainActor in
+                body(granted)
+            }
+        }
+    }
+
+    private func persistMixIfPossible() {
+        guard let folder = sourceFolder else { return }
+        let dest = lastMixURL ?? MixerMixFile.sidecarURL(in: folder)
+        do {
+            try MixerMixFile.write(MixerMixFile.make(from: self), to: dest)
+            lastMixURL = dest
+        } catch {
+            // Keep the paint / record status line; UPDATE MIX still works.
         }
     }
 
@@ -439,11 +663,26 @@ final class MixerSession: ObservableObject {
         return "—"
     }
 
+    var selectedMuteSpansNormalized: [(Double, Double)] {
+        guard frameCount > 1 else { return [] }
+        let spans: [MuteSpan]
+        if selectedChannelID == ChannelStripState.musicID {
+            spans = music.muteSpans
+        } else if let v = voices.first(where: { $0.id == selectedChannelID }) {
+            spans = v.muteSpans
+        } else {
+            return []
+        }
+        let denom = Double(frameCount - 1)
+        return spans.map { (Double($0.startFrame) / denom, Double($0.endFrame) / denom) }
+    }
+
     func loadStripperFolder(_ folder: URL) {
         do {
-            if isPlaying {
+            if isPlaying || isRecording {
                 engine.stop()
                 isPlaying = false
+                isRecording = false
             }
             let mapped = try StripperFolderLoader.load(folder: folder)
             voices = mapped.speakers.enumerated().map { slot, item in
@@ -538,9 +777,10 @@ final class MixerSession: ObservableObject {
             return
         }
 
-        if isPlaying {
+        if isPlaying || isRecording {
             engine.stop()
             isPlaying = false
+            isRecording = false
         }
 
         var nextVoices = append ? voices : []
@@ -608,6 +848,8 @@ final class MixerSession: ObservableObject {
             ch.para = kept.para
             ch.voice = kept.voice
             ch.dspOrder = kept.dspOrder
+            ch.inputChannel = kept.inputChannel
+            ch.muteSpans = kept.muteSpans
             nextVoices[i] = ch
         }
 
@@ -677,6 +919,10 @@ final class MixerSession: ObservableObject {
     }
 
     func togglePlay() {
+        if isRecording {
+            stopRecord()
+            return
+        }
         syncParamsToEngine()
         if isPlaying {
             engine.stop()
@@ -695,6 +941,10 @@ final class MixerSession: ObservableObject {
     }
 
     func restartPlay() {
+        if isRecording {
+            stopRecord()
+            return
+        }
         syncParamsToEngine()
         do {
             try engine.start(fromBeginning: true)
@@ -709,8 +959,8 @@ final class MixerSession: ObservableObject {
     /// Overwrite the current mix file with no naming window.
     /// First time writes `FixerMixer.mix.json` in the `_speakers` folder.
     func updateMix() {
-        guard frameCount > 0, let folder = sourceFolder else {
-            status = "Load tracks before saving a mix."
+        guard (frameCount > 0 || !voices.isEmpty), let folder = sourceFolder else {
+            status = "Load tracks or start a session before saving a mix."
             return
         }
         let dest = lastMixURL ?? MixerMixFile.sidecarURL(in: folder)
@@ -719,8 +969,8 @@ final class MixerSession: ObservableObject {
 
     /// Opens a Save panel so you pick the folder and file name for the mix JSON.
     func saveMix() {
-        guard frameCount > 0, let folder = sourceFolder else {
-            status = "Load tracks before saving a mix."
+        guard (frameCount > 0 || !voices.isEmpty), let folder = sourceFolder else {
+            status = "Load tracks or start a session before saving a mix."
             return
         }
         let panel = NSSavePanel()
@@ -873,9 +1123,10 @@ final class MixerSession: ObservableObject {
             return
         }
         isBouncing = true
-        if isPlaying {
+        if isPlaying || isRecording {
             engine.stop()
             isPlaying = false
+            isRecording = false
         }
         status = "Exporting…"
         syncParamsToEngine()
