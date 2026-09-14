@@ -279,7 +279,8 @@ struct ContentView: View {
                 selectedChannelPane
             }
         }
-        .frame(maxWidth: .infinity, height: ChannelStripView.stripHeight + 8)
+        .frame(maxWidth: .infinity)
+        .frame(height: ChannelStripView.stripHeight + 8)
     }
 
     /// Speaker + stereo strips are 156pt; master is 110pt. Extra strips scroll sideways.
