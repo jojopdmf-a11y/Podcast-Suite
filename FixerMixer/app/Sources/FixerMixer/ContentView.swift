@@ -374,17 +374,17 @@ struct ContentView: View {
                     showAllWaveforms = false
                 } label: {
                     Text(session.selectedChannelID == ChannelStripState.masterID ? "SEL●" : "SEL")
-                        .font(.system(size: 7, weight: .bold, design: .rounded))
-                        .tracking(0.3)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 3)
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .tracking(0.4)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
                         .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.bgBottom : MixerTheme.cyan)
                         .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .fill(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.panelRaised)
                         )
                         .overlay(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
                                 .stroke(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
                         )
                 }
