@@ -409,6 +409,7 @@ final class MixerEngine: @unchecked Sendable {
         }
         for i in 0..<voices.count {
             processors[i].mute = voices[i].mute
+            processors[i].solo = voices[i].solo
             // While auto is on, channel fader becomes the relative bias trim
             processors[i].faderDb = autoBalanceEnabled ? voices[i].autoBiasDb : voices[i].faderDb
             processors[i].pan = voices[i].pan
@@ -443,6 +444,7 @@ final class MixerEngine: @unchecked Sendable {
         for i in 0..<stereos.count {
             guard stereoProcessors.indices.contains(i) else { continue }
             stereoProcessors[i].mute = stereos[i].mute
+            stereoProcessors[i].solo = stereos[i].solo
             stereoProcessors[i].faderDb = stereos[i].faderDb
             stereoProcessors[i].pan = stereos[i].pan
             stereoProcessors[i].dspBypass = false
@@ -544,6 +546,7 @@ final class MixerEngine: @unchecked Sendable {
             let voiceN = self.voiceCount
             let fadeFrames = MuteSpanStore.fadeFrames(sampleRate: self.sampleRate)
             let liveRecord = self.recording
+            let anySolo = self.processors.contains(where: \.solo) || self.stereoProcessors.contains(where: \.solo)
 
             for i in 0..<n {
                 var mixL: Float = 0
@@ -562,7 +565,7 @@ final class MixerEngine: @unchecked Sendable {
                             sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
                         }
                         if self.processors.indices.contains(c) {
-                            muted[c] = self.processors[c].mute
+                            muted[c] = self.processors[c].mute || (anySolo && !self.processors[c].solo)
                             let fx = self.processors[c].processEffects(sample)
                             fxSamples[c] = fx
                             levels[c] = abs(fx)
@@ -593,8 +596,10 @@ final class MixerEngine: @unchecked Sendable {
                                 prePeak: &pre[c],
                                 postPeak: &post[c]
                             )
-                            mixL += l
-                            mixR += r
+                            if !anySolo || self.processors[c].solo {
+                                mixL += l
+                                mixR += r
+                            }
                             if !self.rtaIsMusic, !self.rtaIsMaster, c == self.rtaVoiceIndex {
                                 self.rta.push(fxSamples[c] * g)
                             }
@@ -622,8 +627,10 @@ final class MixerEngine: @unchecked Sendable {
                         var postS = meterIdx < post.count ? post[meterIdx] : Float(0)
                         if self.stereoProcessors.indices.contains(s) {
                             let (ol, orr) = self.stereoProcessors[s].processStereo(ml, mr, prePeak: &preS, postPeak: &postS)
-                            mixL += ol
-                            mixR += orr
+                            if !anySolo || self.stereoProcessors[s].solo {
+                                mixL += ol
+                                mixR += orr
+                            }
                             if meterIdx < pre.count { pre[meterIdx] = preS }
                             if meterIdx < post.count { post[meterIdx] = postS }
                             if self.rtaIsMusic, !self.rtaIsMaster, s == self.rtaVoiceIndex {
@@ -826,6 +833,7 @@ final class MixerEngine: @unchecked Sendable {
         for i in 0..<(voiceN + stereoN) { stemBuffers[i].reserveCapacity(total * 2) }
         var mixL = [Float](repeating: 0, count: total)
         var mixR = [Float](repeating: 0, count: total)
+        let anySolo = procs.contains(where: \.solo) || stereoProcs.contains(where: \.solo)
 
         for head in 0..<total {
             var busL: Float = 0
@@ -840,7 +848,7 @@ final class MixerEngine: @unchecked Sendable {
                 var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
                 let spans = c < voiceMuteSpansCopy.count ? voiceMuteSpansCopy[c] : []
                 sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fade)
-                muted[c] = procs[c].mute
+                muted[c] = procs[c].mute || (anySolo && !procs[c].solo)
                 let fx = procs[c].processEffects(sample)
                 fxSamples[c] = fx
                 levels[c] = abs(fx)
@@ -859,8 +867,10 @@ final class MixerEngine: @unchecked Sendable {
                 )
                 stemBuffers[c].append(l)
                 stemBuffers[c].append(r)
-                busL += l
-                busR += r
+                if !anySolo || procs[c].solo {
+                    busL += l
+                    busR += r
+                }
             }
             for s in 0..<stereoN {
                 let ch = max(1, stereoChs.indices.contains(s) ? stereoChs[s] : 2)
@@ -888,8 +898,10 @@ final class MixerEngine: @unchecked Sendable {
                 }
                 stemBuffers[voiceN + s].append(ol)
                 stemBuffers[voiceN + s].append(orr)
-                busL += ol
-                busR += orr
+                if !anySolo || (stereoProcs.indices.contains(s) && stereoProcs[s].solo) {
+                    busL += ol
+                    busR += orr
+                }
             }
             let (cL, cR) = busComp.process(left: busL, right: busR, sampleRate: sr)
             busL = tanhf(cL * master)

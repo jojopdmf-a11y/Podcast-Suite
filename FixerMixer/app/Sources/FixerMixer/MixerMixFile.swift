@@ -37,6 +37,7 @@ enum MixerMixFile {
         var speakerNumber: Int?
         var name: String
         var mute: Bool
+        var solo: Bool?
         var dspBypass: Bool
         var faderDb: Float
         var autoBiasDb: Float
@@ -101,6 +102,7 @@ enum MixerMixFile {
             speakerNumber: ch.speakerNumber,
             name: ch.name,
             mute: ch.mute,
+            solo: ch.solo,
             dspBypass: ch.dspBypass,
             faderDb: ch.faderDb,
             autoBiasDb: ch.autoBiasDb,
@@ -128,6 +130,7 @@ enum MixerMixFile {
     static func apply(_ snap: Strip, to ch: inout ChannelStripState) {
         ch.name = snap.name
         ch.mute = snap.mute
+        ch.solo = snap.solo ?? false
         ch.dspBypass = snap.dspBypass
         ch.faderDb = snap.faderDb
         ch.autoBiasDb = snap.autoBiasDb

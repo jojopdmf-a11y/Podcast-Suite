@@ -193,6 +193,7 @@ struct ChannelStripState: Identifiable, Equatable {
     var speakerNumber: Int? = nil
     var fileURL: URL?
     var mute: Bool = false
+    var solo: Bool = false
     /// Bypass all DSP (EQ + voice FX); fader/pan/mute still apply.
     var dspBypass: Bool = false
     var faderDb: Float = 0
@@ -221,6 +222,7 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.speakerNumber == rhs.speakerNumber
             && lhs.fileURL == rhs.fileURL
             && lhs.mute == rhs.mute
+            && lhs.solo == rhs.solo
             && lhs.dspBypass == rhs.dspBypass
             && lhs.faderDb == rhs.faderDb
             && lhs.autoBiasDb == rhs.autoBiasDb
@@ -893,6 +895,7 @@ final class MixerSession: ObservableObject {
             var ch = ChannelStripState.voice(slot: i, speakerNumber: kept.speakerNumber ?? (i + 1), name: name)
             ch.fileURL = url
             ch.mute = kept.mute
+            ch.solo = kept.solo
             ch.dspBypass = kept.dspBypass
             ch.faderDb = kept.faderDb
             ch.autoBiasDb = kept.autoBiasDb
@@ -910,6 +913,7 @@ final class MixerSession: ObservableObject {
             var bed = ChannelStripState.stereo(slot: i, name: kept.name)
             bed.fileURL = kept.fileURL
             bed.mute = kept.mute
+            bed.solo = kept.solo
             bed.dspBypass = kept.dspBypass
             bed.faderDb = kept.faderDb
             bed.pan = kept.pan

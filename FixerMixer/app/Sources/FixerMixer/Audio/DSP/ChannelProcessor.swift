@@ -84,6 +84,7 @@ struct ChannelProcessor {
     var isStereo: Bool
     var hasVoiceFX: Bool
     var mute: Bool = false
+    var solo: Bool = false
     var faderDb: Float = 0
     var pan: Float = 0
     var dspBypass: Bool = false

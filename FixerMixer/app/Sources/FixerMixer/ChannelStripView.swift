@@ -381,17 +381,17 @@ struct ChannelStripView: View {
                     Spacer(minLength: 0)
                     Button(action: onSelect) {
                         Text(isSelected ? "SEL●" : "SEL")
-                            .font(.system(size: 7, weight: .bold, design: .rounded))
-                            .tracking(0.3)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 3)
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .tracking(0.4)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
                             .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
                             .background(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
                             )
                             .overlay(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
                                     .stroke(isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
                             )
                     }
@@ -488,26 +488,49 @@ struct ChannelStripView: View {
                   ? "Auto Balance rides this fader. Drag to favor/cut this speaker relative to auto."
                   : "Channel level")
 
-            Button {
-                channel.mute.toggle()
-                onChange()
-            } label: {
-                Text(channel.mute ? "MUTED" : "MUTE")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(channel.mute ? MixerTheme.bgBottom : MixerTheme.cyan)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(channel.mute ? MixerTheme.danger : MixerTheme.panelRaised)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
-                    )
+            HStack(spacing: 6) {
+                Button {
+                    channel.mute.toggle()
+                    onChange()
+                } label: {
+                    Text(channel.mute ? "MUTED" : "MUTE")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(channel.mute ? MixerTheme.bgBottom : MixerTheme.cyan)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(channel.mute ? MixerTheme.danger : MixerTheme.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Mutes the whole strip. To punch a cough, select this strip and Shift-drag on the waveform.")
+
+                Button {
+                    channel.solo.toggle()
+                    onChange()
+                } label: {
+                    Text(channel.solo ? "SOLO●" : "SOLO")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(channel.solo ? MixerTheme.bgBottom : MixerTheme.cyan)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(channel.solo ? MixerTheme.meterYellow : MixerTheme.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Hear this strip alone. Turn SOLO on more than one to hear those together. MUTE still silences a strip.")
             }
-            .buttonStyle(.plain)
-            .help("Mutes the whole strip. To punch a cough, select this strip and Shift-drag on the waveform.")
 
             VStack(spacing: 2) {
                 Text("PAN")
