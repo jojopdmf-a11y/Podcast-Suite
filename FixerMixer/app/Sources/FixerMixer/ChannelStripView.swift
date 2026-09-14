@@ -281,6 +281,39 @@ struct BypassToggle: View {
     }
 }
 
+private struct StripReorderDrag: ViewModifier {
+    var enabled: Bool
+    var channelID: Int
+    var onDrop: (Int) -> Bool
+    var onTargeted: (Bool) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .draggable("ch:\(channelID)") {
+                    Text("MOVE")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(MixerTheme.lime)
+                        .foregroundStyle(MixerTheme.bgBottom)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let raw = items.first, raw.hasPrefix("ch:"),
+                          let moved = Int(raw.dropFirst(3)),
+                          moved != channelID else { return false }
+                    return onDrop(moved)
+                } isTargeted: { targeted in
+                    onTargeted(targeted)
+                }
+        } else {
+            content
+        }
+    }
+}
+
 private struct FXChipButton: View {
     var title: String
     var active: Bool
@@ -361,7 +394,13 @@ struct ChannelStripView: View {
     var isRecording: Bool = false
     var onSelect: () -> Void
     var onChange: () -> Void
+    var stripReorderable: Bool = false
+    var isReorderDropTarget: Bool = false
+    var onReorderDrop: ((Int) -> Void)? = nil
+    var onReorderTargeted: ((Bool) -> Void)? = nil
 
+    /// 15% narrower than the original 156pt desk.
+    static let stripWidth: CGFloat = 133
     /// Keeps music strip the same height as full speaker strips.
     static let stripHeight: CGFloat = 528
 
@@ -370,7 +409,7 @@ struct ChannelStripView: View {
     @FocusState private var nameFieldFocused: Bool
 
     private var fxDimmed: Bool { channel.dspBypass }
-    private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 }
+    private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 && !stripReorderable }
     private var canRename: Bool { !channel.isStereo }
 
     var body: some View {
@@ -405,6 +444,19 @@ struct ChannelStripView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if !channel.isStereo {
                     inputRow
+                }
+                if stripReorderable {
+                    Text("DRAG TO REORDER")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .tracking(0.4)
+                        .foregroundStyle(MixerTheme.bgBottom)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(MixerTheme.lime)
+                        )
+                        .help("Drag this strip onto another strip to change order")
                 }
             }
 
@@ -541,17 +593,33 @@ struct ChannelStripView: View {
                     set: { channel.pan = Float($0) }
                 ), in: -1...1)
                 .tint(MixerTheme.lime)
-                .frame(width: 100)
+                .frame(maxWidth: .infinity)
                 .onTapGesture(count: 2) { channel.pan = 0 }
             }
         }
-        .padding(10)
-        .frame(width: 156, height: Self.stripHeight, alignment: .top)
+        .padding(8)
+        .frame(width: Self.stripWidth, height: Self.stripHeight, alignment: .top)
         .mixerPanel(glow: isSelected || channel.fileURL != nil)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? MixerTheme.lime : .clear, lineWidth: 2)
-                .shadow(color: isSelected ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
+                .stroke(
+                    isReorderDropTarget ? MixerTheme.lime : (isSelected ? MixerTheme.lime : .clear),
+                    lineWidth: isReorderDropTarget ? 3 : 2
+                )
+                .shadow(color: (isReorderDropTarget || isSelected) ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
+        )
+        .modifier(
+            StripReorderDrag(
+                enabled: stripReorderable,
+                channelID: channel.id,
+                onDrop: { moved in
+                    onReorderDrop?(moved)
+                    return true
+                },
+                onTargeted: { targeted in
+                    onReorderTargeted?(targeted)
+                }
+            )
         )
         .onChange(of: channel) { _, _ in onChange() }
     }
@@ -829,7 +897,7 @@ struct TimelineWaveformView: View {
                 }
             }
             .frame(height: 88)
-            .help("Click to seek · Shift-drag to mute a cough (silence, same length) · Option-drag to clear · scroll or pinch to zoom")
+            .help("Click to seek · SEL a strip first · Shift-drag to silence that span (show stays this long) · Option-drag to clear · scroll or pinch to zoom")
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)

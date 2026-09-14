@@ -11,6 +11,8 @@ struct ContentView: View {
     @State private var exportItems: [MixerExportItem] = []
     @State private var exportFolder: URL?
     @State private var showAllWaveforms = false
+    @State private var reorderStrips = false
+    @State private var reorderDropID: Int?
 
     var body: some View {
         ZStack {
@@ -185,6 +187,17 @@ struct ContentView: View {
                 Button("ADD STRIP") { session.addBlankStrip() }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Adds an empty speaker strip (up to 8). Pick IN on it to record.")
+                if reorderStrips {
+                    Button("REORDER") { reorderStrips = false }
+                        .buttonStyle(MixerPrimaryButtonStyle())
+                        .disabled(session.isRecording)
+                        .help("Reorder is on. Drag a lime DRAG TO REORDER handle onto another strip. Click again when you are done.")
+                } else {
+                    Button("REORDER") { reorderStrips = true }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .disabled(session.isRecording)
+                        .help("Turn on, then drag a strip onto another strip — same idea as dragging DSP chips.")
+                }
                 Button("UPDATE MIX") { session.updateMix() }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
@@ -244,31 +257,12 @@ struct ContentView: View {
         return GeometryReader { geo in
             let selectedW: CGFloat = 460
             let gap: CGFloat = 10
-            let available = max(156, geo.size.width - selectedW - gap)
+            let available = max(ChannelStripView.stripWidth, geo.size.width - selectedW - gap)
             HStack(alignment: .top, spacing: gap) {
                 ScrollView(.horizontal, showsIndicators: cluster > available + 1) {
                     HStack(alignment: .top, spacing: 10) {
-                        ForEach(Array(session.voices.indices), id: \.self) { index in
-                            ChannelStripView(
-                                channel: $session.voices[index],
-                                faderDb: session.voiceFaderBinding(at: index),
-                                autoDriven: session.autoBalanceEnabled,
-                                isSelected: session.selectedChannelID == session.voices[index].id,
-                                hardwareInputChannels: session.selectedInputChannelCount,
-                                isRecording: session.isRecording,
-                                onSelect: { focusChannel(session.voices[index].id) },
-                                onChange: { session.syncParamsToEngine() }
-                            )
-                        }
-                        ForEach(Array(session.stereos.indices), id: \.self) { index in
-                            ChannelStripView(
-                                channel: $session.stereos[index],
-                                faderDb: $session.stereos[index].faderDb,
-                                autoDriven: false,
-                                isSelected: session.selectedChannelID == session.stereos[index].id,
-                                onSelect: { focusChannel(session.stereos[index].id) },
-                                onChange: { session.syncParamsToEngine() }
-                            )
+                        ForEach(session.displayChannelOrder, id: \.self) { id in
+                            stripView(for: id)
                         }
                         masterStrip
                     }
@@ -283,11 +277,48 @@ struct ContentView: View {
         .frame(height: ChannelStripView.stripHeight + 8)
     }
 
-    /// Speaker + stereo strips are 156pt; master is 110pt. Extra strips scroll sideways.
+    /// Speaker + stereo strips; master is 110pt. Extra strips scroll sideways.
     private var mixerClusterWidth: CGFloat {
         let channels = session.voices.count + session.stereos.count
         let gaps = CGFloat(max(0, channels)) * 10 // between channels, and before master
-        return CGFloat(channels) * 156 + 110 + gaps
+        return CGFloat(channels) * ChannelStripView.stripWidth + 110 + gaps
+    }
+
+    @ViewBuilder
+    private func stripView(for id: Int) -> some View {
+        if let index = session.voices.firstIndex(where: { $0.id == id }) {
+            ChannelStripView(
+                channel: $session.voices[index],
+                faderDb: session.voiceFaderBinding(at: index),
+                autoDriven: session.autoBalanceEnabled,
+                isSelected: session.selectedChannelID == id,
+                hardwareInputChannels: session.selectedInputChannelCount,
+                isRecording: session.isRecording,
+                onSelect: { focusChannel(id) },
+                onChange: { session.syncParamsToEngine() },
+                stripReorderable: reorderStrips,
+                isReorderDropTarget: reorderDropID == id,
+                onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
+                onReorderTargeted: { targeted in
+                    reorderDropID = targeted ? id : (reorderDropID == id ? nil : reorderDropID)
+                }
+            )
+        } else if let index = session.stereos.firstIndex(where: { $0.id == id }) {
+            ChannelStripView(
+                channel: $session.stereos[index],
+                faderDb: $session.stereos[index].faderDb,
+                autoDriven: false,
+                isSelected: session.selectedChannelID == id,
+                onSelect: { focusChannel(id) },
+                onChange: { session.syncParamsToEngine() },
+                stripReorderable: reorderStrips,
+                isReorderDropTarget: reorderDropID == id,
+                onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
+                onReorderTargeted: { targeted in
+                    reorderDropID = targeted ? id : (reorderDropID == id ? nil : reorderDropID)
+                }
+            )
+        }
     }
 
     private func focusChannel(_ id: Int) {
@@ -547,7 +578,7 @@ struct ContentView: View {
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
-                Text("Shift-drag waveform = mute a cough (silence, same length) · Option-drag = clear")
+                Text("SEL a strip, then Shift-drag the waveform to silence that span (not a cut) · Option-drag clears")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)

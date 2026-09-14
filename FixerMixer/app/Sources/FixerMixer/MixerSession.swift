@@ -321,6 +321,8 @@ final class MixerSession: ObservableObject {
     @Published var selectedChannelID: Int = 0
     @Published var playheadFrame: Int = 0
     @Published var waveformPeaks: [Float] = []
+    /// Left-to-right strip order (channel ids). Audio routing stays put.
+    @Published var channelOrder: [Int] = []
 
     let engine = MixerEngine()
 
@@ -411,6 +413,7 @@ final class MixerSession: ObservableObject {
         selectedChannelID = ChannelStripState.masterID
         autoBalanceEnabled = false
         autoGainDb = []
+        channelOrder = []
         refreshWaveform()
         syncRTASource()
         syncParamsToEngine()
@@ -449,6 +452,7 @@ final class MixerSession: ObservableObject {
         }
         engine.appendSilentVoice(speakerNumber: n)
         voices.append(ch)
+        syncChannelOrder()
         sampleRate = engine.sampleRate
         frameCount = engine.frameCount
         selectedChannelID = ch.id
@@ -527,7 +531,7 @@ final class MixerSession: ObservableObject {
 
     func paintMute(normalizedFrom: Double, to normalizedTo: Double) {
         guard selectedChannelID != ChannelStripState.masterID else {
-            status = "Select a speaker strip, then Shift-drag the waveform to mute a cough."
+            status = "Select a strip, then Shift-drag the waveform to silence that span (the show stays this long)."
             return
         }
         guard frameCount > 1 else { return }
@@ -620,6 +624,34 @@ final class MixerSession: ObservableObject {
         )
     }
 
+    /// Keep existing strip order, drop missing ids, append new strips at the end.
+    func syncChannelOrder() {
+        let ids = voices.map(\.id) + stereos.map(\.id)
+        var next = channelOrder.filter { ids.contains($0) }
+        for id in ids where !next.contains(id) {
+            next.append(id)
+        }
+        channelOrder = next
+    }
+
+    func replaceChannelOrderFromCurrentStrips() {
+        channelOrder = voices.map(\.id) + stereos.map(\.id)
+    }
+
+    func moveChannel(fromID: Int, toID: Int) {
+        var order = displayChannelOrder
+        guard fromID != toID,
+              let from = order.firstIndex(of: fromID),
+              let to = order.firstIndex(of: toID) else { return }
+        order.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        channelOrder = order
+        persistMixIfPossible()
+        let name = voices.first(where: { $0.id == fromID })?.name
+            ?? stereos.first(where: { $0.id == fromID })?.name
+            ?? "strip"
+        status = "Moved \(name). Click REORDER again when the order looks right."
+    }
+
     func selectChannel(_ id: Int) {
         selectedChannelID = id
         refreshWaveform()
@@ -677,28 +709,41 @@ final class MixerSession: ObservableObject {
         return []
     }
 
-    /// Speaker strips top to bottom, then stereo beds. Visual overview — not an editor.
+    /// Left-to-right strip ids. Does not publish; safe to read in views.
+    var displayChannelOrder: [Int] {
+        let ids = voices.map(\.id) + stereos.map(\.id)
+        var next = channelOrder.filter { ids.contains($0) }
+        for id in ids where !next.contains(id) {
+            next.append(id)
+        }
+        return next
+    }
+
+    /// Speaker strips then stereo beds, or the user's REORDER layout. Visual overview — not an editor.
     var waveformLanes: [MixerWaveformLane] {
         var lanes: [MixerWaveformLane] = []
-        for (index, voice) in voices.enumerated() {
-            lanes.append(
-                MixerWaveformLane(
-                    id: voice.id,
-                    name: voice.name,
-                    peaks: engine.waveformPeaks(channelIndex: index, music: false, masterMix: false, binCount: 900),
-                    muteSpans: muteSpansNormalized(voice.muteSpans)
+        for id in displayChannelOrder {
+            if let index = voices.firstIndex(where: { $0.id == id }) {
+                let voice = voices[index]
+                lanes.append(
+                    MixerWaveformLane(
+                        id: voice.id,
+                        name: voice.name,
+                        peaks: engine.waveformPeaks(channelIndex: index, music: false, masterMix: false, binCount: 900),
+                        muteSpans: muteSpansNormalized(voice.muteSpans)
+                    )
                 )
-            )
-        }
-        for (index, bed) in stereos.enumerated() {
-            lanes.append(
-                MixerWaveformLane(
-                    id: bed.id,
-                    name: bed.name,
-                    peaks: engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, stereoIndex: index, binCount: 900),
-                    muteSpans: muteSpansNormalized(bed.muteSpans)
+            } else if let index = stereos.firstIndex(where: { $0.id == id }) {
+                let bed = stereos[index]
+                lanes.append(
+                    MixerWaveformLane(
+                        id: bed.id,
+                        name: bed.name,
+                        peaks: engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, stereoIndex: index, binCount: 900),
+                        muteSpans: muteSpansNormalized(bed.muteSpans)
+                    )
                 )
-            )
+            }
         }
         return lanes
     }
@@ -727,6 +772,7 @@ final class MixerSession: ObservableObject {
                 bed.fileURL = url
                 return bed
             }
+            replaceChannelOrderFromCurrentStrips()
             sourceFolder = folder
             try engine.load(
                 voiceURLs: voices.map(\.fileURL),
@@ -927,6 +973,11 @@ final class MixerSession: ObservableObject {
         do {
             voices = nextVoices
             stereos = nextStereos
+            if append {
+                syncChannelOrder()
+            } else {
+                replaceChannelOrderFromCurrentStrips()
+            }
             if !append || sourceFolder == nil {
                 sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
             }
