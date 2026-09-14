@@ -65,3 +65,16 @@ struct MixerGhostButtonStyle: ButtonStyle {
             )
     }
 }
+
+struct MixerRecordButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(MixerTheme.bgBottom)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(configuration.isPressed ? MixerTheme.meterRed : MixerTheme.danger)
+            )
+    }
+}

@@ -109,7 +109,7 @@ If a step looks stuck, the status line still ticks the clock. You can cancel.
 
 These two are **light** compared with Stripper.
 
-- **Fixer Mixer** — real-time playback and EQ on Apple Silicon. It loads the whole episode into memory, so long shows with several speaker tracks are happier with **16 GB RAM**.
+- **Fixer Mixer** — real-time playback and EQ on Apple Silicon. It loads the whole episode into memory, so long shows with several speaker tracks are happier with **16 GB RAM**. Record from an interface if you want; monitor that mic on the interface, not through Mixer.
 - **Lil Leveler** — one stereo (or mono) mix, loudness measurement and export. Fine on any Mac that meets the OS floor.
 
 You should not need to “wait through” Mixer or Leveler the way you wait through Stripper.

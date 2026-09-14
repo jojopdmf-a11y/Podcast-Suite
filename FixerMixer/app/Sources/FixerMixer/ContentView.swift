@@ -24,30 +24,34 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 header
-                if session.frameCount == 0 {
-                    dropZone
-                } else {
+                if session.hasSession {
                     TimelineWaveformView(
                         peaks: session.waveformPeaks,
                         playhead: session.playheadNormalized,
                         channelName: session.selectedChannelName,
                         currentTime: formatTime(session.playheadFrame),
                         duration: formatTime(session.frameCount),
-                        onSeek: { session.seekNormalized($0) }
+                        muteSpans: session.selectedMuteSpansNormalized,
+                        onSeek: { session.seekNormalized($0) },
+                        onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
+                        onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) }
                     )
                     .id(session.sourceFolder?.path ?? "empty")
                     mixerRow
                     transport
+                } else {
+                    dropZone
                 }
                 statusBar
             }
             .padding(18)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
-        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: session.frameCount == 0 ? 620 : 760)
+        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: session.hasSession ? 760 : 620)
         .preferredColorScheme(.dark)
         .onAppear {
             session.bindEngine()
+            session.refreshInputDevices()
             installSpacebarMonitor()
         }
         .onDisappear {
@@ -69,7 +73,7 @@ struct ContentView: View {
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
                 appName: "Fixer Mixer",
-                tagline: "Drop stems or any audio · bounce mix + stems",
+                tagline: "Record a strip, punch a cough, mix — still not an editor",
                 accent: MixerTheme.cyan
             )
         }
@@ -94,9 +98,12 @@ struct ContentView: View {
             // Space = play/pause (keyCode 49). Only skip while actively editing text.
             guard event.keyCode == 49 else { return event }
             if Self.isActivelyEditingText() { return event }
-            guard let session, session.frameCount > 0, !session.isBouncing else { return event }
-            session.togglePlay()
-            return nil
+            guard let session, !session.isBouncing else { return event }
+            if session.isRecording || session.frameCount > 0 {
+                session.togglePlay()
+                return nil
+            }
+            return event
         }
     }
 
@@ -127,7 +134,7 @@ struct ContentView: View {
                     .tracking(1.4)
                     .foregroundStyle(MixerTheme.cyan)
                     .shadow(color: MixerTheme.cyan.opacity(0.4), radius: 10)
-                Text("Stripper stems or any audio → polish → export")
+                Text("Stripper stems, any audio, or Record from your interface")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                 Text(CougarCalcBrand.versionLabel)
@@ -140,13 +147,28 @@ struct ContentView: View {
             Button("LOAD MIX…") { pickMixFile() }
                 .buttonStyle(MixerGhostButtonStyle())
                 .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
-            if session.frameCount > 0 {
+            if session.hasSession {
+                inputDevicePicker
+                if session.isRecording {
+                    Button("STOP REC") { session.toggleRecord() }
+                        .buttonStyle(MixerRecordButtonStyle())
+                        .disabled(session.isBouncing)
+                        .help("Stop recording. Mixer writes WAV takes into the session folder on the Desktop.")
+                } else {
+                    Button("RECORD") { session.toggleRecord() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .disabled(session.isBouncing)
+                        .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — Mixer does not play the mic back.")
+                }
+                Button("ADD STRIP") { session.addBlankStrip() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Adds an empty speaker strip. Pick IN on it to record.")
                 Button("UPDATE MIX") { session.updateMix() }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this _speakers folder")
+                    .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
                 Button("SAVE MIX…") { session.saveMix() }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Choose a folder and name for this mix. Audio stays in the WAV files.")
+                    .help("Choose a folder and name for this mix. Audio stays in the WAV files. Mute paints are saved here.")
                 Button("LOAD OTHER FOLDER…") { pickFolder() }
                     .buttonStyle(MixerGhostButtonStyle())
                 Button("ADD TRACKS…") { pickFiles(append: true) }
@@ -174,14 +196,17 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel. A _speakers folder still builds the Stripper layout.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel. A _speakers folder still builds the Stripper layout. Or start empty and Record.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                Button("CHOOSE FOLDER…") { pickFolder() }
+                Button("NEW SESSION") { session.newRecordSession() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
+                    .help("Two empty speaker strips, 48 kHz, folder on the Desktop. Arm IN, then Record. Monitor through your interface.")
+                Button("CHOOSE FOLDER…") { pickFolder() }
+                    .buttonStyle(MixerGhostButtonStyle())
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Pick one or more audio files. Each one becomes a strip.")
@@ -190,7 +215,6 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 280)
-        .onTapGesture { pickFolder() }
     }
 
     private var mixerRow: some View {
@@ -208,6 +232,8 @@ struct ContentView: View {
                                 faderDb: session.voiceFaderBinding(at: index),
                                 autoDriven: session.autoBalanceEnabled,
                                 isSelected: session.selectedChannelID == session.voices[index].id,
+                                hardwareInputChannels: session.selectedInputChannelCount,
+                                isRecording: session.isRecording,
                                 onSelect: { session.selectChannel(session.voices[index].id) },
                                 onChange: { session.syncParamsToEngine() }
                             )
@@ -242,9 +268,34 @@ struct ContentView: View {
     }
 
     private var mixerMinWidth: CGFloat {
-        if session.frameCount == 0 { return 720 }
+        if !session.hasSession { return 720 }
         // padding 18×2 + selected pane 460 + gap 10
         return mixerClusterWidth + 460 + 10 + 36
+    }
+
+    private var inputDevicePicker: some View {
+        HStack(spacing: 6) {
+            Text("INPUT")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+            Picker(
+                "Input",
+                selection: Binding(
+                    get: { session.selectedInputUID ?? "" },
+                    set: { session.selectedInputUID = $0.isEmpty ? nil : $0 }
+                )
+            ) {
+                Text(session.inputDevices.isEmpty ? "No interface" : "—").tag("")
+                ForEach(session.inputDevices) { device in
+                    Text("\(device.name) · \(device.inputChannels) in").tag(device.uid)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: 240)
+            .disabled(session.isRecording)
+            .help("The interface Mixer records from. One box for the whole session. Assign IN 1 / IN 2 on each speaker strip.")
+        }
     }
 
     @ViewBuilder
@@ -455,17 +506,28 @@ struct ContentView: View {
             .buttonStyle(MixerGhostButtonStyle())
             .help("Jump to the start of the timeline")
 
-            Button(session.isPlaying ? "PAUSE" : "PLAY") {
+            Button(session.isPlaying && !session.isRecording ? "PAUSE" : "PLAY") {
                 session.togglePlay()
             }
             .buttonStyle(MixerPrimaryButtonStyle())
             .keyboardShortcut(.space, modifiers: [])
-            .help("Spacebar toggles play/pause")
+            .disabled(session.isRecording)
+            .help(session.isRecording ? "Spacebar stops Record" : "Spacebar toggles play/pause")
 
-            Text("SEL / DSP chip opens the selected-channel panel · scrub waveform to seek")
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(MixerTheme.textSecondary)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("SEL / DSP chip opens the selected-channel panel · click waveform to seek")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(MixerTheme.textSecondary)
+                    .lineLimit(1)
+                Text("Shift-drag waveform = mute a cough (silence, same length) · Option-drag = clear")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(MixerTheme.textSecondary)
+                    .lineLimit(1)
+                Text("Monitor mics on your interface. Mixer does not play the mic back.")
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.lime)
+                    .lineLimit(1)
+            }
 
             Spacer(minLength: 8)
 

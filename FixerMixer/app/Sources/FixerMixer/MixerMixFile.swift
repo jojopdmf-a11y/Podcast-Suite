@@ -27,6 +27,7 @@ enum MixerMixFile {
         var autoBalanceEnabled: Bool
         var autoBalanceTargetDb: Float
         var masterComp: Comp
+        var inputDeviceUID: String?
     }
 
     struct Strip: Codable {
@@ -52,6 +53,8 @@ enum MixerMixFile {
         var levelerBypass: Bool
         var levelerTargetDb: Float
         var dspOrder: [String]
+        var muteSpans: [MuteSpan]?
+        var inputChannel: Int?
     }
 
     struct Comp: Codable {
@@ -84,7 +87,8 @@ enum MixerMixFile {
                 knee: session.masterComp.knee,
                 outputDb: session.masterComp.outputDb,
                 autoMakeup: session.masterComp.autoMakeup
-            )
+            ),
+            inputDeviceUID: session.selectedInputUID
         )
     }
 
@@ -111,7 +115,9 @@ enum MixerMixFile {
             levelerDrive: ch.voice.levelerDrive,
             levelerBypass: ch.voice.levelerBypass,
             levelerTargetDb: ch.voice.levelerTargetDb,
-            dspOrder: ch.dspOrder.map(\.rawValue)
+            dspOrder: ch.dspOrder.map(\.rawValue),
+            muteSpans: ch.muteSpans,
+            inputChannel: ch.inputChannel
         )
     }
 
@@ -146,6 +152,8 @@ enum MixerMixFile {
         if !order.isEmpty {
             ch.dspOrder = order
         }
+        ch.muteSpans = snap.muteSpans ?? []
+        ch.inputChannel = snap.inputChannel
     }
 
     @MainActor
@@ -169,6 +177,9 @@ enum MixerMixFile {
         session.masterComp.knee = doc.masterComp.knee
         session.masterComp.outputDb = doc.masterComp.outputDb
         session.masterComp.autoMakeup = doc.masterComp.autoMakeup
+        if let uid = doc.inputDeviceUID {
+            session.selectedInputUID = uid
+        }
     }
 
     static func write(_ doc: Document, to url: URL) throws {

@@ -19,13 +19,15 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.1</string>
 	<key>CFBundleVersion</key>
-	<string>12</string>
+	<string>13</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Fixer Mixer records from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. Monitor through your interface — Mixer does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
