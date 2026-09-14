@@ -100,7 +100,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
-                appName: "Fixer Mixer",
+                appName: "PodProducer",
                 tagline: "Record a strip, punch a cough, mix — still not an editor",
                 accent: MixerTheme.cyan
             )
@@ -157,7 +157,7 @@ struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
-                Text("FIXER MIXER")
+                Text("PODPRODUCER")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
                     .tracking(1.4)
                     .foregroundStyle(MixerTheme.cyan)
@@ -181,12 +181,12 @@ struct ContentView: View {
                     Button("STOP REC") { session.toggleRecord() }
                         .buttonStyle(MixerRecordButtonStyle())
                         .disabled(session.isBouncing)
-                        .help("Stop recording. Mixer writes WAV takes into the session folder on the Desktop.")
+                        .help("Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
                 } else {
                     Button("RECORD") { session.toggleRecord() }
                         .buttonStyle(MixerGhostButtonStyle())
                         .disabled(session.isBouncing)
-                        .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — Mixer does not play the mic back.")
+                        .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back.")
                 }
                 Button("ADD STRIP") { session.addBlankStrip() }
                     .buttonStyle(MixerGhostButtonStyle())
@@ -591,7 +591,7 @@ struct ContentView: View {
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
-                Text("Monitor mics on your interface. Mixer does not play the mic back.")
+                Text("Monitor mics on your interface. PodProducer does not play the mic back.")
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.lime)
                     .lineLimit(1)

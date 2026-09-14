@@ -7,9 +7,10 @@ cd "$APP_DIR"
 
 swift build -c release --product LilLeveler
 BIN="$(swift build -c release --show-bin-path)/LilLeveler"
-APP="$ROOT/dist/Lil Leveler.app"
+APP="$ROOT/dist/PodLeveler.app"
 
 rm -rf "$APP"
+rm -rf "$ROOT/dist/Lil Leveler.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/LilLeveler"
 cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
@@ -18,6 +19,7 @@ if [[ -f "$ICON_SRC" ]]; then
   cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.icns"
 fi
 chmod +x "$APP/Contents/MacOS/LilLeveler"
+ln -sfn "PodLeveler.app" "$ROOT/dist/Lil Leveler.app"
 echo "Built $APP"
 if [[ "${SKIP_REVEAL:-}" != "1" ]]; then
   open -R "$APP"

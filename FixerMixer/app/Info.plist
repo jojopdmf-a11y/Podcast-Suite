@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Fixer Mixer</string>
+	<string>PodProducer</string>
 	<key>CFBundleExecutable</key>
 	<string>FixerMixer</string>
 	<key>CFBundleIdentifier</key>
@@ -13,13 +13,13 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Fixer Mixer</string>
+	<string>PodProducer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>1.0.1</string>
 	<key>CFBundleVersion</key>
-	<string>24</string>
+	<string>25</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>LSMinimumSystemVersion</key>
@@ -27,7 +27,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Fixer Mixer records from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. Monitor through your interface — Mixer does not play the mic back.</string>
+	<string>PodProducer records from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. Monitor through your interface — PodProducer does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

@@ -429,7 +429,7 @@ final class MixerSession: ObservableObject {
             .replacingOccurrences(of: " ", with: "-")
         let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
-        let folder = desktop.appendingPathComponent("FixerMixer-\(stamp)", isDirectory: true)
+        let folder = desktop.appendingPathComponent("PodProducer-\(stamp)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         sourceFolder = folder
     }
@@ -496,7 +496,7 @@ final class MixerSession: ObservableObject {
 
     private func continueRecordIfMicAllowed(_ granted: Bool) {
         guard granted else {
-            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → Fixer Mixer."
+            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → PodProducer."
             return
         }
         syncParamsToEngine()
@@ -508,7 +508,7 @@ final class MixerSession: ObservableObject {
             )
             isPlaying = true
             isRecording = true
-            status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through Mixer."
+            status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through PodProducer."
         } catch {
             status = error.localizedDescription
         }
@@ -533,7 +533,7 @@ final class MixerSession: ObservableObject {
                 let mixURL = MixerMixFile.sidecarURL(in: folder)
                 try MixerMixFile.write(MixerMixFile.make(from: self), to: mixURL)
                 lastMixURL = mixURL
-                status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through Mixer."
+                status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
             } catch {
                 status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription)"
             }

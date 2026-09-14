@@ -1,18 +1,18 @@
-# Podcast Suite — Mac requirements & how long Stripper takes
+# PodStudio — Mac requirements & how long Stripper takes
 
 This is the **full public copy** for [cougarcalc.com](https://cougarcalc.com). Website edits happen in the CougarCalc repo / that chat. Keep this file as the source of truth and port it over.
 
-The **short** version also lives in Podcast Stripper: **YOUR MAC** (next to Settings). That panel **reads this Mac’s chip and RAM** and scales the wait table from the M4 Mini timing. If a file is already dropped in, it estimates that episode too.
+The **short** version also lives in PodStripper: **YOUR MAC** (next to Settings). That panel **reads this Mac’s chip and RAM** and scales the wait table from the M4 Mini timing. If a file is already dropped in, it estimates that episode too.
 
 ---
 
 ## The short version
 
-**It only runs on macOS 14 Sonoma or newer.** The three local apps — Podcast Stripper, Fixer Mixer, and Lil Leveler — will not launch on Ventura or older.
+**It only runs on macOS 14 Sonoma or newer.** The three local apps — PodStripper, PodProducer, and PodLeveler — will not launch on Ventura or older.
 
 **We highly recommend** an Apple Silicon Mac (M1 or newer) with **16 GB of RAM**. A Mac mini M4 is a comfortable machine for weekly shows.
 
-Stripper is the wait. On a Mac mini M4, a **31-minute** two-person episode took **9 minutes 23 seconds** to strip (about **18 seconds of wait per minute of show**). Mixer and Leveler stay light.
+Stripper is the wait. On a Mac mini M4, a **31-minute** two-person episode took **9 minutes 23 seconds** to strip (about **18 seconds of wait per minute of show**). PodProducer and PodLeveler stay light.
 
 Everything runs **on this Mac**. Nothing is uploaded. You do **not** need Homebrew. The first time you open Stripper, it installs its engine on this Mac (about 2 GB, once, needs Wi-Fi). The Hugging Face token is still a one-time Settings paste.
 
@@ -20,11 +20,11 @@ Everything runs **on this Mac**. Nothing is uploaded. You do **not** need Homebr
 
 ## What this software is
 
-CougarCalc Podcast Suite is three small Mac apps you run locally:
+CougarCalc PodStudio is three small Mac apps you run locally:
 
-1. **Podcast Stripper** — one mixed episode in; one WAV track per speaker, plus a Music/SFX track, out.
-2. **Fixer Mixer** — polish those stems (EQ, small rooms, leveler) and bounce.
-3. **Lil Leveler** — hit a platform loudness target on the final mix.
+1. **PodStripper** — one mixed episode in; one WAV track per speaker, plus a Music/SFX track, out.
+2. **PodProducer** — polish those stems (EQ, small rooms, leveler) and bounce.
+3. **PodLeveler** — hit a platform loudness target on the final mix.
 
 They are not a website tool and not a cloud render farm. Speed depends on the Mac in front of you.
 
@@ -50,7 +50,7 @@ Apple calls the system **macOS** (not OS X). Check: Apple menu → About This Ma
 | A comfortable weekly machine | **Mac mini M4** (this is the machine we timed) |
 | Disk | A couple of GB free the first time you open Stripper (engine + speaker model, one-time) |
 
-Apple Silicon matters most for **Stripper**. Mixer and Leveler are native audio and feel fine on any Apple Silicon Mac that meets the macOS 14 floor.
+Apple Silicon matters most for **PodStripper**. PodProducer and PodLeveler are native audio and feel fine on any Apple Silicon Mac that meets the macOS 14 floor.
 
 ---
 
@@ -68,7 +68,7 @@ Apple Silicon matters most for **Stripper**. Mixer and Leveler are native audio 
 
 ---
 
-## How long Podcast Stripper takes
+## How long PodStripper takes
 
 Stripper does the heavy work on your CPU (pulling music off the voices) and uses Apple’s GPU when it can for “who spoke when.” The window shows a **live clock** and **what step it is on**. When the job finishes, the **total time stays on screen**.
 
@@ -105,14 +105,14 @@ If a step looks stuck, the status line still ticks the clock. You can cancel.
 
 ---
 
-## Fixer Mixer and Lil Leveler
+## PodProducer and PodLeveler
 
-These two are **light** compared with Stripper.
+These two are **light** compared with PodStripper.
 
-- **Fixer Mixer** — real-time playback and EQ on Apple Silicon. It loads the whole episode into memory, so long shows with several speaker tracks are happier with **16 GB RAM**. Record from an interface if you want; monitor that mic on the interface, not through Mixer.
-- **Lil Leveler** — one stereo (or mono) mix, loudness measurement and export. Fine on any Mac that meets the OS floor.
+- **PodProducer** — real-time playback and EQ on Apple Silicon. It loads the whole episode into memory, so long shows with several speaker tracks are happier with **16 GB RAM**. Record from an interface if you want; monitor that mic on the interface, not through PodProducer.
+- **PodLeveler** — one stereo (or mono) mix, loudness measurement and export. Fine on any Mac that meets the OS floor.
 
-You should not need to “wait through” Mixer or Leveler the way you wait through Stripper.
+You should not need to “wait through” PodProducer or PodLeveler the way you wait through PodStripper.
 
 ---
 

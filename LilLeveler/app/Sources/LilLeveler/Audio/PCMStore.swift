@@ -4,7 +4,7 @@ import Foundation
 
 /// Interleaved float32 PCM living in a mapped temp file.
 ///
-/// Lil Leveler used to keep the whole show in `[Float]` (plus extra copies for
+/// PodLeveler used to keep the whole show in `[Float]` (plus extra copies for
 /// analyze / level / play). A 4-hour stereo 48 kHz podcast is ~5.5 GB per copy,
 /// so the app was jetsam’d. Mapping a file lets the OS page samples in and out.
 final class PCMStore: @unchecked Sendable {

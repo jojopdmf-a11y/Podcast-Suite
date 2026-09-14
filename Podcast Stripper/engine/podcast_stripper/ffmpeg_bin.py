@@ -48,7 +48,7 @@ def find_ffmpeg() -> str:
         pass
 
     raise FFmpegError(
-        "ffmpeg was not found. Open Podcast Stripper once so it can finish installing its engine, then try again.",
+        "ffmpeg was not found. Open PodStripper once so it can finish installing its engine, then try again.",
         "missing_ffmpeg",
     )
 

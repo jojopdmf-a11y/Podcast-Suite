@@ -7,9 +7,10 @@ cd "$APP_DIR"
 
 swift build -c release --product PodcastStripper
 BIN="$(swift build -c release --show-bin-path)/PodcastStripper"
-APP="$ROOT/dist/Podcast Stripper.app"
+APP="$ROOT/dist/PodStripper.app"
 
 rm -rf "$APP"
+rm -rf "$ROOT/dist/Podcast Stripper.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PodcastStripper"
 cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
@@ -19,6 +20,8 @@ chmod +x "$APP/Contents/MacOS/PodcastStripper"
 
 chmod +x "$ROOT/scripts/bundle_runtime.sh"
 "$ROOT/scripts/bundle_runtime.sh" "$APP"
+
+ln -sfn "PodStripper.app" "$ROOT/dist/Podcast Stripper.app"
 
 echo "Built $APP"
 if [[ "${SKIP_REVEAL:-}" != "1" ]]; then

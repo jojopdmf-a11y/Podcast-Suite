@@ -1,4 +1,4 @@
-# Terms of Use & Software License — CougarCalc Podcast Suite
+# Terms of Use & Software License — CougarCalc PodStudio
 
 **Public copy for [cougarcalc.com/terms](https://cougarcalc.com/terms).** Website edits happen in the CougarCalc site repo. Keep this file as the source of truth and port it over.
 
@@ -10,7 +10,7 @@
 These terms are an agreement between you and **CougarCalc** (“we”) for:
 
 - the website [cougarcalc.com](https://cougarcalc.com)
-- **CougarCalc Podcast Suite** — Podcast Stripper, Fixer Mixer, and Lil Leveler (the “Software”)
+- **CougarCalc PodStudio** — PodStripper, PodProducer, and PodLeveler (the “Software”)
 
 By downloading, installing, or using the Software, or by buying a license, you agree to these terms. If you do not agree, do not use the Software.
 
@@ -24,10 +24,10 @@ You are buying a **license to use** the Software, not ownership of the code, nam
 
 The checkout page will say which license you bought:
 
-- **Podcast Stripper**, **Fixer Mixer**, or **Lil Leveler** — that one app
-- **Podcast Suite** — all three apps, usually for less than buying them separately
+- **PodStripper**, **PodProducer**, or **PodLeveler** — that one app
+- **PodStudio** — all three apps, usually for less than buying them separately
 
-A single-app key does not unlock the others. A Suite key unlocks all three. You can buy a second app later; we do not force the bundle.
+A single-app key does not unlock the others. A PodStudio key unlocks all three. You can buy a second app later; we do not force the bundle.
 
 We may add features and ship updates. Updates do not reduce the rights you already paid for, except as described in “Changes” below.
 
@@ -39,10 +39,10 @@ Until you enter a valid license for that app, it runs in **demo mode**. There is
 
 Demo limits:
 
-- **Podcast Stripper** — writes only the **first 7 minutes** of each stem. Enough to hear whether speakers and music split. Not enough to publish the show.
-- **Fixer Mixer** and **Lil Leveler** — the file you bounce or export has **about 1 second of white noise every 2 minutes**. Playback is for judging the sound. The saved file is not a clean deliverable.
+- **PodStripper** — writes only the **first 7 minutes** of each stem. Enough to hear whether speakers and music split. Not enough to publish the show.
+- **PodProducer** and **PodLeveler** — the file you bounce or export has **about 1 second of white noise every 2 minutes**. Playback is for judging the sound. The saved file is not a clean deliverable.
 
-Buying a license for that app (or a Suite license) turns the same copy into a licensed copy. You do not need a second download. Demo marks are not applied to licensed exports.
+Buying a license for that app (or a PodStudio license) turns the same copy into a licensed copy. You do not need a second download. Demo marks are not applied to licensed exports.
 
 Removing or bypassing demo marks, or using a cracked key, is a breach of this license.
 
@@ -50,9 +50,9 @@ Removing or bypassing demo marks, or using a cracked key, is a breach of this li
 
 ## 3. License grant
 
-If you hold a valid license for an app (or a Suite license), we grant you a personal, non-exclusive, non-transferable license to:
+If you hold a valid license for an app (or a PodStudio license), we grant you a personal, non-exclusive, non-transferable license to:
 
-- install and use **that licensed app** (or all three, if you bought the Suite) on **up to two Macs** that you own or control (for example a studio Mac and a laptop)
+- install and use **that licensed app** (or all three, if you bought PodStudio) on **up to two Macs** that you own or control (for example a studio Mac and a laptop)
 - process **your** audio, or audio you have the right to process
 - make a reasonable number of backup copies of the app and of your own files
 
@@ -72,7 +72,7 @@ The download is for **macOS 14 Sonoma or newer**. Older systems are not supporte
 
 ## 4. Your audio is yours
 
-You keep all rights in your recordings, stems, and mixes. We claim no ownership of your shows because you ran them through the Suite.
+You keep all rights in your recordings, stems, and mixes. We claim no ownership of your shows because you ran them through PodStudio.
 
 You are responsible for having the rights to process that audio (guests, music, third-party clips). The Software does not clear licenses for you.
 
@@ -80,7 +80,7 @@ You are responsible for having the rights to process that audio (guests, music, 
 
 ## 5. What the Software does not promise
 
-The Suite is a set of local audio tools. In particular:
+PodStudio is a set of local audio tools. In particular:
 
 - Stripper does not transcribe, name speakers, or unmix two people talking over each other
 - results depend on the file, the Mac, and your settings
@@ -91,11 +91,11 @@ The Suite is a set of local audio tools. In particular:
 
 ---
 
-## 6. Hugging Face (Stripper)
+## 6. Hugging Face (PodStripper)
 
 Speaker detection uses a model hosted by Hugging Face under **their** terms. You must create their account, accept their model terms, and keep a token on your Mac. That relationship is between you and Hugging Face. We are not Hugging Face.
 
-Mixer and Leveler do not require that account.
+PodProducer and PodLeveler do not require that account.
 
 ---
 
@@ -107,7 +107,7 @@ Payouts from Paddle go to our business bank. That does not change your license.
 
 Chargebacks and refunds follow Paddle’s process. Email **hello@cougarcalc.com** if something went wrong; we will help.
 
-Prices on the site are the current offer. We may change future prices. That does not change a license you already paid for. Buying one app does not include the others unless you buy the Suite or those other licenses.
+Prices on the site are the current offer. We may change future prices. That does not change a license you already paid for. Buying one app does not include the others unless you buy PodStudio or those other licenses.
 
 ---
 
@@ -141,7 +141,7 @@ Some places do not allow these limits. In those places, the limits apply only as
 
 ## 11. The website
 
-You may use cougarcalc.com to read about the Suite, download builds we post, and buy a license. Do not attack, scrape in a way that harms the service, or pretend to be us.
+You may use cougarcalc.com to read about PodStudio, download builds we post, and buy a license. Do not attack, scrape in a way that harms the service, or pretend to be us.
 
 Download links are for people, not for wrapping our apps into someone else’s installer.
 
