@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var showExport = false
     @State private var exportItems: [MixerExportItem] = []
     @State private var exportFolder: URL?
+    @State private var showAllWaveforms = false
 
     var body: some View {
         ZStack {
@@ -25,18 +26,31 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 12) {
                 header
                 if session.hasSession {
-                    TimelineWaveformView(
-                        peaks: session.waveformPeaks,
-                        playhead: session.playheadNormalized,
-                        channelName: session.selectedChannelName,
-                        currentTime: formatTime(session.playheadFrame),
-                        duration: formatTime(session.frameCount),
-                        muteSpans: session.selectedMuteSpansNormalized,
-                        onSeek: { session.seekNormalized($0) },
-                        onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
-                        onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) }
-                    )
-                    .id(session.sourceFolder?.path ?? "empty")
+                    if showAllWaveforms {
+                        OverviewWaveformView(
+                            lanes: session.waveformLanes,
+                            playhead: session.playheadNormalized,
+                            currentTime: formatTime(session.playheadFrame),
+                            duration: formatTime(session.frameCount),
+                            onSeek: { session.seekNormalized($0) },
+                            onFocusLane: { focusChannel($0) },
+                            onShowOne: { showAllWaveforms = false }
+                        )
+                    } else {
+                        TimelineWaveformView(
+                            peaks: session.waveformPeaks,
+                            playhead: session.playheadNormalized,
+                            channelName: session.selectedChannelName,
+                            currentTime: formatTime(session.playheadFrame),
+                            duration: formatTime(session.frameCount),
+                            muteSpans: session.selectedMuteSpansNormalized,
+                            onSeek: { session.seekNormalized($0) },
+                            onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
+                            onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
+                            onShowAllTracks: { showAllWaveforms = true }
+                        )
+                        .id(session.sourceFolder?.path ?? "empty")
+                    }
                     mixerRow
                     transport
                 } else {
@@ -47,7 +61,7 @@ struct ContentView: View {
             .padding(18)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
-        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: session.hasSession ? 760 : 620)
+        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: windowMinHeight)
         .preferredColorScheme(.dark)
         .onAppear {
             session.bindEngine()
@@ -234,7 +248,7 @@ struct ContentView: View {
                                 isSelected: session.selectedChannelID == session.voices[index].id,
                                 hardwareInputChannels: session.selectedInputChannelCount,
                                 isRecording: session.isRecording,
-                                onSelect: { session.selectChannel(session.voices[index].id) },
+                                onSelect: { focusChannel(session.voices[index].id) },
                                 onChange: { session.syncParamsToEngine() }
                             )
                         }
@@ -244,7 +258,7 @@ struct ContentView: View {
                                 faderDb: $session.music.faderDb,
                                 autoDriven: false,
                                 isSelected: session.selectedChannelID == session.music.id,
-                                onSelect: { session.selectChannel(session.music.id) },
+                                onSelect: { focusChannel(session.music.id) },
                                 onChange: { session.syncParamsToEngine() }
                             )
                         }
@@ -271,6 +285,20 @@ struct ContentView: View {
         if !session.hasSession { return 720 }
         // padding 18×2 + selected pane 460 + gap 10
         return mixerClusterWidth + 460 + 10 + 36
+    }
+
+    private var windowMinHeight: CGFloat {
+        guard session.hasSession else { return 620 }
+        if showAllWaveforms {
+            let lanes = CGFloat(max(1, session.waveformLanes.count))
+            return 760 + min(380, lanes * 64)
+        }
+        return 760
+    }
+
+    private func focusChannel(_ id: Int) {
+        session.selectChannel(id)
+        showAllWaveforms = false
     }
 
     private var inputDevicePicker: some View {
@@ -349,6 +377,7 @@ struct ContentView: View {
                 Spacer(minLength: 0)
                 Button {
                     session.selectChannel(ChannelStripState.masterID)
+                    showAllWaveforms = false
                 } label: {
                     Text(session.selectedChannelID == ChannelStripState.masterID ? "SEL●" : "SEL")
                         .font(.system(size: 7, weight: .bold, design: .rounded))
@@ -372,6 +401,7 @@ struct ContentView: View {
                 BypassToggle(bypass: $session.masterComp.bypass)
                 Button {
                     session.selectChannel(ChannelStripState.masterID)
+                    showAllWaveforms = false
                 } label: {
                     Text("COMP")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
@@ -516,6 +546,10 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("SEL / DSP chip opens the selected-channel panel · click waveform to seek")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(MixerTheme.textSecondary)
+                    .lineLimit(1)
+                Text("ALL TRACKS stacks every strip · click a lane to zoom in on that channel")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)

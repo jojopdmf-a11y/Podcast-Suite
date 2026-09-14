@@ -656,6 +656,7 @@ struct TimelineWaveformView: View {
     var onSeek: (Double) -> Void
     var onPaintMute: (Double, Double) -> Void = { _, _ in }
     var onClearMute: (Double, Double) -> Void = { _, _ in }
+    var onShowAllTracks: (() -> Void)? = nil
 
     @State private var zoom: Double = 1
     @State private var start: Double = 0
@@ -704,6 +705,11 @@ struct TimelineWaveformView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                     .disabled(zoom <= 1.01)
                     .help("Show the whole file")
+                if let onShowAllTracks {
+                    Button("ALL TRACKS") { onShowAllTracks() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .help("Stack every strip’s waveform in one view. Click a lane to zoom in on that channel.")
+                }
             }
 
             GeometryReader { geo in
@@ -875,6 +881,169 @@ struct TimelineWaveformView: View {
             start = max(0, p - w * 0.08)
         } else if p > start + w {
             start = min(1 - w, p - w * 0.92)
+        }
+    }
+}
+
+/// Stacked waveforms for every loaded strip. Visual overview — click a lane to zoom in on that channel.
+struct OverviewWaveformView: View {
+    var lanes: [MixerWaveformLane]
+    var playhead: Double
+    var currentTime: String
+    var duration: String
+    var onSeek: (Double) -> Void
+    var onFocusLane: (Int) -> Void
+    var onShowOne: () -> Void
+
+    @State private var draggingLane: Int?
+    @State private var didSeek = false
+
+    private let nameWidth: CGFloat = 78
+    private let laneHeight: CGFloat = 58
+    private let laneGap: CGFloat = 6
+    private let maxStackHeight: CGFloat = 460
+
+    private var stackHeight: CGFloat {
+        let n = max(1, lanes.count)
+        return CGFloat(n) * laneHeight + CGFloat(max(0, n - 1)) * laneGap
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("WAVEFORM · ALL TRACKS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(MixerTheme.cyanDim)
+                Spacer()
+                Text("\(currentTime)  /  \(duration)")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.cyan)
+                Button("ONE TRACK") { onShowOne() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Back to one channel’s waveform")
+            }
+            Text("Click a lane to zoom in on that strip · drag to seek · overview only (not an editor)")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(MixerTheme.textSecondary)
+
+            ScrollView(.vertical, showsIndicators: stackHeight > maxStackHeight) {
+                VStack(spacing: laneGap) {
+                    ForEach(lanes) { lane in
+                        laneRow(lane)
+                    }
+                }
+            }
+            .frame(height: min(stackHeight, maxStackHeight))
+        }
+        .padding(12)
+        .mixerPanel()
+    }
+
+    private func laneRow(_ lane: MixerWaveformLane) -> some View {
+        HStack(spacing: 8) {
+            Text(lane.name)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyan)
+                .lineLimit(1)
+                .frame(width: nameWidth, alignment: .leading)
+                .help("Click to zoom in on \(lane.name)")
+                .onTapGesture { onFocusLane(lane.id) }
+
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(MixerTheme.panelRaised)
+                    WaveformPeaksCanvas(peaks: lane.peaks)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    ForEach(Array(lane.muteSpans.enumerated()), id: \.offset) { _, span in
+                        overviewMute(span: span, width: w)
+                    }
+                    if playhead >= 0, playhead <= 1 {
+                        Rectangle()
+                            .fill(MixerTheme.lime)
+                            .frame(width: 2)
+                            .shadow(color: MixerTheme.lime.opacity(0.7), radius: 3)
+                            .offset(x: CGFloat(playhead) * max(w - 2, 1))
+                    }
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if draggingLane == nil {
+                                        draggingLane = lane.id
+                                        didSeek = false
+                                    }
+                                    guard draggingLane == lane.id else { return }
+                                    if abs(value.translation.width) >= 4 {
+                                        didSeek = true
+                                        onSeek(xToNormalized(value.location.x, width: w))
+                                    }
+                                }
+                                .onEnded { value in
+                                    guard draggingLane == lane.id else { return }
+                                    let seeked = didSeek
+                                    draggingLane = nil
+                                    didSeek = false
+                                    if seeked {
+                                        onSeek(xToNormalized(value.location.x, width: w))
+                                    } else {
+                                        onFocusLane(lane.id)
+                                    }
+                                }
+                        )
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .frame(height: laneHeight)
+        }
+        .frame(height: laneHeight)
+    }
+
+    @ViewBuilder
+    private func overviewMute(span: (Double, Double), width w: CGFloat) -> some View {
+        let lo = max(0.0, min(1.0, span.0))
+        let hi = max(0.0, min(1.0, span.1))
+        if hi > lo {
+            Rectangle()
+                .fill(MixerTheme.danger.opacity(0.32))
+                .frame(width: max(1, CGFloat(hi - lo) * w))
+                .frame(maxHeight: .infinity)
+                .offset(x: CGFloat(lo) * w)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func xToNormalized(_ x: CGFloat, width w: CGFloat) -> Double {
+        max(0, min(1, x / max(w, 1)))
+    }
+}
+
+private struct WaveformPeaksCanvas: View {
+    var peaks: [Float]
+
+    var body: some View {
+        Canvas { context, size in
+            let display = peaks
+            let count = max(display.count, 1)
+            let mid = size.height / 2
+            for (i, peak) in display.enumerated() {
+                let x = size.width * CGFloat(i) / CGFloat(count)
+                let amp = CGFloat(peak) * (size.height * 0.42)
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: mid - amp))
+                path.addLine(to: CGPoint(x: x, y: mid + amp))
+                context.stroke(
+                    path,
+                    with: .color(MixerTheme.cyan.opacity(0.75)),
+                    lineWidth: max(1, size.width / CGFloat(count))
+                )
+            }
         }
     }
 }
