@@ -891,13 +891,13 @@ struct TimelineWaveformView: View {
                         )
                         .overlay {
                             WaveformPointerZoom { event in
-                                handlePointerZoom(event, width: w)
+                                handlePointerScroll(event, width: w)
                             }
                         }
                 }
             }
             .frame(height: 88)
-            .help("Click to seek · SEL a strip first · Shift-drag to silence that span (show stays this long) · Option-drag to clear · scroll or pinch to zoom")
+            .help("Click to seek · SEL a strip first · Shift-drag to silence that span (show stays this long) · Option-drag to clear · pinch or scroll up/down to zoom · swipe left/right to move when zoomed · RESET shows the whole file")
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
@@ -945,6 +945,29 @@ struct TimelineWaveformView: View {
         let frac = max(0, min(1, fractionInWindow))
         start = min(max(0, anchor - frac * nextWindow), max(0, 1 - nextWindow))
         zoom = z
+    }
+
+    /// Returns true when the gesture was used (zoom or pan) so the parent mixer scroll does not also move.
+    private func handlePointerScroll(_ event: NSEvent, width: CGFloat) -> Bool {
+        if event.type == .scrollWheel,
+           abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+            return panVisible(deltaX: event.scrollingDeltaX, width: width, precise: event.hasPreciseScrollingDeltas)
+        }
+        handlePointerZoom(event, width: width)
+        return true
+    }
+
+    private func panVisible(deltaX: CGFloat, width: CGFloat, precise: Bool) -> Bool {
+        guard zoom > 1.001, width > 1 else { return false }
+        var dx = deltaX
+        if !precise {
+            dx *= 8
+        }
+        // scrollingDeltaX already follows the Mac “natural scroll” preference:
+        // swipe right moves the wave with your fingers (earlier audio).
+        let next = start - (Double(dx) / Double(width)) * window
+        start = min(max(0, next), max(0, 1 - window))
+        return true
     }
 
     private func handlePointerZoom(_ event: NSEvent, width: CGFloat) {
@@ -1140,11 +1163,12 @@ private struct WaveformPeaksCanvas: View {
     }
 }
 
-/// Scroll-wheel / trackpad pinch zoom without stealing click-drag seek.
+/// Trackpad pinch / scroll zoom and sideways pan, without stealing click-drag seek.
 private struct WaveformPointerZoom: NSViewRepresentable {
     static var lastLocalX: CGFloat?
 
-    var onEvent: (NSEvent) -> Void
+    /// Return true to consume the event (zoom or pan). False leaves it for the rest of Mixer.
+    var onEvent: (NSEvent) -> Bool
 
     func makeNSView(context: Context) -> MonitorView {
         let v = MonitorView()
@@ -1157,7 +1181,7 @@ private struct WaveformPointerZoom: NSViewRepresentable {
     }
 
     final class MonitorView: NSView {
-        var onEvent: ((NSEvent) -> Void)?
+        var onEvent: ((NSEvent) -> Bool)?
         private var monitor: Any?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -1177,13 +1201,11 @@ private struct WaveformPointerZoom: NSViewRepresentable {
                 guard let self, self.window != nil else { return event }
                 let loc = self.convert(event.locationInWindow, from: nil)
                 guard self.bounds.contains(loc) else { return event }
-                if event.type == .scrollWheel,
-                   abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-                    return event
-                }
                 WaveformPointerZoom.lastLocalX = loc.x
-                self.onEvent?(event)
-                return nil
+                if self.onEvent?(event) == true {
+                    return nil
+                }
+                return event
             }
         }
 
