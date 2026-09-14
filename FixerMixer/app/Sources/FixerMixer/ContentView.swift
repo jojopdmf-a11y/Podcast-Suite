@@ -570,7 +570,7 @@ struct ContentView: View {
             .help(session.isRecording ? "Spacebar stops Record" : "Spacebar toggles play/pause")
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("SEL / DSP chip opens the selected-channel panel · click waveform to seek")
+                Text("SEL / DSP chip opens the selected-channel panel · pinch or scroll the wave to zoom · swipe left/right to move")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
