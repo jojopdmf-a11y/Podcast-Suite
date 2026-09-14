@@ -25,43 +25,51 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 header
-                if session.hasSession {
-                    if showAllWaveforms {
-                        OverviewWaveformView(
-                            lanes: session.waveformLanes,
-                            playhead: session.playheadNormalized,
-                            currentTime: formatTime(session.playheadFrame),
-                            duration: formatTime(session.frameCount),
-                            onSeek: { session.seekNormalized($0) },
-                            onFocusLane: { focusChannel($0) },
-                            onShowOne: { showAllWaveforms = false }
-                        )
-                    } else {
-                        TimelineWaveformView(
-                            peaks: session.waveformPeaks,
-                            playhead: session.playheadNormalized,
-                            channelName: session.selectedChannelName,
-                            currentTime: formatTime(session.playheadFrame),
-                            duration: formatTime(session.frameCount),
-                            muteSpans: session.selectedMuteSpansNormalized,
-                            onSeek: { session.seekNormalized($0) },
-                            onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
-                            onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
-                            onShowAllTracks: { showAllWaveforms = true }
-                        )
-                        .id(session.sourceFolder?.path ?? "empty")
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if session.hasSession {
+                            if showAllWaveforms {
+                                OverviewWaveformView(
+                                    lanes: session.waveformLanes,
+                                    playhead: session.playheadNormalized,
+                                    currentTime: formatTime(session.playheadFrame),
+                                    duration: formatTime(session.frameCount),
+                                    onSeek: { session.seekNormalized($0) },
+                                    onFocusLane: { focusChannel($0) },
+                                    onShowOne: { showAllWaveforms = false }
+                                )
+                            } else {
+                                TimelineWaveformView(
+                                    peaks: session.waveformPeaks,
+                                    playhead: session.playheadNormalized,
+                                    channelName: session.selectedChannelName,
+                                    currentTime: formatTime(session.playheadFrame),
+                                    duration: formatTime(session.frameCount),
+                                    muteSpans: session.selectedMuteSpansNormalized,
+                                    onSeek: { session.seekNormalized($0) },
+                                    onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
+                                    onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
+                                    onShowAllTracks: { showAllWaveforms = true }
+                                )
+                                .id(session.sourceFolder?.path ?? "empty")
+                            }
+                            mixerRow
+                            transport
+                        } else {
+                            dropZone
+                        }
                     }
-                    mixerRow
-                    transport
-                } else {
-                    dropZone
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 statusBar
             }
             .padding(18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
-        .frame(minWidth: mixerMinWidth, idealWidth: mixerMinWidth, minHeight: windowMinHeight)
+        // Fixed min size so extra strips / ALL TRACKS never shove Mixer off the screen.
+        .frame(minWidth: 960, idealWidth: 1100, maxWidth: .infinity, minHeight: 640, idealHeight: 820, maxHeight: .infinity)
         .preferredColorScheme(.dark)
         .onAppear {
             session.bindEngine()
@@ -271,29 +279,14 @@ struct ContentView: View {
                 selectedChannelPane
             }
         }
-        .frame(height: ChannelStripView.stripHeight + 8)
+        .frame(maxWidth: .infinity, height: ChannelStripView.stripHeight + 8)
     }
 
-    /// Speaker + stereo strips are 156pt; master is 110pt.
+    /// Speaker + stereo strips are 156pt; master is 110pt. Extra strips scroll sideways.
     private var mixerClusterWidth: CGFloat {
         let channels = session.voices.count + session.stereos.count
         let gaps = CGFloat(max(0, channels)) * 10 // between channels, and before master
         return CGFloat(channels) * 156 + 110 + gaps
-    }
-
-    private var mixerMinWidth: CGFloat {
-        if !session.hasSession { return 720 }
-        // padding 18×2 + selected pane 460 + gap 10
-        return mixerClusterWidth + 460 + 10 + 36
-    }
-
-    private var windowMinHeight: CGFloat {
-        guard session.hasSession else { return 620 }
-        if showAllWaveforms {
-            let lanes = CGFloat(max(1, session.waveformLanes.count))
-            return 760 + min(380, lanes * 64)
-        }
-        return 760
     }
 
     private func focusChannel(_ id: Int) {
@@ -549,7 +542,7 @@ struct ContentView: View {
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
-                Text("ALL TRACKS stacks every strip · click a lane to zoom in on that channel")
+                Text("ALL TRACKS stays in the window · extra lanes scroll · extra strips scroll sideways")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)

@@ -708,7 +708,7 @@ struct TimelineWaveformView: View {
                 if let onShowAllTracks {
                     Button("ALL TRACKS") { onShowAllTracks() }
                         .buttonStyle(MixerGhostButtonStyle())
-                        .help("Stack every strip’s waveform in one view. Click a lane to zoom in on that channel.")
+                        .help("Stack every strip’s waveform in one box. Extra lanes scroll; Mixer stays on screen. Click a lane to zoom in.")
                 }
             }
 
@@ -899,9 +899,10 @@ struct OverviewWaveformView: View {
     @State private var didSeek = false
 
     private let nameWidth: CGFloat = 78
-    private let laneHeight: CGFloat = 58
-    private let laneGap: CGFloat = 6
-    private let maxStackHeight: CGFloat = 460
+    private let laneHeight: CGFloat = 44
+    private let laneGap: CGFloat = 4
+    /// Extra lanes scroll inside this box so Mixer stays on screen.
+    private let maxStackHeight: CGFloat = 220
 
     private var stackHeight: CGFloat {
         let n = max(1, lanes.count)
@@ -923,7 +924,7 @@ struct OverviewWaveformView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Back to one channel’s waveform")
             }
-            Text("Click a lane to zoom in on that strip · drag to seek · overview only (not an editor)")
+            Text("Click a lane to zoom in · drag to seek · extra tracks scroll in this box")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(MixerTheme.textSecondary)
 
