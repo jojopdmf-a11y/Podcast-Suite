@@ -57,7 +57,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("PODCAST STRIPPER")
+                Text("PODSTRIPPER")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .tracking(1.5)
                     .foregroundStyle(StripperTheme.cyan)
@@ -347,7 +347,7 @@ struct ContentView: View {
 
     private var footerBrand: some View {
         HStack {
-            Text("THE STRIPPER")
+            Text("PODSTRIPPER")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(2)
                 .foregroundStyle(StripperTheme.cyanDim)

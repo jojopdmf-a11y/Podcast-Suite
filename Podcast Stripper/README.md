@@ -1,4 +1,4 @@
-# Podcast Stripper
+# PodStripper
 
 A small Mac app that takes **one mixed podcast file** and writes **one WAV track per speaker**, plus a **Music_and_SFX** track for intros, beds, and sound effects. The tracks are the same length and line up in time. When someone is not talking, their speaker track is silence. You can drop the files into GarageBand, Logic, or any editor.
 
@@ -10,7 +10,7 @@ Speaker detection uses [pyannote community-1](https://huggingface.co/pyannote/sp
 
 ## Test an update
 
-In the Podcast Suite folder, double-click **`Update Podcast Stripper.command`**. That pulls GitHub, rebuilds, and launches the app.
+In the PodStudio folder, double-click **`Update PodStripper.command`**. That pulls GitHub, rebuilds, and launches the app.
 
 ## What you need
 
@@ -49,7 +49,7 @@ First open of the app on a new Mac installs the engine (once). The first split c
 
 Do these steps once. Stay on Wi-Fi.
 
-1. Double-click **Podcast Stripper**. The first open installs the engine on this Mac (about 2 GB). Wait until the status line says **Ready** (or asks for a Hugging Face token). Homebrew is not required.
+1. Double-click **PodStripper**. The first open installs the engine on this Mac (about 2 GB). Wait until the status line says **Ready** (or asks for a Hugging Face token). Homebrew is not required.
 2. Add the Hugging Face token below.
 3. Drop a podcast file and click **Split into tracks**.
 
@@ -78,7 +78,7 @@ chmod +x scripts/setup.sh scripts/run_engine.sh app/scripts/build_app.sh scripts
 ./app/scripts/build_app.sh
 ```
 
-`setup.sh` is for pytest and Terminal. The Mac window’s **build_app.sh** copies the engine and `uv` into `dist/Podcast Stripper.app`, so the app no longer has to sit next to this folder. You do not need the full Xcode app from the App Store. The Mac command-line developer tools are enough to compile it.
+`setup.sh` is for pytest and Terminal. The Mac window’s **build_app.sh** copies the engine and `uv` into `dist/PodStripper.app`, so the app no longer has to sit next to this folder. You do not need the full Xcode app from the App Store. The Mac command-line developer tools are enough to compile it.
 
 To save a token from Terminal instead of Settings:
 

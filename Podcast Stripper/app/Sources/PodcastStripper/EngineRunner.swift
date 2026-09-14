@@ -172,9 +172,9 @@ enum EngineError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .engineNotFound:
-            return "Could not find the Stripper engine. Re-download Podcast Stripper, or keep this app next to the project folder if you are building from GitHub."
+            return "Could not find the Stripper engine. Re-download PodStripper, or keep this app next to the project folder if you are building from GitHub."
         case .uvMissing:
-            return "The Python helper (uv) is missing from this copy. Use Update Podcast Stripper, or re-download the app."
+            return "The Python helper (uv) is missing from this copy. Use Update PodStripper, or re-download the app."
         case .startFailed(let message), .failed(let message):
             return message
         }
@@ -369,7 +369,7 @@ final class EngineRunner: ObservableObject {
         case (true, false):
             return "Add your Hugging Face token in Settings before splitting."
         case (false, true):
-            return "ffmpeg is still missing after setup. Close this window, use Update Podcast Stripper, then open the new window."
+            return "ffmpeg is still missing after setup. Close this window, use Update PodStripper, then open the new window."
         case (false, false):
             return "Wait until the engine finishes installing, then add your Hugging Face token in Settings."
         }

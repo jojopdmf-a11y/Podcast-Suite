@@ -60,7 +60,7 @@ fi
 echo "Installing Python 3.12 with uv…"
 "$UV" python install 3.12
 
-echo "Installing Podcast Stripper engine packages (this downloads the speaker model stack)…"
+echo "Installing PodStripper engine packages (this downloads the speaker model stack)…"
 "$UV" sync --project "$ROOT/engine" --group dev
 
 if command -v brew >/dev/null 2>&1; then

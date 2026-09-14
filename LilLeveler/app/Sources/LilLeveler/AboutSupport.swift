@@ -4,7 +4,7 @@ import SwiftUI
 /// Shared publisher identity for the CougarCalc podcast tools suite.
 enum CougarCalcBrand {
     static let company = "CougarCalc"
-    static let suiteName = "CougarCalc Podcast Suite"
+    static let suiteName = "PodStudio"
     /// Update when the real domain is live.
     static let websiteURL = URL(string: "https://cougarcalc.com")!
     static let privacyURL = URL(string: "https://cougarcalc.com/privacy")!

@@ -62,7 +62,7 @@ struct MacNeedsView: View {
                                     "~\(ThisMac.formatWait(mac.waitSeconds(forEpisodeMinutes: minutes)))"
                                 )
                             }
-                            Text("First open of Stripper installs the engine on this Mac (about 2 GB, once). No Homebrew. The first split also downloads the speaker model. Mixer and Leveler stay light.")
+                            Text("First open of PodStripper installs the engine on this Mac (about 2 GB, once). No Homebrew. The first split also downloads the speaker model. PodProducer and PodLeveler stay light.")
                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                 .foregroundStyle(StripperTheme.textSecondary)
                         }

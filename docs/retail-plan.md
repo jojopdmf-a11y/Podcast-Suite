@@ -1,8 +1,8 @@
-# CougarCalc Podcast Suite — path to a real download (internal)
+# CougarCalc PodStudio — path to a real download (internal)
 
 This is the working plan, not a public page. Public copy is `privacy-policy.md` and `terms.md` (port those to cougarcalc.com).
 
-Last updated: September 13, 2026
+Last updated: September 14, 2026
 
 ---
 
@@ -14,7 +14,7 @@ Last updated: September 13, 2026
 | How customers get the apps | **Download from cougarcalc.com** (disk image or zip), not git |
 | Mac App Store | **No** |
 | Payments | **Paddle** → payout to **Novo** |
-| Products | **Each app sold separately**, plus a **Suite bundle** (all three, cheaper than buying à la carte) |
+| Products | **Each app sold separately**, plus a **PodStudio bundle** (all three, cheaper than buying à la carte) |
 | Demo | **No 14-day full trial.** Unlicensed = demo forever. Output is not a clean deliverable. |
 | Stripper demo | Export only the **first 7 minutes** of each stem (not the whole episode) |
 | Mixer / Leveler demo | Exported file gets **~1 second of white noise every 2 minutes** |
@@ -37,9 +37,9 @@ Same download for demo and paid. About shows **DEMO** or **Licensed**. Buy / pas
 
 | App | Unlicensed output |
 |---|---|
-| **Podcast Stripper** | Writes only the **first 7 minutes** of each speaker stem and Music/SFX (files may still be named normally; duration is short or the rest is silence — prefer **short files** so it is obvious). Enough to hear split quality. Not a show. |
-| **Fixer Mixer** | Play can stay clear so they can mix. **Bounce / export** inserts **1 second of white noise every 2 minutes** of program. Status line: “Demo — licensed bounce is clean.” |
-| **Lil Leveler** | Same as Mixer: hear POST while playing; **Export Leveled** is noised. |
+| **PodStripper** | Writes only the **first 7 minutes** of each speaker stem and Music/SFX (files may still be named normally; duration is short or the rest is silence — prefer **short files** so it is obvious). Enough to hear split quality. Not a show. |
+| **PodProducer** | Play can stay clear so they can mix. **Bounce / export** inserts **1 second of white noise every 2 minutes** of program. Status line: “Demo — licensed bounce is clean.” |
+| **PodLeveler** | Same as PodProducer: hear POST while playing; **Export Leveled** is noised. |
 
 If people start recording the Mixer/Leveler output with a loopback, we can also noise the live output later. Day-one protection is the **file they save**.
 
@@ -51,12 +51,12 @@ Licensed copy: no noise, full Stripper duration.
 
 Four one-time products:
 
-1. Podcast Stripper  
-2. Fixer Mixer  
-3. Lil Leveler  
-4. **Podcast Suite** (all three) — price below 1+2+3  
+1. PodStripper  
+2. PodProducer  
+3. PodLeveler  
+4. **PodStudio** (all three) — price below 1+2+3  
 
-License key payload says which app IDs it unlocks. A Suite key unlocks all three. Buying Mixer later while already owning Stripper is a second key (or we later offer “upgrade to Suite” credit — not required for launch).
+License key payload says which app IDs it unlocks. A PodStudio key unlocks all three. Buying PodProducer later while already owning PodStripper is a second key (or we later offer “upgrade to PodStudio” credit — not required for launch).
 
 Website: Download (all three demos), Buy this app, Buy the suite.
 
@@ -90,14 +90,14 @@ Until that exists, Update.command / git remains the desk workflow. Customers sho
 
 ## Website download
 
-- Pages: what each app is, Mac requirements, **Download**, **Buy Stripper / Mixer / Leveler / Suite**, Privacy, Terms  
+- Pages: what each app is, Mac requirements, **Download**, **Buy PodStripper / PodProducer / PodLeveler / PodStudio**, Privacy, Terms  
 - Sparkle comes **after** the first notarized dmg is selling  
 
 ---
 
 ## Stripper’s extra install (Homebrew / Python)
 
-**Shipping is not a freeze.** Mixer and Leveler can be paid, notarized Mac apps while Stripper still grows.
+**Shipping is not a freeze.** PodProducer and PodLeveler can be paid, notarized Mac apps while PodStripper still grows.
 
 The Mac app now **bundles** `uv` plus the engine source. First open installs the Python/ML stack into `~/Library/Application Support/CougarCalc/Podcast Stripper` (about 2 GB, once). Customers should not install Homebrew. Cosmetic and model updates can still ship after that.
 

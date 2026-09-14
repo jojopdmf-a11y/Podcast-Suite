@@ -647,7 +647,7 @@ struct ChannelStripView: View {
             .pickerStyle(.menu)
             .frame(maxWidth: .infinity)
             .disabled(isRecording || hardwareInputChannels <= 0)
-            .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through Mixer.")
+            .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
             if isRecording, channel.inputChannel != nil {
                 Text("REC")
                     .font(.system(size: 8, weight: .bold, design: .rounded))

@@ -14,6 +14,7 @@ enum MixerMixFile {
         guard url.pathExtension.lowercased() == "json" else { return false }
         if url.lastPathComponent.lowercased() == fileName.lowercased() { return true }
         if url.lastPathComponent.lowercased().contains("fixer") { return true }
+        if url.lastPathComponent.lowercased().contains("podproducer") { return true }
         if url.lastPathComponent.lowercased().contains("mix") { return true }
         return (try? read(from: url)) != nil
     }

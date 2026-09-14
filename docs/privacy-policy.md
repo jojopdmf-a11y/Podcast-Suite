@@ -1,4 +1,4 @@
-# Privacy Policy — CougarCalc Podcast Suite
+# Privacy Policy — CougarCalc PodStudio
 
 **Public copy for [cougarcalc.com/privacy](https://cougarcalc.com/privacy).** Website edits happen in the CougarCalc site repo. Keep this file as the source of truth and port it over.
 
@@ -11,13 +11,13 @@
 
 ## Short version
 
-CougarCalc Podcast Suite (Podcast Stripper, Fixer Mixer, and Lil Leveler) processes your audio **on your Mac**. We do not run a cloud render farm. We do not want your episodes. Card payments, when you buy, go through **Paddle** (they are the seller of record for checkout). Stripper’s speaker model comes from **Hugging Face** under *your* login, not ours.
+CougarCalc PodStudio (PodStripper, PodProducer, and PodLeveler) processes your audio **on your Mac**. We do not run a cloud render farm. We do not want your episodes. Card payments, when you buy, go through **Paddle** (they are the seller of record for checkout). Stripper’s speaker model comes from **Hugging Face** under *your* login, not ours.
 
 ---
 
 ## Who we are
 
-**CougarCalc** publishes the Podcast Suite and the site at [cougarcalc.com](https://cougarcalc.com).
+**CougarCalc** publishes PodStudio and the site at [cougarcalc.com](https://cougarcalc.com).
 
 Questions: **hello@cougarcalc.com**
 
@@ -25,9 +25,9 @@ Questions: **hello@cougarcalc.com**
 
 ## What the apps do
 
-1. **Podcast Stripper** — one mixed episode in; one WAV per speaker plus a Music/SFX track, out.
-2. **Fixer Mixer** — polish those stems (or other audio you drop) and bounce. You can also record from an audio interface on this Mac. That audio stays in the folder you chose. Mixer asks for Microphone permission only to reach that interface; it does not upload the take.
-3. **Lil Leveler** — loudness / maximizer on a finished mix.
+1. **PodStripper** — one mixed episode in; one WAV per speaker plus a Music/SFX track, out.
+2. **PodProducer** — polish those stems (or other audio you drop) and bounce. You can also record from an audio interface on this Mac. That audio stays in the folder you chose. PodProducer asks for Microphone permission only to reach that interface; it does not upload the take.
+3. **PodLeveler** — loudness / maximizer on a finished mix.
 
 They are Mac apps you download and run locally. They are not a website tool that uploads a file to us.
 
@@ -54,17 +54,17 @@ Typical local data:
 | What | Where |
 |---|---|
 | Episodes and exports | Folders you pick |
-| Mixer “Save Mix” JSON | Next to your tracks, on disk |
-| Leveler personal loudness presets | On this Mac |
-| Stripper output folder preference | On this Mac |
-| Hugging Face token (Stripper) | **macOS Keychain** (not in the project, not on our servers) |
+| PodProducer “Save Mix” JSON | Next to your tracks, on disk |
+| PodLeveler personal loudness presets | On this Mac |
+| PodStripper output folder preference | On this Mac |
+| Hugging Face token (PodStripper) | **macOS Keychain** (not in the project, not on our servers) |
 | License key for an app you bought | **macOS Keychain** on this Mac |
 
-Uninstalling the app does not automatically delete your audio. The Keychain item can be removed from Stripper **Settings → Remove**, or from Keychain Access.
+Uninstalling the app does not automatically delete your audio. The Keychain item can be removed from PodStripper **Settings → Remove**, or from Keychain Access.
 
 ---
 
-## Hugging Face (Podcast Stripper only)
+## Hugging Face (PodStripper only)
 
 Speaker detection uses the **pyannote speaker-diarization-community-1** model. Hugging Face, not CougarCalc, hosts that model and its terms.
 
@@ -72,11 +72,11 @@ You:
 
 1. Create a Hugging Face account if you do not have one  
 2. Accept *their* model terms  
-3. Paste a **read** token into Stripper Settings  
+3. Paste a **read** token into PodStripper Settings  
 
 The token is stored in **Keychain**. The app uses it to **download the model onto your Mac** and to run speaker detection **locally**. Your episode is not sent to CougarCalc. Hugging Face’s own privacy policy applies to their account, website, and model download.
 
-You can skip Stripper’s speaker step only by not using Stripper. Mixer and Leveler do not need a Hugging Face account.
+You can skip PodStripper’s speaker step only by not using PodStripper. PodProducer and PodLeveler do not need a Hugging Face account.
 
 ---
 
@@ -104,7 +104,7 @@ Refunds are handled through Paddle’s process (and we can still help at hello@c
 
 ## Accounts
 
-The Mac apps do **not** require a CougarCalc login. There is no “sign in with Apple” inside Stripper, Mixer, or Leveler today.
+The Mac apps do **not** require a CougarCalc login. There is no “sign in with Apple” inside PodStripper, PodProducer, or PodLeveler today.
 
 A purchase email and license key are not a public profile. Hugging Face is a separate account you already use for the speaker model.
 
@@ -112,7 +112,7 @@ A purchase email and license key are not a public profile. Hugging Face is a sep
 
 ## Children
 
-The Suite is for people who make podcasts and other audio. It is not directed at children under 13. Do not buy or use it on behalf of a child in a way that would put their personal data in the apps.
+The apps are for people who make podcasts and other audio. It is not directed at children under 13. Do not buy or use it on behalf of a child in a way that would put their personal data in the apps.
 
 ---
 
@@ -145,8 +145,8 @@ On your Mac, you control files and Keychain items.
 
 ## Your choices
 
-- Use Mixer and Leveler with no Hugging Face token  
-- Remove the Stripper token in Settings  
+- Use PodProducer and PodLeveler with no Hugging Face token  
+- Remove the PodStripper token in Settings  
 - Decline a purchase  
 - Ask us at hello@cougarcalc.com to correct or delete support mail we hold  
 

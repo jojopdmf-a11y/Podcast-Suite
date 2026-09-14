@@ -25,7 +25,7 @@ struct ContentView: View {
             }
         }
         // Keep this view in the title-bar safe area. Ignoring safe area here
-        // slides LIL LEVELER under the traffic lights and clips the status line.
+        // slides PODLEVELER under the traffic lights and clips the status line.
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
         .background {
             ZStack {
@@ -51,7 +51,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("LIL LEVELER")
+                Text("PODLEVELER")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyan)
@@ -96,7 +96,7 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 AboutSupportPanel(
-                    appName: "Lil Leveler",
+                    appName: "PodLeveler",
                     tagline: "Final mix → platform loudness",
                     accent: LevelerTheme.cyan
                 )

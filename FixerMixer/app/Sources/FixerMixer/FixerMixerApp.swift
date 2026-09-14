@@ -32,7 +32,7 @@ struct FixerMixerApp: App {
                 .keyboardShortcut("o", modifiers: .command)
             }
             CommandGroup(replacing: .appInfo) {
-                Button("About Fixer Mixer") {
+                Button("About PodProducer") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
                 }
             }

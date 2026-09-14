@@ -1,24 +1,26 @@
-# Podcast Suite
+# PodStudio
 
-Local Mac apps for the CougarCalc podcast desk: **Podcast Stripper** → **Fixer Mixer** → **Lil Leveler**.
+Local Mac apps for the CougarCalc podcast desk: **PodStripper** → **PodProducer** → **PodLeveler**. Together they are **PodStudio**.
 
 This repo is the apps. The marketing site and free tools live in [CougarCalc](https://github.com/jojopdmf-a11y/CougarCalc).
 
 ## Layout
 
 ```
-FixerMixer/           # stems → polish → bounce
-LilLeveler/           # final mix → platform loudness
-Podcast Stripper/      # stereo mix → speaker tracks + music
+FixerMixer/           # PodProducer — stems → polish → bounce
+LilLeveler/           # PodLeveler — final mix → platform loudness
+Podcast Stripper/     # PodStripper — stereo mix → speaker tracks + music
 ```
+
+(Folder names on disk stay as they are so updates and saved files keep working.)
 
 ## Test an update (easiest)
 
 On a Mac, double-click one of these in this folder:
 
-- **`Update Podcast Stripper.command`**
-- **`Update Fixer Mixer.command`**
-- **`Update Lil Leveler.command`**
+- **`Update PodStripper.command`**
+- **`Update PodProducer.command`**
+- **`Update PodLeveler.command`**
 
 Each one pulls from GitHub, rebuilds that app, and launches it.
 
@@ -28,7 +30,7 @@ First time only: if macOS blocks it, right-click → Open.
 
 **It only runs on macOS 14 Sonoma or newer.** The three apps will not launch on Ventura or older.
 
-**We highly recommend** an Apple Silicon Mac (M1 or newer) with **16 GB of RAM**. A Mac mini M4 is a comfortable home for weekly shows. Mixer and Leveler stay snappy on older Apple Silicon; **Stripper** is the wait — it does the heavy lifting on this Mac (nothing is uploaded).
+**We highly recommend** an Apple Silicon Mac (M1 or newer) with **16 GB of RAM**. A Mac mini M4 is a comfortable home for weekly shows. PodProducer and PodLeveler stay snappy on older Apple Silicon; **PodStripper** is the wait — it does the heavy lifting on this Mac (nothing is uploaded).
 
 | | Works? | Notes |
 |---|---|---|
@@ -50,17 +52,17 @@ Ballpark on that same class of Mac, 2 voices:
 | 90 minutes | ~27 minutes |
 | 2 hours | ~35–40 minutes |
 
-The first time you open Stripper, it installs the engine on this Mac (about 2 GB, once). Homebrew is not required. The first split can add extra time while the speaker model downloads. Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The Stripper window shows a live clock and what step it is on, then keeps the total when it finishes.
+The first time you open PodStripper, it installs the engine on this Mac (about 2 GB, once). Homebrew is not required. The first split can add extra time while the speaker model downloads. Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The PodStripper window shows a live clock and what step it is on, then keeps the total when it finishes.
 
-Fixer Mixer and Lil Leveler are light: mix and level in real time on any Apple Silicon Mac that meets the macOS 14 floor. Mixer loads the whole episode into memory, so long shows with several speaker tracks are happier with 16 GB.
+PodProducer and PodLeveler are light: mix and level in real time on any Apple Silicon Mac that meets the macOS 14 floor. PodProducer loads the whole episode into memory, so long shows with several speaker tracks are happier with 16 GB.
 
-The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requirements.md`](docs/cougarcalc-system-requirements.md). Privacy and terms drafts for the site are [`docs/privacy-policy.md`](docs/privacy-policy.md) and [`docs/terms.md`](docs/terms.md). Stripper also has a short **YOUR MAC** panel next to Settings.
+The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requirements.md`](docs/cougarcalc-system-requirements.md). Privacy and terms drafts for the site are [`docs/privacy-policy.md`](docs/privacy-policy.md) and [`docs/terms.md`](docs/terms.md). PodStripper also has a short **YOUR MAC** panel next to Settings.
 
 ## Saving your work
 
-- **Podcast Stripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
-- **Fixer Mixer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks. Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer, no channels) then **ADD STRIP** / **RECORD**. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
-- **Lil Leveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
+- **PodStripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
+- **PodProducer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks (same filename as before, so old folders still load). Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer, no channels) then **ADD STRIP** / **RECORD**. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
+- **PodLeveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
 
 ## Build
 

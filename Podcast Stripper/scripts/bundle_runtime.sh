@@ -1,14 +1,14 @@
 #!/bin/zsh
 set -euo pipefail
 
-# Copies the Python engine and a macOS uv binary into Podcast Stripper.app.
+# Copies the Python engine and a macOS uv binary into PodStripper.app.
 # Called from app/scripts/build_app.sh. Needs network once to fetch uv.
 # Customers still download torch/demucs on first launch into Application Support.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-}"
 if [[ -z "$APP" || ! -d "$APP/Contents" ]]; then
-  echo "Usage: $0 /path/to/Podcast Stripper.app"
+  echo "Usage: $0 /path/to/PodStripper.app"
   exit 1
 fi
 
