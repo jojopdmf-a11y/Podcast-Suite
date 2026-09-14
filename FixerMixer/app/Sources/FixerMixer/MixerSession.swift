@@ -661,15 +661,43 @@ final class MixerSession: ObservableObject {
     }
 
     var selectedMuteSpansNormalized: [(Double, Double)] {
-        guard frameCount > 1 else { return [] }
-        let spans: [MuteSpan]
         if selectedChannelID == ChannelStripState.musicID {
-            spans = music.muteSpans
-        } else if let v = voices.first(where: { $0.id == selectedChannelID }) {
-            spans = v.muteSpans
-        } else {
-            return []
+            return muteSpansNormalized(music.muteSpans)
         }
+        if let v = voices.first(where: { $0.id == selectedChannelID }) {
+            return muteSpansNormalized(v.muteSpans)
+        }
+        return []
+    }
+
+    /// Speaker strips top to bottom, then music. Visual overview — not an editor.
+    var waveformLanes: [MixerWaveformLane] {
+        var lanes: [MixerWaveformLane] = []
+        for (index, voice) in voices.enumerated() {
+            lanes.append(
+                MixerWaveformLane(
+                    id: voice.id,
+                    name: voice.name,
+                    peaks: engine.waveformPeaks(channelIndex: index, music: false, masterMix: false, binCount: 900),
+                    muteSpans: muteSpansNormalized(voice.muteSpans)
+                )
+            )
+        }
+        if hasMusic {
+            lanes.append(
+                MixerWaveformLane(
+                    id: music.id,
+                    name: music.name,
+                    peaks: engine.waveformPeaks(channelIndex: nil, music: true, masterMix: false, binCount: 900),
+                    muteSpans: muteSpansNormalized(music.muteSpans)
+                )
+            )
+        }
+        return lanes
+    }
+
+    private func muteSpansNormalized(_ spans: [MuteSpan]) -> [(Double, Double)] {
+        guard frameCount > 1 else { return [] }
         let denom = Double(frameCount - 1)
         return spans.map { (Double($0.startFrame) / denom, Double($0.endFrame) / denom) }
     }
@@ -1148,6 +1176,22 @@ final class MixerSession: ObservableObject {
         guard rate > 0 else { return "—" }
         let sec = Double(frames) / rate
         return String(format: "%d:%02d", Int(sec) / 60, Int(sec) % 60)
+    }
+}
+
+/// One strip in the stacked ALL TRACKS waveform view.
+struct MixerWaveformLane: Identifiable, Equatable {
+    var id: Int
+    var name: String
+    var peaks: [Float]
+    var muteSpans: [(Double, Double)]
+
+    static func == (lhs: MixerWaveformLane, rhs: MixerWaveformLane) -> Bool {
+        lhs.id == rhs.id
+            && lhs.name == rhs.name
+            && lhs.peaks == rhs.peaks
+            && lhs.muteSpans.count == rhs.muteSpans.count
+            && zip(lhs.muteSpans, rhs.muteSpans).allSatisfy { $0.0 == $1.0 && $0.1 == $1.1 }
     }
 }
 
