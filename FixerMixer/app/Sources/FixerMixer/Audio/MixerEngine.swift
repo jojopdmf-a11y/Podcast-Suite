@@ -65,6 +65,8 @@ final class MixerEngine: @unchecked Sendable {
     private var recSourceFormat: AVAudioFormat?
     private var recDestFormat: AVAudioFormat?
     private var recSilentMixer: AVAudioMixerNode?
+    /// True only after a record tap is on inputNode. Touching inputNode at any other time makes macOS ask for the mic.
+    private var didInstallInputTap = false
     private var lengthEmitCounter = 0
 
     private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
@@ -752,10 +754,11 @@ final class MixerEngine: @unchecked Sendable {
         playing = false
         recording = false
         lock.unlock()
-        if let engine = audioEngine {
+        if didInstallInputTap, let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
             recSilentMixer.map { engine.disconnectNodeOutput($0) }
         }
+        didInstallInputTap = false
         audioEngine?.stop()
         if let node = sourceNode {
             audioEngine?.detach(node)
@@ -1077,6 +1080,7 @@ final class MixerEngine: @unchecked Sendable {
         input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
             self?.ingestRecordBuffer(buffer)
         }
+        didInstallInputTap = true
     }
 
     private func applyInputDevice(_ engine: AVAudioEngine, uid: String?) {
