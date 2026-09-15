@@ -26,6 +26,8 @@ Each one pulls from GitHub, rebuilds that app, and launches it.
 
 First time only: if macOS blocks it, right-click → Open.
 
+If Update stops and says Apple’s developer tools need Agree: Spotlight → **Terminal**, paste `sudo xcodebuild -license accept`, type your Mac password (it will not show), Return, then double-click Update again. Or open the **Xcode** app once and click Agree.
+
 ## System requirements
 
 **It only runs on macOS 14 Sonoma or newer.** The three apps will not launch on Ventura or older.
