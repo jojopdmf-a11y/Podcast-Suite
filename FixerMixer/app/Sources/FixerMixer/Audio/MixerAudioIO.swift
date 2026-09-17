@@ -66,6 +66,85 @@ enum MixerAudioIO {
         )
     }
 
+    /// Resample interleaved float PCM. Used on Export (and to match a live session clock).
+    static func resampleInterleaved(
+        _ interleaved: [Float],
+        channels: Int,
+        from srcRate: Double,
+        to destRate: Double
+    ) throws -> [Float] {
+        try resample(interleaved, channels: channels, from: srcRate, to: destRate)
+    }
+
+    static func writeExport(
+        url: URL,
+        buffer: WAVIO.Buffer,
+        format: MixerBounceFormat,
+        sampleRate destRate: Double
+    ) throws {
+        var samples = buffer.samples
+        var rate = buffer.sampleRate
+        let channels = max(1, buffer.channelCount)
+        if abs(destRate - rate) > 0.5 {
+            samples = try resample(samples, channels: channels, from: rate, to: destRate)
+            rate = destRate
+        }
+        let exported = WAVIO.Buffer(sampleRate: rate, channelCount: channels, samples: samples)
+        switch format {
+        case .wav16:
+            try WAVIO.write(url: url, buffer: exported, bitsPerSample: 16)
+        case .wav24:
+            try WAVIO.write(url: url, buffer: exported, bitsPerSample: 24)
+        case .aiff24:
+            try writeAIFF24(url: url, buffer: exported)
+        }
+    }
+
+    private static func writeAIFF24(url: URL, buffer: WAVIO.Buffer) throws {
+        let channels = max(1, buffer.channelCount)
+        let frames = buffer.frameCount
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: buffer.sampleRate,
+            AVNumberOfChannelsKey: channels,
+            AVLinearPCMBitDepthKey: 24,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: true,
+            AVLinearPCMIsNonInterleaved: false,
+        ]
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+        let file = try AVAudioFile(
+            forWriting: url,
+            settings: settings,
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+        let proc = file.processingFormat
+        let chunk = 65_536
+        var offset = 0
+        while offset < frames {
+            let n = min(chunk, frames - offset)
+            guard let pcm = AVAudioPCMBuffer(pcmFormat: proc, frameCapacity: AVAudioFrameCount(n)) else {
+                throw MixerError.engine("Out of memory writing AIFF.")
+            }
+            pcm.frameLength = AVAudioFrameCount(n)
+            guard let chans = pcm.floatChannelData else {
+                throw MixerError.engine("Could not write AIFF.")
+            }
+            let procCh = Int(proc.channelCount)
+            for f in 0..<n {
+                for c in 0..<procCh {
+                    let srcC = min(c, channels - 1)
+                    chans[c][f] = buffer.samples[(offset + f) * channels + srcC]
+                }
+            }
+            try file.write(from: pcm)
+            offset += n
+        }
+    }
+
     private static func readInterleaved(
         file: AVAudioFile,
         format: AVAudioFormat,

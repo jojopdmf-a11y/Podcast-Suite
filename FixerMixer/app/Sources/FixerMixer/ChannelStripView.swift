@@ -392,8 +392,10 @@ struct ChannelStripView: View {
     var isSelected: Bool
     var hardwareInputChannels: Int = 0
     var isRecording: Bool = false
+    var canRemove: Bool = false
     var onSelect: () -> Void
     var onChange: () -> Void
+    var onRemove: (() -> Void)? = nil
     var stripReorderable: Bool = false
     var isReorderDropTarget: Bool = false
     var onReorderDrop: ((Int) -> Void)? = nil
@@ -442,6 +444,24 @@ struct ChannelStripView: View {
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if canRemove {
+                    Button("REMOVE") { onRemove?() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.danger)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(MixerTheme.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .stroke(MixerTheme.danger.opacity(0.55), lineWidth: 1)
+                        )
+                        .help("This strip has no audio. Remove it if you added it by mistake.")
+                        .disabled(isRecording)
+                }
                 if !channel.isStereo {
                     inputRow
                 }

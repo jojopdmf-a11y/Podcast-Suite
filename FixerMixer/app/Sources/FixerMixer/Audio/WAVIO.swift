@@ -82,17 +82,28 @@ enum WAVIO {
         }
     }
 
-    static func write(url: URL, buffer: Buffer) throws {
+    static func write(url: URL, buffer: Buffer, bitsPerSample: Int = 16) throws {
+        let bits = bitsPerSample == 24 ? 24 : 16
+        let bytesPerSample = bits / 8
         let frames = buffer.frameCount
         let channels = buffer.channelCount
-        var pcm = Data(capacity: frames * channels * 2)
+        var pcm = Data(capacity: frames * channels * bytesPerSample)
         for s in buffer.samples {
             let clipped = max(-1.0, min(1.0, s))
-            var v = Int16((clipped * 32767.0).rounded())
-            withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0) }
+            if bits == 24 {
+                var v = Int32((clipped * 8_388_607.0).rounded())
+                if v > 8_388_607 { v = 8_388_607 }
+                if v < -8_388_608 { v = -8_388_608 }
+                pcm.append(UInt8(v & 0xFF))
+                pcm.append(UInt8((v >> 8) & 0xFF))
+                pcm.append(UInt8((v >> 16) & 0xFF))
+            } else {
+                var v = Int16((clipped * 32767.0).rounded())
+                withUnsafeBytes(of: &v) { pcm.append(contentsOf: $0) }
+            }
         }
         let dataSize = UInt32(pcm.count)
-        let byteRate = UInt32(buffer.sampleRate) * UInt32(channels) * 2
+        let byteRate = UInt32(buffer.sampleRate) * UInt32(channels) * UInt32(bytesPerSample)
         var header = Data()
         header.append(contentsOf: Array("RIFF".utf8))
         var chunkSize = UInt32(36 + dataSize)
@@ -104,8 +115,8 @@ enum WAVIO {
         appendU16(&header, UInt16(channels))
         appendU32(&header, UInt32(buffer.sampleRate))
         appendU32(&header, byteRate)
-        appendU16(&header, UInt16(channels * 2))
-        appendU16(&header, 16)
+        appendU16(&header, UInt16(channels * bytesPerSample))
+        appendU16(&header, UInt16(bits))
         header.append(contentsOf: Array("data".utf8))
         appendU32(&header, dataSize)
         try (header + pcm).write(to: url)

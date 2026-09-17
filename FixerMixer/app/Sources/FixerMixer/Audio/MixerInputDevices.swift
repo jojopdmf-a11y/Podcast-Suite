@@ -6,6 +6,8 @@ struct MixerInputDevice: Identifiable, Hashable {
     var uid: String
     var name: String
     var inputChannels: Int
+    /// Device clock from Audio MIDI / the interface, not a Mixer default.
+    var nominalSampleRate: Double?
 }
 
 enum MixerInputDevices {
@@ -34,7 +36,8 @@ enum MixerInputDevices {
                     id: id,
                     uid: stringProperty(id, kAudioDevicePropertyDeviceUID) ?? "\(id)",
                     name: stringProperty(id, kAudioDevicePropertyDeviceNameCFString) ?? "Input \(id)",
-                    inputChannels: channels
+                    inputChannels: channels,
+                    nominalSampleRate: nominalSampleRate(id)
                 )
             )
         }
@@ -57,6 +60,34 @@ enum MixerInputDevices {
 
     static func device(uid: String, in devices: [MixerInputDevice]) -> MixerInputDevice? {
         devices.first { $0.uid == uid }
+    }
+
+    /// Interface sample rate for a UID, else the default input, else the first input box.
+    static func nominalSampleRate(uid: String?, in devices: [MixerInputDevice]? = nil) -> Double? {
+        let list = devices ?? Self.list()
+        if let uid, let rate = device(uid: uid, in: list)?.nominalSampleRate, rate > 0 {
+            return rate
+        }
+        if let fallbackUID = defaultInputUID(),
+           let rate = device(uid: fallbackUID, in: list)?.nominalSampleRate,
+           rate > 0 {
+            return rate
+        }
+        return list.first(where: { ($0.nominalSampleRate ?? 0) > 0 })?.nominalSampleRate
+    }
+
+    private static func nominalSampleRate(_ id: AudioDeviceID) -> Double? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &rate) == noErr, rate > 0 else {
+            return nil
+        }
+        return rate
     }
 
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {

@@ -340,3 +340,37 @@ def test_export_overlap_mixdown_stays_near_original(tmp_path: Path):
     assert rms_sum / rms_orig < 1.2
     assert rms_sum / rms_orig > 0.7
 
+
+def test_parse_export_sample_rate_native_and_known_rates():
+    from podcast_stripper.convert import parse_export_audio_format, parse_export_sample_rate
+
+    assert parse_export_sample_rate("native") is None
+    assert parse_export_sample_rate(0) is None
+    assert parse_export_sample_rate("48000") == 48000
+    assert parse_export_audio_format("wav24") == "wav24"
+    try:
+        parse_export_sample_rate("32000")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_encode_export_file_passes_rate_and_codec(tmp_path: Path, monkeypatch):
+    from podcast_stripper import convert as convert_mod
+
+    captured: list[list[str]] = []
+
+    def fake_run(args, *, timeout=None):
+        captured.append(list(args))
+
+    monkeypatch.setattr(convert_mod, "run_ffmpeg", fake_run)
+    src = tmp_path / "in.wav"
+    src.write_bytes(b"RIFF")
+    dest = tmp_path / "out.wav"
+    convert_mod.encode_export_file(src, dest, sample_rate=48000, audio_format="aiff24")
+    assert captured
+    args = captured[0]
+    assert "-ar" in args and "48000" in args
+    assert "pcm_s24be" in args
+    assert str(dest.with_suffix(".aiff")) in args
+

@@ -10,6 +10,8 @@ struct ContentView: View {
     @State private var showExport = false
     @State private var exportItems: [MixerExportItem] = []
     @State private var exportFolder: URL?
+    @State private var exportSampleRate: MixerBounceRate = .native
+    @State private var exportFormat: MixerBounceFormat = .wav16
     @State private var showAllWaveforms = false
     @State private var reorderStrips = false
     @State private var reorderDropID: Int?
@@ -82,6 +84,9 @@ struct ContentView: View {
                 session.refreshInputDevices()
             }
         }
+        .onChange(of: session.selectedInputUID) { _, _ in
+            session.adoptInterfaceSampleRateIfEmpty()
+        }
         .onDisappear {
             session.engine.stop()
             removeSpacebarMonitor()
@@ -109,11 +114,19 @@ struct ContentView: View {
             MixerExportSheet(
                 items: $exportItems,
                 folder: $exportFolder,
+                nativeSampleRate: session.sampleRate,
+                sampleRate: $exportSampleRate,
+                format: $exportFormat,
                 onCancel: { showExport = false },
                 onExport: {
                     showExport = false
                     if let exportFolder {
-                        session.bounce(items: exportItems, folder: exportFolder)
+                        session.bounce(
+                            items: exportItems,
+                            folder: exportFolder,
+                            sampleRate: exportSampleRate,
+                            format: exportFormat
+                        )
                     }
                 }
             )
@@ -190,7 +203,11 @@ struct ContentView: View {
                 }
                 Button("ADD STRIP") { session.addBlankStrip() }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Adds an empty speaker strip (up to 8). Pick IN on it to record.")
+                    .help("Adds an empty speaker strip (up to 8). Pick IN on it to record. REMOVE if you do not need it.")
+                Button("REMOVE STRIP") { session.removeEmptyStrip(session.selectedChannelID) }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .disabled(session.isRecording || session.isBouncing || !session.canRemoveStrip(session.selectedChannelID))
+                    .help("Removes the selected speaker strip when it is empty (ADD STRIP with no recording).")
                 if reorderStrips {
                     Button("REORDER") { reorderStrips = false }
                         .buttonStyle(MixerPrimaryButtonStyle())
@@ -298,8 +315,10 @@ struct ContentView: View {
                 isSelected: session.selectedChannelID == id,
                 hardwareInputChannels: session.selectedInputChannelCount,
                 isRecording: session.isRecording,
+                canRemove: session.canRemoveStrip(id),
                 onSelect: { focusChannel(id) },
                 onChange: { session.syncParamsToEngine() },
+                onRemove: { session.removeEmptyStrip(id) },
                 stripReorderable: reorderStrips,
                 isReorderDropTarget: reorderDropID == id,
                 onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
@@ -344,14 +363,18 @@ struct ContentView: View {
             ) {
                 Text(session.inputDevices.isEmpty ? "No interface" : "—").tag("")
                 ForEach(session.inputDevices) { device in
-                    Text("\(device.name) · \(device.inputChannels) in").tag(device.uid)
+                    if let hz = device.nominalSampleRate, hz > 0 {
+                        Text("\(device.name) · \(device.inputChannels) in · \(Int(hz.rounded())) Hz").tag(device.uid)
+                    } else {
+                        Text("\(device.name) · \(device.inputChannels) in").tag(device.uid)
+                    }
                 }
             }
             .labelsHidden()
             .pickerStyle(.menu)
             .frame(maxWidth: 240)
             .disabled(session.isRecording)
-            .help("The interface Mixer records from. One box for the whole session. Assign IN 1 / IN 2 on each speaker strip.")
+                    .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip.")
         }
     }
 
@@ -602,11 +625,13 @@ struct ContentView: View {
             Button(session.isBouncing ? "EXPORTING…" : "EXPORT…") {
                 exportItems = session.makeExportItems()
                 exportFolder = session.suggestedExportFolder()
+                exportSampleRate = .native
+                exportFormat = .wav16
                 showExport = true
             }
             .buttonStyle(MixerGhostButtonStyle())
             .disabled(session.isBouncing || session.frameCount == 0)
-            .help("Choose speaker stems, stereo beds, and the master 2-mix, then name and save them")
+            .help("Choose speaker stems, stereo beds, and the master 2-mix. Pick sample rate and WAV/AIFF here — playback stays at the file rate.")
         }
         .padding(12)
         .mixerPanel()

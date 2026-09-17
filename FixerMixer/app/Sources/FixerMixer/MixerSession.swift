@@ -186,7 +186,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
 }
 
 struct ChannelStripState: Identifiable, Equatable {
-    let id: Int
+    var id: Int
     var name: String
     var isStereo: Bool
     /// Original Stripper speaker index (1-based), for bounce filenames.
@@ -392,6 +392,15 @@ final class MixerSession: ObservableObject {
             selectedInputUID = MixerInputDevices.defaultInputUID()
                 ?? inputDevices.first?.uid
         }
+        adoptInterfaceSampleRateIfEmpty()
+    }
+
+    /// Empty mixer follows the INPUT box (Dante 96 kHz stays 96 kHz). Loaded files keep their own rate.
+    func adoptInterfaceSampleRateIfEmpty() {
+        guard mixerOpen, frameCount == 0, !isRecording, !isPlaying else { return }
+        let rate = MixerInputDevices.nominalSampleRate(uid: selectedInputUID, in: inputDevices) ?? 48_000
+        engine.adoptSampleRate(rate)
+        sampleRate = engine.sampleRate
     }
 
     func newRecordSession() {
@@ -401,7 +410,8 @@ final class MixerSession: ObservableObject {
             isRecording = false
         }
         refreshInputDevices()
-        engine.prepareBlankSession(voiceCount: 0, sampleRate: 48_000)
+        let rate = MixerInputDevices.nominalSampleRate(uid: selectedInputUID, in: inputDevices) ?? 48_000
+        engine.prepareBlankSession(voiceCount: 0, sampleRate: rate)
         voices = []
         stereos = []
         mixerOpen = true
@@ -417,7 +427,7 @@ final class MixerSession: ObservableObject {
         refreshWaveform()
         syncRTASource()
         syncParamsToEngine()
-        status = "Empty mixer. Drop audio or ADD STRIP. Pick IN on a speaker, then Record. Monitor through your interface."
+        status = "Empty mixer · \(Int(sampleRate.rounded())) Hz from your interface. Drop audio or ADD STRIP. Pick IN on a speaker, then Record. Monitor through your interface."
     }
 
     private func ensureSessionFolder() {
@@ -458,7 +468,50 @@ final class MixerSession: ObservableObject {
         selectedChannelID = ch.id
         refreshWaveform()
         syncParamsToEngine()
-        status = "Added \(ch.name). Pick IN on the strip to record it."
+        status = "Added \(ch.name). Pick IN on the strip to record it. REMOVE STRIP if you do not need it."
+    }
+
+    func canRemoveStrip(_ id: Int) -> Bool {
+        guard !isRecording, let index = voices.firstIndex(where: { $0.id == id }) else { return false }
+        if voices[index].fileURL != nil { return false }
+        return !engine.voiceHasAudio(at: index)
+    }
+
+    func removeEmptyStrip(_ id: Int) {
+        guard canRemoveStrip(id), let index = voices.firstIndex(where: { $0.id == id }) else { return }
+        if isPlaying {
+            engine.stop()
+            isPlaying = false
+        }
+        let name = voices[index].name
+        let removedID = voices[index].id
+        var remap: [Int: Int] = [:]
+        voices.remove(at: index)
+        engine.removeVoice(at: index)
+        for (newIdx, _) in voices.enumerated() {
+            remap[voices[newIdx].id] = newIdx
+            voices[newIdx].id = newIdx
+        }
+        channelOrder = channelOrder.compactMap { existing in
+            if existing == removedID { return nil }
+            return remap[existing] ?? existing
+        }
+        syncChannelOrder()
+        if selectedChannelID == removedID {
+            selectedChannelID = voices.first?.id ?? stereos.first?.id ?? ChannelStripState.masterID
+        } else if let mapped = remap[selectedChannelID] {
+            selectedChannelID = mapped
+        }
+        if autoGainDb.count > voices.count {
+            autoGainDb = Array(autoGainDb.prefix(voices.count))
+        }
+        sampleRate = engine.sampleRate
+        frameCount = engine.frameCount
+        refreshWaveform()
+        syncRTASource()
+        syncParamsToEngine()
+        persistMixIfPossible()
+        status = "Removed \(name)."
     }
 
     func toggleRecord() {
@@ -508,7 +561,8 @@ final class MixerSession: ObservableObject {
             )
             isPlaying = true
             isRecording = true
-            status = "Recording — overwrites from the playhead on armed strips. Monitor mics on your interface, not through PodProducer."
+            sampleRate = engine.sampleRate
+            status = "Recording \(Int(sampleRate.rounded())) Hz — overwrites from the playhead on armed strips. Monitor mics on your interface, not through PodProducer."
         } catch {
             status = error.localizedDescription
         }
@@ -1228,7 +1282,7 @@ final class MixerSession: ObservableObject {
             ?? URL(fileURLWithPath: NSHomeDirectory())
     }
 
-    func bounce(items: [MixerExportItem], folder: URL) {
+    func bounce(items: [MixerExportItem], folder: URL, sampleRate destRate: MixerBounceRate, format: MixerBounceFormat) {
         guard !isBouncing else { return }
         guard frameCount > 0 else {
             status = "Load tracks before exporting."
@@ -1247,10 +1301,13 @@ final class MixerSession: ObservableObject {
                 mixFile = item.name
             }
         }
+        let resolvedRate = destRate.resolved(native: sampleRate)
         let plan = MixerEngine.BounceWritePlan(
             voiceFiles: voiceFiles,
             stereoFiles: stereoFiles,
-            mixFile: mixFile
+            mixFile: mixFile,
+            sampleRate: destRate == .native ? nil : resolvedRate,
+            format: format
         )
         guard !plan.isEmpty else {
             status = "Check at least one output to export."

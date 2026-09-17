@@ -328,6 +328,55 @@ final class MixerEngine: @unchecked Sendable {
         rebuildWaveformCache()
     }
 
+    /// Empty NEW SESSION / unused ADD STRIP: take the interface clock so Record is not labeled 48 kHz.
+    func adoptSampleRate(_ rate: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard frameCount == 0, rate > 0, abs(rate - sampleRate) > 0.5 else { return }
+        applySampleRateLocked(rate)
+    }
+
+    private func applySampleRateLocked(_ rate: Double) {
+        sampleRate = rate
+        for i in processors.indices {
+            processors[i].configure(sampleRate: rate)
+            processors[i].reset()
+        }
+        for i in stereoProcessors.indices {
+            stereoProcessors[i].configure(sampleRate: rate)
+            stereoProcessors[i].reset()
+        }
+    }
+
+    func voiceHasAudio(at index: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard voiceBuffers.indices.contains(index) else { return false }
+        return voiceBuffers[index].contains { abs($0) > 1e-4 }
+    }
+
+    func removeVoice(at index: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard voiceBuffers.indices.contains(index) else { return }
+        voiceBuffers.remove(at: index)
+        if speakerNumbers.indices.contains(index) { speakerNumbers.remove(at: index) }
+        if stemNames.indices.contains(index) { stemNames.remove(at: index) }
+        if processors.indices.contains(index) { processors.remove(at: index) }
+        if voiceMuteSpans.indices.contains(index) { voiceMuteSpans.remove(at: index) }
+        voiceCount = voiceBuffers.count
+        var nextMap: [Int: Int] = [:]
+        for (voiceIndex, hwCh) in recordMap where voiceIndex != index {
+            nextMap[voiceIndex > index ? voiceIndex - 1 : voiceIndex] = hwCh
+        }
+        recordMap = nextMap
+        autoBalancer.resize(to: voiceCount)
+        autoBalancer.reset()
+        meterPre = Array(repeating: 0, count: meterSlotCount)
+        meterPost = Array(repeating: 0, count: meterSlotCount)
+        rebuildWaveformCache()
+    }
+
     func rebuildPeaks() {
         lock.lock()
         rebuildWaveformCache()
@@ -480,6 +529,11 @@ final class MixerEngine: @unchecked Sendable {
         }
         self.recording = recording
         self.inputDeviceUID = inputDeviceUID
+        if recording, frameCount == 0,
+           let hwRate = MixerInputDevices.nominalSampleRate(uid: inputDeviceUID),
+           hwRate > 0 {
+            applySampleRateLocked(hwRate)
+        }
         if fromBeginning {
             playhead = 0
         }
@@ -784,11 +838,13 @@ final class MixerEngine: @unchecked Sendable {
         var fileCount: Int
     }
 
-    /// Which rendered buffers to write, and the `.wav` file names inside `folder`.
+    /// Which rendered buffers to write, and the file names inside `folder` (no extension).
     struct BounceWritePlan: Sendable {
         var voiceFiles: [Int: String]
         var stereoFiles: [Int: String]
         var mixFile: String?
+        var sampleRate: Double?
+        var format: MixerBounceFormat
         var isEmpty: Bool {
             voiceFiles.isEmpty && stereoFiles.isEmpty && mixFile == nil
         }
@@ -817,6 +873,8 @@ final class MixerEngine: @unchecked Sendable {
 
         guard total > 0 else { throw MixerError.engine("Nothing to bounce.") }
         guard !plan.isEmpty else { throw MixerError.engine("Pick at least one output to export.") }
+        let destRate = plan.sampleRate.flatMap { $0 > 0 ? $0 : nil } ?? sr
+        let ext = plan.format.pathExtension
 
         for i in procs.indices {
             procs[i].reset()
@@ -917,19 +975,21 @@ final class MixerEngine: @unchecked Sendable {
         var usedNames = Set<String>()
         func uniqueName(_ raw: String, fallback: String) -> String {
             var base = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if base.lowercased().hasSuffix(".wav") {
-                base = String(base.dropLast(4))
+            let lower = base.lowercased()
+            for suffix in [".wav", ".aiff", ".aif"] where lower.hasSuffix(suffix) {
+                base = String(base.dropLast(suffix.count))
+                break
             }
             base = ChannelStripState.sanitizeFilenameComponent(base)
             if base.isEmpty { base = fallback }
             var unique = base
-            var suffix = 2
+            var suffixN = 2
             while usedNames.contains(unique.lowercased()) {
-                unique = "\(base)_\(suffix)"
-                suffix += 1
+                unique = "\(base)_\(suffixN)"
+                suffixN += 1
             }
             usedNames.insert(unique.lowercased())
-            return "\(unique).wav"
+            return "\(unique).\(ext)"
         }
 
         for c in 0..<voiceN {
@@ -940,7 +1000,12 @@ final class MixerEngine: @unchecked Sendable {
                 let fallback = names.indices.contains(c) ? names[c] : "Speaker_\(num)"
                 let filename = uniqueName(requested, fallback: fallback.isEmpty ? "Speaker_\(num)" : fallback)
                 let url = folder.appendingPathComponent(filename)
-                try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[c]))
+                try MixerAudioIO.writeExport(
+                    url: url,
+                    buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[c]),
+                    format: plan.format,
+                    sampleRate: destRate
+                )
                 fileCount += 1
             }
         }
@@ -951,7 +1016,12 @@ final class MixerEngine: @unchecked Sendable {
                 let fallback = s == 0 ? "Music_and_SFX_fixed" : "SFX_fixed"
                 let filename = uniqueName(requested, fallback: fallback)
                 let url = folder.appendingPathComponent(filename)
-                try WAVIO.write(url: url, buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[voiceN + s]))
+                try MixerAudioIO.writeExport(
+                    url: url,
+                    buffer: .init(sampleRate: sr, channelCount: 2, samples: stemBuffers[voiceN + s]),
+                    format: plan.format,
+                    sampleRate: destRate
+                )
                 fileCount += 1
             }
         }
@@ -963,9 +1033,11 @@ final class MixerEngine: @unchecked Sendable {
                 mixInterleaved.append(mixR[i])
             }
             let filename = uniqueName(requested, fallback: "mix")
-            try WAVIO.write(
+            try MixerAudioIO.writeExport(
                 url: folder.appendingPathComponent(filename),
-                buffer: .init(sampleRate: sr, channelCount: 2, samples: mixInterleaved)
+                buffer: .init(sampleRate: sr, channelCount: 2, samples: mixInterleaved),
+                format: plan.format,
+                sampleRate: destRate
             )
             fileCount += 1
         }
@@ -1066,11 +1138,9 @@ final class MixerEngine: @unchecked Sendable {
             channels: hwFormat.channelCount,
             interleaved: true
         )
-        if let dest = recDestFormat, abs(hwFormat.sampleRate - sampleRate) > 0.5 || hwFormat.channelCount != dest.channelCount || !hwFormat.isInterleaved {
-            recConverter = AVAudioConverter(from: hwFormat, to: dest)
-        } else {
-            recConverter = nil
-        }
+        // Keep the interface clock. Convert to float at that rate; only resample if this
+        // session already has audio at a different rate (mixing onto an existing timeline).
+        recConverter = nil
 
         recLock.lock()
         recPending = []
@@ -1103,66 +1173,20 @@ final class MixerEngine: @unchecked Sendable {
     private func ingestRecordBuffer(_ buffer: AVAudioPCMBuffer) {
         let frames = Int(buffer.frameLength)
         guard frames > 0 else { return }
-        let ch = Int(buffer.format.channelCount)
-        var interleaved = [Float](repeating: 0, count: frames * max(1, ch))
-        if let planar = buffer.floatChannelData {
-            for f in 0..<frames {
-                for c in 0..<ch {
-                    interleaved[f * ch + c] = planar[c][f]
-                }
-            }
-        } else if buffer.format.isInterleaved, let data = buffer.audioBufferList.pointee.mBuffers.mData {
-            let ptr = data.assumingMemoryBound(to: Float.self)
-            interleaved = Array(UnsafeBufferPointer(start: ptr, count: frames * ch))
-        }
-
-        var out = interleaved
+        let ch = max(1, Int(buffer.format.channelCount))
+        var out = interleavedFloats(from: buffer)
         var outCh = ch
-        if let converter = recConverter, let dest = recDestFormat, let src = recSourceFormat,
-           let srcBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: AVAudioFrameCount(frames))
-        {
-            srcBuf.frameLength = AVAudioFrameCount(frames)
-            if let dstData = srcBuf.floatChannelData {
-                for c in 0..<ch {
-                    for f in 0..<frames {
-                        dstData[c][f] = interleaved[f * ch + c]
-                    }
-                }
-            }
-            let ratio = dest.sampleRate / src.sampleRate
-            let outFrames = max(1, Int((Double(frames) * ratio).rounded(.up)) + 4)
-            guard let destBuf = AVAudioPCMBuffer(pcmFormat: dest, frameCapacity: AVAudioFrameCount(outFrames)) else {
-                recLock.lock()
-                recPending.append(contentsOf: interleaved)
-                recPendingChannels = ch
-                recLock.unlock()
-                return
-            }
-            var error: NSError?
-            var consumed = false
-            converter.convert(to: destBuf, error: &error) { _, status in
-                if consumed {
-                    status.pointee = .endOfStream
-                    return nil
-                }
-                consumed = true
-                status.pointee = .haveData
-                return srcBuf
-            }
-            if error == nil, destBuf.frameLength > 0 {
-                let nf = Int(destBuf.frameLength)
-                outCh = Int(dest.channelCount)
-                if dest.isInterleaved, let data = destBuf.audioBufferList.pointee.mBuffers.mData {
-                    let ptr = data.assumingMemoryBound(to: Float.self)
-                    out = Array(UnsafeBufferPointer(start: ptr, count: nf * outCh))
-                } else if let planar = destBuf.floatChannelData {
-                    out = [Float](repeating: 0, count: nf * outCh)
-                    for f in 0..<nf {
-                        for c in 0..<outCh {
-                            out[f * outCh + c] = planar[c][f]
-                        }
-                    }
-                }
+        let srcRate = buffer.format.sampleRate
+        let destRate = sampleRate
+        if abs(srcRate - destRate) > 0.5, srcRate > 0, destRate > 0 {
+            if let resampled = try? MixerAudioIO.resampleInterleaved(
+                out,
+                channels: ch,
+                from: srcRate,
+                to: destRate
+            ) {
+                out = resampled
+                outCh = ch
             }
         }
 
@@ -1170,5 +1194,54 @@ final class MixerEngine: @unchecked Sendable {
         recPending.append(contentsOf: out)
         recPendingChannels = outCh
         recLock.unlock()
+    }
+
+    /// Dante / interfaces often deliver int PCM. Store float at the file’s native rate.
+    private func interleavedFloats(from buffer: AVAudioPCMBuffer) -> [Float] {
+        let frames = Int(buffer.frameLength)
+        let ch = max(1, Int(buffer.format.channelCount))
+        if let planar = buffer.floatChannelData {
+            var out = [Float](repeating: 0, count: frames * ch)
+            for f in 0..<frames {
+                for c in 0..<ch {
+                    out[f * ch + c] = planar[c][f]
+                }
+            }
+            return out
+        }
+        if let planar = buffer.int16ChannelData {
+            var out = [Float](repeating: 0, count: frames * ch)
+            for f in 0..<frames {
+                for c in 0..<ch {
+                    out[f * ch + c] = Float(planar[c][f]) / 32768.0
+                }
+            }
+            return out
+        }
+        if let planar = buffer.int32ChannelData {
+            var out = [Float](repeating: 0, count: frames * ch)
+            for f in 0..<frames {
+                for c in 0..<ch {
+                    out[f * ch + c] = Float(planar[c][f]) / Float(Int32.max)
+                }
+            }
+            return out
+        }
+        if buffer.format.isInterleaved, let data = buffer.audioBufferList.pointee.mBuffers.mData {
+            switch buffer.format.commonFormat {
+            case .pcmFormatFloat32:
+                let ptr = data.assumingMemoryBound(to: Float.self)
+                return Array(UnsafeBufferPointer(start: ptr, count: frames * ch))
+            case .pcmFormatInt16:
+                let ptr = data.assumingMemoryBound(to: Int16.self)
+                return UnsafeBufferPointer(start: ptr, count: frames * ch).map { Float($0) / 32768.0 }
+            case .pcmFormatInt32:
+                let ptr = data.assumingMemoryBound(to: Int32.self)
+                return UnsafeBufferPointer(start: ptr, count: frames * ch).map { Float($0) / Float(Int32.max) }
+            default:
+                break
+            }
+        }
+        return [Float](repeating: 0, count: frames * ch)
     }
 }
