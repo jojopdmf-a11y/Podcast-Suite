@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var inputFile: URL?
     @State private var outputFolder: URL?
     @State private var speakerCount: SpeakerCountChoice = .two
+    @State private var exportSampleRate: ExportSampleRateChoice = .native
+    @State private var exportAudioFormat: ExportAudioFormatChoice = .wav16
     @State private var showSettings = false
     @State private var showMacNeeds = false
     @State private var isDropTargeted = false
@@ -153,7 +155,7 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyanDim)
-                    .frame(width: 88, alignment: .leading)
+                    .frame(width: 102, alignment: .leading)
                 Picker("Speakers", selection: $speakerCount) {
                     ForEach(SpeakerCountChoice.allCases) { choice in
                         Text(choice == .auto ? "AUTO" : "\(choice.rawValue)").tag(choice)
@@ -165,11 +167,45 @@ struct ContentView: View {
             }
 
             HStack(alignment: .center, spacing: 14) {
+                Text("SAMPLE RATE")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                Picker("Sample rate", selection: $exportSampleRate) {
+                    ForEach(ExportSampleRateChoice.allCases) { choice in
+                        Text(choice.rawValue.uppercased()).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+                .help("Tracks are split at the file’s native rate. Convert only when writing the files.")
+            }
+
+            HStack(alignment: .center, spacing: 14) {
+                Text("FORMAT")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                Picker("Format", selection: $exportAudioFormat) {
+                    ForEach(ExportAudioFormatChoice.allCases) { choice in
+                        Text(choice.rawValue.uppercased()).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+                .help("WAV 16-bit is the Mixer-friendly default. WAV 24-bit or AIFF 24-bit if your editor wants that.")
+            }
+
+            HStack(alignment: .center, spacing: 14) {
                 Text("SAVE TO")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyanDim)
-                    .frame(width: 88, alignment: .leading)
+                    .frame(width: 102, alignment: .leading)
                 Text(outputFolder?.path ?? "Same folder as the podcast · new _speakers folder")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(StripperTheme.textSecondary)
@@ -421,7 +457,13 @@ struct ContentView: View {
         let dest = outputFolder ?? defaultOutput(for: inputFile)
         outputFolder = dest
         UserDefaults.standard.set(dest.path, forKey: "lastOutputFolder")
-        runner.split(input: inputFile, outputDir: dest, speakerCount: speakerCount)
+        runner.split(
+            input: inputFile,
+            outputDir: dest,
+            speakerCount: speakerCount,
+            sampleRate: exportSampleRate,
+            audioFormat: exportAudioFormat
+        )
     }
 
     private func defaultOutput(for input: URL) -> URL {

@@ -1,6 +1,8 @@
 # PodStripper
 
-A small Mac app that takes **one mixed podcast file** and writes **one WAV track per speaker**, plus a **Music_and_SFX** track for intros, beds, and sound effects. The tracks are the same length and line up in time. When someone is not talking, their speaker track is silence. You can drop the files into GarageBand, Logic, or any editor.
+A small Mac app that takes **one mixed podcast file** and writes **one track per speaker**, plus a **Music_and_SFX** track for intros, beds, and sound effects. The tracks are the same length and line up in time. When someone is not talking, their speaker track is silence. You can drop the files into GarageBand, Logic, or any editor.
+
+On Split, pick **sample rate** (Native, 44.1, 48, or 96 kHz) and **format** (WAV 16-bit, WAV 24-bit, or AIFF 24-bit). The split still happens at the file’s native rate; conversion is only when writing the files.
 
 Audio is processed **on this Mac**. Nothing is uploaded.
 
@@ -51,7 +53,7 @@ Do these steps once. Stay on Wi-Fi.
 
 1. Double-click **PodStripper**. The first open installs the engine on this Mac (about 2 GB). Wait until the status line says **Ready** (or asks for a Hugging Face token). Homebrew is not required.
 2. Add the Hugging Face token below.
-3. Drop a podcast file and click **Split into tracks**.
+3. Drop a podcast file, choose sample rate and format if you want something other than Native WAV 16-bit, and click **Split into tracks**.
 
 ### Hugging Face token (required for speaker detection)
 
@@ -90,20 +92,20 @@ To save a token from Terminal instead of Settings:
 
 1. Drop an `.mp3`, `.m4a`, `.wav`, `.aiff`, or `.flac` file onto the window
 2. If you know how many people are talking, choose that number (2 is right for most interviews)
-3. Click **Split into tracks**
+3. Choose sample rate and format if you want something other than Native WAV 16-bit, then click **Split into tracks**
 4. Wait. The status line says what it is doing and how long it has been running. A one-hour episode is often around 15–20 minutes on a Mac mini M4; the first time on a new Mac also downloads a large model.
 5. Click **Show in Finder**
 
 You will get:
 
-- `Speaker_1.wav`, `Speaker_2.wav`, …
+- `Speaker_1.wav`, `Speaker_2.wav`, … (or `.aiff` if you picked AIFF)
 - `Music_and_SFX.wav` (intros, music beds, and sound effects)
 - `speakers.json` (who spoke when), useful if a voice landed on the wrong track
 
 ## Use Terminal instead
 
 ```bash
-./scripts/run_engine.sh "/path/to/episode.m4a" -o "/path/to/output_folder" --num-speakers 2
+./scripts/run_engine.sh "/path/to/episode.m4a" -o "/path/to/output_folder" --num-speakers 2 --sample-rate native --audio-format wav16
 ```
 
 Check that tools are ready:

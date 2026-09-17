@@ -7,7 +7,13 @@ import tempfile
 from pathlib import Path
 
 from podcast_stripper import __version__
-from podcast_stripper.convert import convert_for_diarization, convert_for_export, is_supported_audio
+from podcast_stripper.convert import (
+    convert_for_diarization,
+    convert_for_export,
+    is_supported_audio,
+    parse_export_audio_format,
+    parse_export_sample_rate,
+)
 from podcast_stripper.export import export_speaker_tracks
 from podcast_stripper.ffmpeg_bin import FFmpegError, find_ffmpeg
 from podcast_stripper.progress import done, error, heartbeat, status
@@ -72,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
         error(str(exc), exc.code, json_progress=json_progress)
         _remove_empty_output_dir(output_dir, created=not output_existed)
         return 2
+    except ValueError as exc:
+        error(str(exc), "bad_export_options", json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
+        return 2
     except FFmpegError as exc:
         error(str(exc), exc.code, json_progress=json_progress)
         _remove_empty_output_dir(output_dir, created=not output_existed)
@@ -99,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
 def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_progress: bool) -> dict:
     def report(stage: str, percent: float, message: str) -> None:
         status(stage, percent, message, json_progress=json_progress)
+
+    export_sample_rate = parse_export_sample_rate(args.sample_rate)
+    audio_format = parse_export_audio_format(args.audio_format)
 
     with tempfile.TemporaryDirectory(prefix="podcast-stripper-") as tmp:
         tmp_dir = Path(tmp)
@@ -179,6 +192,8 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
                 work_wav=original_wav,
                 voice_wav=voice_wav,
                 music_wav=music_wav,
+                export_sample_rate=export_sample_rate,
+                audio_format=audio_format,
             )
 
     manifest_path = output_dir / "speakers.json"
@@ -271,6 +286,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--skip-separate",
         action="store_true",
         help="Skip music/SFX unmixing; still keep intros and gaps on a Music_and_SFX track",
+    )
+    parser.add_argument(
+        "--sample-rate",
+        default="native",
+        help="Export sample rate: native (file rate), 44100, 48000, or 96000",
+    )
+    parser.add_argument(
+        "--audio-format",
+        default="wav16",
+        choices=["wav16", "wav24", "aiff24"],
+        help="Export file format (conversion happens when writing tracks)",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser

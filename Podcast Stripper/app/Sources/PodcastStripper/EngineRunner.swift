@@ -151,6 +151,40 @@ enum SpeakerCountChoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum ExportSampleRateChoice: String, CaseIterable, Identifiable {
+    case native = "Native"
+    case hz44100 = "44.1 kHz"
+    case hz48000 = "48 kHz"
+    case hz96000 = "96 kHz"
+
+    var id: String { rawValue }
+
+    var cliValue: String {
+        switch self {
+        case .native: return "native"
+        case .hz44100: return "44100"
+        case .hz48000: return "48000"
+        case .hz96000: return "96000"
+        }
+    }
+}
+
+enum ExportAudioFormatChoice: String, CaseIterable, Identifiable {
+    case wav16 = "WAV 16-bit"
+    case wav24 = "WAV 24-bit"
+    case aiff24 = "AIFF 24-bit"
+
+    var id: String { rawValue }
+
+    var cliValue: String {
+        switch self {
+        case .wav16: return "wav16"
+        case .wav24: return "wav24"
+        case .aiff24: return "aiff24"
+        }
+    }
+}
+
 struct EngineSetup: Equatable {
     var ffmpegOK = false
     var tokenOK = false
@@ -282,7 +316,13 @@ final class EngineRunner: ObservableObject {
         removeEmptyOutputDirIfNeeded()
     }
 
-    func split(input: URL, outputDir: URL, speakerCount: SpeakerCountChoice) {
+    func split(
+        input: URL,
+        outputDir: URL,
+        speakerCount: SpeakerCountChoice,
+        sampleRate: ExportSampleRateChoice = .native,
+        audioFormat: ExportAudioFormatChoice = .wav16
+    ) {
         errorMessage = nil
         result = nil
         isRunning = true
@@ -319,6 +359,8 @@ final class EngineRunner: ObservableObject {
                 if let count = speakerCount.argumentValue {
                     arguments += ["--num-speakers", String(count)]
                 }
+                arguments += ["--sample-rate", sampleRate.cliValue]
+                arguments += ["--audio-format", audioFormat.cliValue]
                 let output = try await runTool(paths: paths, arguments: arguments, streaming: true)
                 freezeElapsed()
                 if userCancelled {

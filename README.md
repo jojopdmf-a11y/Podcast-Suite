@@ -61,7 +61,7 @@ The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requ
 ## Saving your work
 
 - **PodStripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
-- **PodProducer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks (same filename as before, so old folders still load). Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer, no channels) then **ADD STRIP** / **RECORD**. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
+- **PodProducer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks (same filename as before, so old folders still load). Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer at your interface’s sample rate) then **ADD STRIP** / **RECORD**. **REMOVE STRIP** deletes an unused empty speaker. **EXPORT** can convert sample rate and pick WAV 16 / WAV 24 / AIFF 24. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
 - **PodLeveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
 
 ## Build

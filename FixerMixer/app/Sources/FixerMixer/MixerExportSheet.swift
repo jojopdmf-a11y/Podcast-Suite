@@ -1,6 +1,66 @@
 import AppKit
 import SwiftUI
 
+enum MixerBounceFormat: String, CaseIterable, Identifiable, Sendable {
+    case wav16
+    case wav24
+    case aiff24
+
+    var id: String { rawValue }
+
+    var pathExtension: String {
+        switch self {
+        case .wav16, .wav24: return "wav"
+        case .aiff24: return "aiff"
+        }
+    }
+
+    var menuTitle: String {
+        switch self {
+        case .wav16: return "WAV 16-bit"
+        case .wav24: return "WAV 24-bit"
+        case .aiff24: return "AIFF 24-bit"
+        }
+    }
+}
+
+enum MixerBounceRate: Hashable, Identifiable, Sendable {
+    case native
+    case hz(Int)
+
+    var id: String {
+        switch self {
+        case .native: return "native"
+        case .hz(let value): return "\(value)"
+        }
+    }
+
+    static let choices: [MixerBounceRate] = [.native, .hz(44_100), .hz(48_000), .hz(96_000)]
+
+    func resolved(native: Double) -> Double {
+        switch self {
+        case .native: return native
+        case .hz(let value): return Double(value)
+        }
+    }
+
+    func menuTitle(native: Double) -> String {
+        switch self {
+        case .native:
+            let hz = max(1, Int(native.rounded()))
+            return "Native (\(hz) Hz)"
+        case .hz(44_100):
+            return "44.1 kHz"
+        case .hz(48_000):
+            return "48 kHz"
+        case .hz(96_000):
+            return "96 kHz"
+        case .hz(let value):
+            return "\(value) Hz"
+        }
+    }
+}
+
 struct MixerExportItem: Identifiable, Equatable {
     enum Kind: Equatable {
         case voice(Int)
@@ -19,6 +79,9 @@ struct MixerExportItem: Identifiable, Equatable {
 struct MixerExportSheet: View {
     @Binding var items: [MixerExportItem]
     @Binding var folder: URL?
+    var nativeSampleRate: Double
+    @Binding var sampleRate: MixerBounceRate
+    @Binding var format: MixerBounceFormat
     var onCancel: () -> Void
     var onExport: () -> Void
 
@@ -26,13 +89,15 @@ struct MixerExportSheet: View {
         items.contains(where: \.enabled) && folder != nil
     }
 
+    private var fileExtension: String { ".\(format.pathExtension)" }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("EXPORT")
                     .font(.system(size: 18, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.cyan)
-                Text("Check what to write, then name each file. All exports are WAV.")
+                Text("Check what to write, then name each file. Playback stays at this session’s rate. Convert here if you need another rate or format.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
             }
@@ -74,10 +139,10 @@ struct MixerExportSheet: View {
                                     )
                                     .disabled(!item.enabled)
                                     .opacity(item.enabled ? 1 : 0.45)
-                                Text(".wav")
+                                Text(fileExtension)
                                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                                     .foregroundStyle(MixerTheme.textSecondary)
-                                    .frame(width: 36, alignment: .leading)
+                                    .frame(width: 52, alignment: .leading)
                             }
                         }
                     }
@@ -93,6 +158,38 @@ struct MixerExportSheet: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.3), lineWidth: 1)
             )
+
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("SAMPLE RATE")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .tracking(0.8)
+                        .foregroundStyle(MixerTheme.cyanDim)
+                    Picker("Sample rate", selection: $sampleRate) {
+                        ForEach(MixerBounceRate.choices) { choice in
+                            Text(choice.menuTitle(native: nativeSampleRate)).tag(choice)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 160)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("FORMAT")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .tracking(0.8)
+                        .foregroundStyle(MixerTheme.cyanDim)
+                    Picker("Format", selection: $format) {
+                        ForEach(MixerBounceFormat.allCases) { choice in
+                            Text(choice.menuTitle).tag(choice)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 140)
+                }
+                Spacer(minLength: 8)
+            }
 
             HStack(alignment: .center, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -123,7 +220,7 @@ struct MixerExportSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 560)
+        .frame(width: 620)
         .background(MixerTheme.windowBackground)
         .preferredColorScheme(.dark)
     }
@@ -135,7 +232,7 @@ struct MixerExportSheet: View {
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Choose"
-        panel.message = "Folder for the WAV files you checked"
+        panel.message = "Folder for the files you checked"
         panel.directoryURL = folder
         if panel.runModal() == .OK {
             folder = panel.url

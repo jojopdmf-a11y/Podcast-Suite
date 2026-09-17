@@ -12,7 +12,7 @@ from podcast_stripper.cleanup import (
     music_activity_mask,
     shared_speaker_gates,
 )
-from podcast_stripper.convert import convert_for_export
+from podcast_stripper.convert import convert_for_export, encode_export_file, export_suffix
 
 Segment = tuple[float, float, str]
 
@@ -66,7 +66,6 @@ def speaker_label(index: int) -> str:
 
 
 MUSIC_LABEL = "Music and SFX"
-MUSIC_FILENAME = "Music_and_SFX.wav"
 
 
 def build_speaker_track(
@@ -105,6 +104,28 @@ def build_nonvoice_track(
     return track
 
 
+def _write_finished_track(
+    dest_base: Path,
+    audio: np.ndarray,
+    native_rate: int,
+    *,
+    sample_rate: int | None,
+    audio_format: str,
+) -> Path:
+    """Keep processing at native_rate; convert only for the file on disk."""
+    suffix = export_suffix(audio_format)
+    dest = dest_base.with_suffix(suffix)
+    if audio_format == "wav16" and sample_rate is None:
+        save_wav(dest, audio, native_rate)
+        return dest
+    tmp = dest.with_name(dest.stem + ".__work.wav")
+    save_wav(tmp, audio, native_rate)
+    try:
+        return encode_export_file(tmp, dest, sample_rate=sample_rate, audio_format=audio_format)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 def export_speaker_tracks(
     source_audio: Path,
     output_dir: Path,
@@ -113,6 +134,8 @@ def export_speaker_tracks(
     work_wav: Path | None = None,
     voice_wav: Path | None = None,
     music_wav: Path | None = None,
+    export_sample_rate: int | None = None,
+    audio_format: str = "wav16",
 ) -> dict:
     if work_wav is None:
         work_wav = output_dir / "_original.wav"
@@ -158,10 +181,15 @@ def export_speaker_tracks(
     )
     for index, speaker in enumerate(speakers):
         label = speaker_label(index)
-        filename = f"{label.replace(' ', '_')}.wav"
-        dest = output_dir / filename
+        dest_base = output_dir / f"{label.replace(' ', '_')}"
         track = apply_gate(voice_audio, gates[index])
-        save_wav(dest, track, sample_rate)
+        dest = _write_finished_track(
+            dest_base,
+            track,
+            sample_rate,
+            sample_rate=export_sample_rate,
+            audio_format=audio_format,
+        )
         tracks.append(
             {
                 "id": speaker,
@@ -181,8 +209,13 @@ def export_speaker_tracks(
         segments,
         vocals=voice_audio if voice_wav is not None else None,
     )
-    music_path = output_dir / MUSIC_FILENAME
-    save_wav(music_path, music_audio, sample_rate)
+    music_path = _write_finished_track(
+        output_dir / "Music_and_SFX",
+        music_audio,
+        sample_rate,
+        sample_rate=export_sample_rate,
+        audio_format=audio_format,
+    )
     music_info = {
         "id": "music_and_sfx",
         "label": MUSIC_LABEL,
@@ -192,7 +225,9 @@ def export_speaker_tracks(
 
     manifest = {
         "source": str(source_audio),
-        "sample_rate": sample_rate,
+        "sample_rate": export_sample_rate or sample_rate,
+        "native_sample_rate": sample_rate,
+        "audio_format": audio_format,
         "duration": round(duration, 3),
         "speakers": tracks,
         "music": music_info,
