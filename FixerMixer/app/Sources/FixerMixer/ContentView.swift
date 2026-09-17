@@ -168,7 +168,7 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("PODPRODUCER")
                     .font(.system(size: 26, weight: .bold, design: .rounded))
@@ -182,56 +182,100 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.lime)
             }
-            Spacer()
-            Button("ABOUT") { showAbout = true }
-                .buttonStyle(MixerGhostButtonStyle())
-            Button("LOAD MIX…") { pickMixFile() }
-                .buttonStyle(MixerGhostButtonStyle())
-                .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
+            Spacer(minLength: 8)
+            headerGroup(label: "META") {
+                Button("ABOUT") { showAbout = true }
+                    .buttonStyle(MixerGhostButtonStyle())
+            }
+            headerGroup(label: "SESSION") {
+                Button("LOAD MIX…") { pickMixFile() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
+            }
             if session.hasSession {
-                inputDevicePicker
-                if session.isRecording {
-                    Button("STOP REC") { session.toggleRecord() }
-                        .buttonStyle(MixerRecordButtonStyle())
-                        .disabled(session.isBouncing)
-                        .help("Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
-                } else {
-                    Button("RECORD") { session.toggleRecord() }
-                        .buttonStyle(MixerGhostButtonStyle())
-                        .disabled(session.isBouncing)
-                        .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back.")
+                headerGroup(label: "INPUT + RECORD", accent: MixerTheme.danger.opacity(0.85)) {
+                    inputDevicePicker
+                    Button("STANDBY") {
+                        session.toggleRecordStandby()
+                    }
+                    .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
+                    .disabled(session.isBouncing || session.isRecording)
+                    .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
+                    if session.isRecording {
+                        Button("STOP REC") { session.toggleRecord() }
+                            .buttonStyle(MixerRecordButtonStyle())
+                            .disabled(session.isBouncing)
+                            .help("Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
+                    } else {
+                        Button("RECORD") { session.toggleRecord() }
+                            .buttonStyle(MixerGhostButtonStyle())
+                            .disabled(session.isBouncing)
+                            .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back. Standby is optional.")
+                    }
                 }
-                Button("ADD STRIP") { session.addBlankStrip() }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Adds an empty speaker strip (up to 8). Pick IN on it to record. REMOVE if you do not need it.")
-                Button("REMOVE STRIP") { session.removeEmptyStrip(session.selectedChannelID) }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .disabled(session.isRecording || session.isBouncing || !session.canRemoveStrip(session.selectedChannelID))
-                    .help("Removes the selected speaker strip when it is empty (ADD STRIP with no recording).")
-                if reorderStrips {
-                    Button("REORDER") { reorderStrips = false }
-                        .buttonStyle(MixerPrimaryButtonStyle())
-                        .disabled(session.isRecording)
-                        .help("Reorder is on. Drag a lime DRAG TO REORDER handle onto another strip. Click again when you are done.")
-                } else {
-                    Button("REORDER") { reorderStrips = true }
+                headerGroup(label: "STRIPS") {
+                    Button("ADD STRIP") { session.addBlankStrip() }
                         .buttonStyle(MixerGhostButtonStyle())
-                        .disabled(session.isRecording)
-                        .help("Turn on, then drag a strip onto another strip — same idea as dragging DSP chips.")
+                        .help("Adds an empty speaker strip (up to 8). Pick IN on it to record. REMOVE if you do not need it.")
+                    Button("REMOVE STRIP") { session.removeEmptyStrip(session.selectedChannelID) }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .disabled(session.isRecording || session.isBouncing || !session.canRemoveStrip(session.selectedChannelID))
+                        .help("Removes the selected speaker strip when it is empty (ADD STRIP with no recording).")
+                    if reorderStrips {
+                        Button("REORDER") { reorderStrips = false }
+                            .buttonStyle(MixerPrimaryButtonStyle())
+                            .disabled(session.isRecording)
+                            .help("Reorder is on. Drag a lime DRAG TO REORDER handle onto another strip. Click again when you are done.")
+                    } else {
+                        Button("REORDER") { reorderStrips = true }
+                            .buttonStyle(MixerGhostButtonStyle())
+                            .disabled(session.isRecording)
+                            .help("Turn on, then drag a strip onto another strip — same idea as dragging DSP chips.")
+                    }
                 }
-                Button("UPDATE MIX") { session.updateMix() }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
-                Button("SAVE MIX…") { session.saveMix() }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Choose a folder and name for this mix. Audio stays in the WAV files. Mute paints are saved here.")
-                Button("LOAD OTHER FOLDER…") { pickFolder() }
-                    .buttonStyle(MixerGhostButtonStyle())
-                Button("ADD TRACKS…") { pickFiles(append: true) }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Drop or choose more audio files. Speakers cap at 8; files named music or sfx become stereo beds (up to 2).")
+                headerGroup(label: "MIX") {
+                    Button("UPDATE MIX") { session.updateMix() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
+                    Button("SAVE MIX…") { session.saveMix() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .help("Choose a folder and name for this mix. Audio stays in the WAV files. Mute paints are saved here.")
+                }
+                headerGroup(label: "IMPORT") {
+                    Button("LOAD OTHER FOLDER…") { pickFolder() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                    Button("ADD TRACKS…") { pickFiles(append: true) }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .help("Drop or choose more audio files. Speakers cap at 8; files named music or sfx become stereo beds (up to 2).")
+                }
             }
         }
+    }
+
+    private func headerGroup<Content: View>(
+        label: String,
+        accent: Color = MixerTheme.lime.opacity(0.85),
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.6)
+                .foregroundStyle(accent)
+            HStack(spacing: 6) {
+                content()
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(MixerTheme.panel.opacity(0.55))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(MixerTheme.cyan.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var dropZone: some View {
@@ -373,8 +417,8 @@ struct ContentView: View {
             .labelsHidden()
             .pickerStyle(.menu)
             .frame(maxWidth: 240)
-            .disabled(session.isRecording)
-                    .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip.")
+            .disabled(session.isRecording || session.isRecordStandby)
+                    .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
         }
     }
 
@@ -593,13 +637,17 @@ struct ContentView: View {
             .buttonStyle(MixerGhostButtonStyle())
             .help("Jump to the start of the timeline")
 
-            Button(session.isPlaying && !session.isRecording ? "PAUSE" : "PLAY") {
+            Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
                 session.togglePlay()
             }
             .buttonStyle(MixerPrimaryButtonStyle())
             .keyboardShortcut(.space, modifiers: [])
             .disabled(session.isRecording)
-            .help(session.isRecording ? "Spacebar stops Record" : "Spacebar toggles play/pause")
+            .help(
+                session.isRecording
+                    ? "Spacebar stops Record"
+                    : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
+            )
 
             VStack(alignment: .leading, spacing: 2) {
                 Text("SEL / DSP chip opens the selected-channel panel · pinch or scroll the wave to zoom · swipe left/right to move")
