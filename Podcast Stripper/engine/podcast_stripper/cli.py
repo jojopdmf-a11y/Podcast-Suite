@@ -8,6 +8,8 @@ from pathlib import Path
 
 from podcast_stripper import __version__
 from podcast_stripper.convert import (
+    EXPORT_SAMPLE_RATES,
+    SUPPORTED_SUFFIXES,
     convert_for_diarization,
     convert_for_export,
     is_supported_audio,
@@ -18,6 +20,14 @@ from podcast_stripper.export import export_speaker_tracks
 from podcast_stripper.ffmpeg_bin import FFmpegError, find_ffmpeg
 from podcast_stripper.progress import done, error, heartbeat, status
 from podcast_stripper.token_store import TokenError, resolve_token, save_token, token_is_set
+
+
+class SegmentsError(Exception):
+    """Invalid --from-segments path or JSON."""
+
+    def __init__(self, message: str, code: str = "bad_segments") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,8 +57,9 @@ def main(argv: list[str] | None = None) -> int:
         error(f"Could not find that audio file: {input_path}", "missing_input", json_progress=json_progress)
         return 2
     if not is_supported_audio(input_path):
+        kinds = ", ".join(sorted(s.lstrip(".") for s in SUPPORTED_SUFFIXES))
         error(
-            f"Unsupported file type: {input_path.suffix}. Use mp3, m4a, wav, aiff, or flac.",
+            f"Unsupported file type: {input_path.suffix}. Use {kinds}.",
             "unsupported_format",
             json_progress=json_progress,
         )
@@ -75,6 +86,10 @@ def main(argv: list[str] | None = None) -> int:
             json_progress=json_progress,
         )
     except TokenError as exc:
+        error(str(exc), exc.code, json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
+        return 2
+    except SegmentsError as exc:
         error(str(exc), exc.code, json_progress=json_progress)
         _remove_empty_output_dir(output_dir, created=not output_existed)
         return 2
@@ -130,7 +145,7 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
         ):
             convert_for_export(input_path, original_wav)
 
-        skip_separate = args.from_segments or args.skip_separate
+        skip_separate = bool(args.skip_separate)
         if not skip_separate:
             try:
                 from podcast_stripper.separate import separate_vocals
@@ -152,20 +167,20 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
                 voice_wav = None
                 music_wav = None
 
-        report("convert", 46, "Preparing audio for speaker detection…")
-        with heartbeat(
-            report,
-            stage="convert",
-            start_percent=46,
-            cap_percent=54,
-            message="Still preparing audio for speaker detection…",
-        ):
-            convert_for_diarization(original_wav, diarize_wav)
-
         if args.from_segments:
-            segments = _load_segments(Path(args.from_segments))
+            segments = _load_segments(Path(args.from_segments).expanduser().resolve())
             report("diarize", 80, "Using provided speaker turns…")
         else:
+            report("convert", 46, "Preparing audio for speaker detection…")
+            with heartbeat(
+                report,
+                stage="convert",
+                start_percent=46,
+                cap_percent=54,
+                message="Still preparing audio for speaker detection…",
+            ):
+                convert_for_diarization(original_wav, diarize_wav)
+
             from podcast_stripper.diarize import run_diarization
 
             token = resolve_token(args.hf_token)
@@ -216,22 +231,78 @@ def _remove_empty_output_dir(output_dir: Path, *, created: bool) -> None:
 def _speaker_bounds(args: argparse.Namespace) -> dict[str, int | None]:
     """Pass Speakers as exact N, or a wide Auto range."""
     if args.min_speakers is not None or args.max_speakers is not None:
+        min_speakers = args.min_speakers
+        max_speakers = args.max_speakers
+        if min_speakers is not None and min_speakers < 1:
+            raise ValueError("--min-speakers must be at least 1")
+        if max_speakers is not None and max_speakers < 1:
+            raise ValueError("--max-speakers must be at least 1")
+        if (
+            min_speakers is not None
+            and max_speakers is not None
+            and min_speakers > max_speakers
+        ):
+            raise ValueError("--min-speakers cannot be greater than --max-speakers")
+        if args.num_speakers is not None and args.num_speakers < 1:
+            raise ValueError("--num-speakers must be at least 1")
         return {
             "num_speakers": args.num_speakers,
-            "min_speakers": args.min_speakers,
-            "max_speakers": args.max_speakers,
+            "min_speakers": min_speakers,
+            "max_speakers": max_speakers,
         }
-    if args.num_speakers:
+    if args.num_speakers is not None:
+        if args.num_speakers < 1:
+            raise ValueError("--num-speakers must be at least 1")
         return {"num_speakers": args.num_speakers}
     return {"min_speakers": 1, "max_speakers": 8}
 
 
 def _load_segments(path: Path) -> list[tuple[float, float, str]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    rows = data["segments"] if isinstance(data, dict) and "segments" in data else data
+    if not path.is_file():
+        raise SegmentsError(f"Could not find segments file: {path}", "missing_segments")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SegmentsError(f"Segments file is not valid JSON: {exc}", "bad_segments") from exc
+
+    if isinstance(data, dict) and "segments" in data:
+        rows = data["segments"]
+    else:
+        rows = data
+    if not isinstance(rows, list):
+        raise SegmentsError(
+            'Segments file must be a list or an object with a "segments" list',
+            "bad_segments",
+        )
+
     segments: list[tuple[float, float, str]] = []
-    for row in rows:
-        segments.append((float(row["start"]), float(row["end"]), str(row["speaker"])))
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise SegmentsError(f"Segment {index} must be an object", "bad_segments")
+        try:
+            start = float(row["start"])
+            end = float(row["end"])
+            speaker = str(row["speaker"])
+        except KeyError as exc:
+            raise SegmentsError(
+                f"Segment {index} is missing required field: {exc.args[0]}",
+                "bad_segments",
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise SegmentsError(
+                f"Segment {index} has invalid start/end values",
+                "bad_segments",
+            ) from exc
+        if end <= start:
+            raise SegmentsError(
+                f"Segment {index} end ({end}) must be greater than start ({start})",
+                "bad_segments",
+            )
+        if not speaker:
+            raise SegmentsError(f"Segment {index} speaker label is empty", "bad_segments")
+        segments.append((start, end, speaker))
+    if not segments:
+        raise SegmentsError("Segments file has no turns", "bad_segments")
     return segments
 
 
@@ -269,7 +340,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="podcast-stripper",
         description="Split a mixed podcast into speaker tracks plus a music/SFX track.",
     )
-    parser.add_argument("input", nargs="?", help="Path to an mp3, m4a, wav, aiff, or flac file")
+    kinds = ", ".join(sorted(s.lstrip(".") for s in SUPPORTED_SUFFIXES))
+    rate_choices = ", ".join(str(rate) for rate in sorted(EXPORT_SAMPLE_RATES))
+    parser.add_argument("input", nargs="?", help=f"Path to an audio file ({kinds})")
     parser.add_argument("-o", "--output", help="Folder for the exported tracks")
     parser.add_argument("--num-speakers", type=int, help="Exact speaker count, if you know it")
     parser.add_argument("--min-speakers", type=int, help="Lowest speaker count to consider")
@@ -280,7 +353,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--check-setup", action="store_true", help="Check ffmpeg and token, then exit")
     parser.add_argument(
         "--from-segments",
-        help="Skip the AI model and split using a JSON file of speaker turns (for tests)",
+        help="Skip the AI diarization model and split using a JSON file of speaker turns (for tests)",
     )
     parser.add_argument(
         "--skip-separate",
@@ -290,7 +363,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sample-rate",
         default="native",
-        help="Export sample rate: native (file rate), 44100, 48000, or 96000",
+        help=f"Export sample rate: native (file rate), or {rate_choices}",
     )
     parser.add_argument(
         "--audio-format",

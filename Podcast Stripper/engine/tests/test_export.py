@@ -206,10 +206,13 @@ def test_cli_from_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     from podcast_stripper import cli as cli_mod
 
+    diarize_calls: list[Path] = []
+
     def fake_export_convert(input_path: Path, output_wav: Path) -> None:
         output_wav.write_bytes(source.read_bytes())
 
     def fake_diarize_convert(input_path: Path, output_wav: Path) -> None:
+        diarize_calls.append(output_wav)
         output_wav.write_bytes(source.read_bytes())
 
     monkeypatch.setattr(cli_mod, "convert_for_export", fake_export_convert)
@@ -223,10 +226,12 @@ def test_cli_from_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             str(output_dir),
             "--from-segments",
             str(segments),
+            "--skip-separate",
             "--json-progress",
         ]
     )
     assert code == 0
+    assert diarize_calls == []
     assert (output_dir / "speakers.json").is_file()
     assert (output_dir / "Speaker_1.wav").is_file()
     assert (output_dir / "Speaker_2.wav").is_file()
