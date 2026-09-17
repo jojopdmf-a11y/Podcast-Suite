@@ -55,12 +55,16 @@ final class MixerEngine: @unchecked Sendable {
 
     private var voiceMuteSpans: [[MuteSpan]] = []
     private var recording = false
+    /// Live input tap for strip meters without writing takes (Record Standby).
+    private var inputMetering = false
     /// Voice index → hardware input channel (0-based). Empty = not recording that strip.
     private var recordMap: [Int: Int] = [:]
     private var inputDeviceUID: String?
     private let recLock = NSLock()
     private var recPending: [Float] = []
     private var recPendingChannels = 1
+    /// Peak per voice from the input tap (armed strips). Used for PRE meters in standby/record.
+    private var liveInputPeaks: [Float] = []
     private var recConverter: AVAudioConverter?
     private var recSourceFormat: AVAudioFormat?
     private var recDestFormat: AVAudioFormat?
@@ -517,19 +521,26 @@ final class MixerEngine: @unchecked Sendable {
         }
     }
 
-    func start(fromBeginning: Bool = false, recording: Bool = false, inputDeviceUID: String? = nil) throws {
+    func start(
+        fromBeginning: Bool = false,
+        recording: Bool = false,
+        inputMetering: Bool = false,
+        inputDeviceUID: String? = nil
+    ) throws {
         lock.lock()
-        if !recording, frameCount <= 0 {
+        let wantsInput = recording || inputMetering
+        if !wantsInput, frameCount <= 0 {
             lock.unlock()
             throw MixerError.engine("Load tracks first, or ADD STRIP and Record.")
         }
-        if recording, recordMap.isEmpty {
+        if wantsInput, recordMap.isEmpty {
             lock.unlock()
             throw MixerError.engine("Pick an input on a speaker strip (IN 1, IN 2…) before Record.")
         }
         self.recording = recording
+        self.inputMetering = inputMetering || recording
         self.inputDeviceUID = inputDeviceUID
-        if recording, frameCount == 0,
+        if wantsInput, frameCount == 0,
            let hwRate = MixerInputDevices.nominalSampleRate(uid: inputDeviceUID),
            hwRate > 0 {
             applySampleRateLocked(hwRate)
@@ -537,7 +548,7 @@ final class MixerEngine: @unchecked Sendable {
         if fromBeginning {
             playhead = 0
         }
-        if !recording, playhead >= frameCount {
+        if !recording, !inputMetering, playhead >= frameCount {
             playhead = 0
         }
         for i in processors.indices {
@@ -553,6 +564,7 @@ final class MixerEngine: @unchecked Sendable {
         masterComp.reset()
         recLock.lock()
         recPending = []
+        liveInputPeaks = Array(repeating: 0, count: max(voiceCount, 1))
         recLock.unlock()
         lengthEmitCounter = 0
         lock.unlock()
@@ -561,6 +573,7 @@ final class MixerEngine: @unchecked Sendable {
             stopKeepingPlayhead()
             lock.lock()
             self.recording = recording
+            self.inputMetering = inputMetering || recording
             lock.unlock()
         }
 
@@ -602,6 +615,7 @@ final class MixerEngine: @unchecked Sendable {
             let voiceN = self.voiceCount
             let fadeFrames = MuteSpanStore.fadeFrames(sampleRate: self.sampleRate)
             let liveRecord = self.recording
+            let meterFromInput = self.inputMetering || self.recording
             let anySolo = self.processors.contains(where: \.solo) || self.stereoProcessors.contains(where: \.solo)
 
             for i in 0..<n {
@@ -720,6 +734,18 @@ final class MixerEngine: @unchecked Sendable {
                 self.meterPre[i] = max(self.meterPre[i] * 0.6, pre[i])
                 self.meterPost[i] = max(self.meterPost[i] * 0.6, post[i])
             }
+            // Armed strips: PRE/POST show live input while standby or recording (mix stays silent).
+            if meterFromInput {
+                self.recLock.lock()
+                let live = self.liveInputPeaks
+                self.recLock.unlock()
+                for (voiceIndex, _) in self.recordMap {
+                    guard voiceIndex < slots, voiceIndex < live.count else { continue }
+                    let peak = live[voiceIndex]
+                    self.meterPre[voiceIndex] = max(self.meterPre[voiceIndex], peak)
+                    self.meterPost[voiceIndex] = max(self.meterPost[voiceIndex], peak)
+                }
+            }
             self.meterMasterL = max(self.meterMasterL * 0.6, mL)
             self.meterMasterR = max(self.meterMasterR * 0.6, mR)
             self.meterCounter += n
@@ -747,11 +773,20 @@ final class MixerEngine: @unchecked Sendable {
                 self.meterPost = Array(repeating: 0, count: slots)
                 self.meterMasterL = 0
                 self.meterMasterR = 0
+                // Decay live peaks so meters fall when input goes quiet.
+                if meterFromInput {
+                    self.recLock.lock()
+                    for i in self.liveInputPeaks.indices {
+                        self.liveInputPeaks[i] *= 0.6
+                    }
+                    self.recLock.unlock()
+                }
             }
             if shouldEmitHead {
                 self.playheadEmitCounter = 0
             }
-            let ended = !self.recording && head >= total
+            let holdOpen = self.recording || self.inputMetering
+            let ended = !holdOpen && self.frameCount > 0 && head >= total
             let emitLength = self.recording && (self.lengthEmitCounter >= Int(self.sampleRate / 4))
             if emitLength { self.lengthEmitCounter = 0 }
             let newLength = self.frameCount
@@ -784,18 +819,17 @@ final class MixerEngine: @unchecked Sendable {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 1
-        if recording {
+        if recording || inputMetering {
             try attachSilentInput(engine)
         }
         try engine.start()
         audioEngine = engine
         sourceNode = node
         playing = true
-        if recording {
-            lock.lock()
-            self.recording = true
-            lock.unlock()
-        }
+        lock.lock()
+        self.recording = recording
+        self.inputMetering = inputMetering || recording
+        lock.unlock()
     }
 
     func stop() {
@@ -807,6 +841,7 @@ final class MixerEngine: @unchecked Sendable {
         let wasRecording = recording
         playing = false
         recording = false
+        inputMetering = false
         lock.unlock()
         if didInstallInputTap, let engine = audioEngine {
             engine.inputNode.removeTap(onBus: 0)
@@ -826,6 +861,10 @@ final class MixerEngine: @unchecked Sendable {
         recSourceFormat = nil
         recDestFormat = nil
         audioEngine = nil
+        recLock.lock()
+        recPending = []
+        liveInputPeaks = []
+        recLock.unlock()
         if wasRecording {
             lock.lock()
             rebuildWaveformCache()
@@ -1190,9 +1229,40 @@ final class MixerEngine: @unchecked Sendable {
             }
         }
 
+        lock.lock()
+        let map = recordMap
+        let voiceN = voiceCount
+        let writing = recording
+        lock.unlock()
+
+        var peaks = Array(repeating: Float(0), count: max(voiceN, 1))
+        let pendingFrames = outCh > 0 ? out.count / outCh : 0
+        for (voiceIndex, hwCh) in map {
+            guard voiceIndex < peaks.count else { continue }
+            let channel = min(max(0, hwCh), outCh - 1)
+            var peak: Float = 0
+            for f in 0..<pendingFrames {
+                let idx = f * outCh + channel
+                if idx < out.count {
+                    peak = max(peak, abs(out[idx]))
+                }
+            }
+            peaks[voiceIndex] = peak
+        }
+
         recLock.lock()
-        recPending.append(contentsOf: out)
-        recPendingChannels = outCh
+        if liveInputPeaks.count < peaks.count {
+            liveInputPeaks.append(contentsOf: Array(repeating: 0, count: peaks.count - liveInputPeaks.count))
+        }
+        for i in peaks.indices {
+            if i < liveInputPeaks.count {
+                liveInputPeaks[i] = max(liveInputPeaks[i], peaks[i])
+            }
+        }
+        if writing {
+            recPending.append(contentsOf: out)
+            recPendingChannels = outCh
+        }
         recLock.unlock()
     }
 

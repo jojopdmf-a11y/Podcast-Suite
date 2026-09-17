@@ -78,3 +78,21 @@ struct MixerRecordButtonStyle: ButtonStyle {
             )
     }
 }
+
+struct MixerStandbyButtonStyle: ButtonStyle {
+    var engaged: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(engaged ? MixerTheme.bgBottom : MixerTheme.lime)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(engaged ? MixerTheme.lime : MixerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(MixerTheme.lime.opacity(engaged ? 0.95 : 0.55), lineWidth: engaged ? 1.4 : 1)
+            )
+    }
+}

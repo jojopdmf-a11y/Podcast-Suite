@@ -309,6 +309,8 @@ final class MixerSession: ObservableObject {
     @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
     @Published var isPlaying = false
     @Published var isRecording = false
+    /// Live input metering without writing takes (Record Standby).
+    @Published var isRecordStandby = false
     @Published var isBouncing = false
     @Published var inputDevices: [MixerInputDevice] = []
     @Published var selectedInputUID: String?
@@ -364,6 +366,7 @@ final class MixerSession: ObservableObject {
             Task { @MainActor in
                 self?.isPlaying = false
                 self?.isRecording = false
+                self?.isRecordStandby = false
                 self?.status = "Reached end."
             }
         }
@@ -397,17 +400,18 @@ final class MixerSession: ObservableObject {
 
     /// Empty mixer follows the INPUT box (Dante 96 kHz stays 96 kHz). Loaded files keep their own rate.
     func adoptInterfaceSampleRateIfEmpty() {
-        guard mixerOpen, frameCount == 0, !isRecording, !isPlaying else { return }
+        guard mixerOpen, frameCount == 0, !isRecording, !isRecordStandby, !isPlaying else { return }
         let rate = MixerInputDevices.nominalSampleRate(uid: selectedInputUID, in: inputDevices) ?? 48_000
         engine.adoptSampleRate(rate)
         sampleRate = engine.sampleRate
     }
 
     func newRecordSession() {
-        if isPlaying || isRecording {
+        if isPlaying || isRecording || isRecordStandby {
             engine.stop()
             isPlaying = false
             isRecording = false
+            isRecordStandby = false
         }
         refreshInputDevices()
         let rate = MixerInputDevices.nominalSampleRate(uid: selectedInputUID, in: inputDevices) ?? 48_000
@@ -450,10 +454,11 @@ final class MixerSession: ObservableObject {
             return
         }
         mixerOpen = true
-        if isPlaying || isRecording {
+        if isPlaying || isRecording || isRecordStandby {
             engine.stop()
             isPlaying = false
             isRecording = false
+            isRecordStandby = false
         }
         let n = voices.count + 1
         var ch = ChannelStripState.voice(slot: voices.count, speakerNumber: n, name: "SPK \(n)")
@@ -514,6 +519,77 @@ final class MixerSession: ObservableObject {
         status = "Removed \(name)."
     }
 
+    func toggleRecordStandby() {
+        if isRecording {
+            status = "Recording — meters already show live input. Stop Rec first to leave Standby alone."
+            return
+        }
+        if isRecordStandby {
+            stopRecordStandby()
+            return
+        }
+        refreshInputDevices()
+        guard voices.contains(where: { $0.inputChannel != nil }) else {
+            status = voices.isEmpty
+                ? "ADD STRIP, pick IN 1 / IN 2, then Standby for live meters."
+                : "Pick IN 1 / IN 2 on a speaker strip, then Standby for live meters."
+            return
+        }
+        switch AVAudioApplication.shared.recordPermission {
+        case .granted:
+            continueStandbyIfMicAllowed(true)
+        case .denied:
+            continueStandbyIfMicAllowed(false)
+        case .undetermined:
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor [weak self] in
+                    self?.continueStandbyIfMicAllowed(granted)
+                }
+            }
+        @unknown default:
+            AVAudioApplication.requestRecordPermission { granted in
+                Task { @MainActor [weak self] in
+                    self?.continueStandbyIfMicAllowed(granted)
+                }
+            }
+        }
+    }
+
+    private func continueStandbyIfMicAllowed(_ granted: Bool) {
+        guard granted else {
+            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → PodProducer."
+            return
+        }
+        if isPlaying {
+            engine.stop()
+            isPlaying = false
+        }
+        syncParamsToEngine()
+        do {
+            try engine.start(
+                fromBeginning: false,
+                recording: false,
+                inputMetering: true,
+                inputDeviceUID: selectedInputUID
+            )
+            isRecordStandby = true
+            isPlaying = true
+            sampleRate = engine.sampleRate
+            status = "Standby · live input meters on armed strips. Record when ready. Monitor mics on your interface."
+        } catch {
+            status = error.localizedDescription
+        }
+    }
+
+    func stopRecordStandby() {
+        guard isRecordStandby, !isRecording else { return }
+        engine.stop()
+        isPlaying = false
+        isRecordStandby = false
+        playheadFrame = engine.currentFrame()
+        status = "Standby off."
+    }
+
     func toggleRecord() {
         if isRecording {
             stopRecord()
@@ -557,10 +633,12 @@ final class MixerSession: ObservableObject {
             try engine.start(
                 fromBeginning: false,
                 recording: true,
+                inputMetering: true,
                 inputDeviceUID: selectedInputUID
             )
             isPlaying = true
             isRecording = true
+            isRecordStandby = true
             sampleRate = engine.sampleRate
             status = "Recording \(Int(sampleRate.rounded())) Hz — overwrites from the playhead on armed strips. Monitor mics on your interface, not through PodProducer."
         } catch {
@@ -569,6 +647,7 @@ final class MixerSession: ObservableObject {
     }
 
     func stopRecord() {
+        let keepStandby = isRecordStandby
         engine.stop()
         isPlaying = false
         isRecording = false
@@ -593,6 +672,15 @@ final class MixerSession: ObservableObject {
             }
         } else {
             status = "Recorded in this window. Export to keep it. Shift-drag the waveform to mute a cough."
+        }
+        if keepStandby {
+            // Return to metering-only after tape stops.
+            continueStandbyIfMicAllowed(true)
+            if isRecordStandby {
+                status = "Standby · live meters on. Last take saved when possible."
+            }
+        } else {
+            isRecordStandby = false
         }
     }
 
@@ -823,10 +911,11 @@ final class MixerSession: ObservableObject {
 
     func loadStripperFolder(_ folder: URL) {
         do {
-            if isPlaying || isRecording {
+            if isPlaying || isRecording || isRecordStandby {
                 engine.stop()
                 isPlaying = false
                 isRecording = false
+                isRecordStandby = false
             }
             let mapped = try StripperFolderLoader.load(folder: folder)
             voices = mapped.speakers.enumerated().map { slot, item in
@@ -931,10 +1020,11 @@ final class MixerSession: ObservableObject {
             return
         }
 
-        if isPlaying || isRecording {
+        if isPlaying || isRecording || isRecordStandby {
             engine.stop()
             isPlaying = false
             isRecording = false
+            isRecordStandby = false
         }
 
         var nextVoices = append ? voices : []
@@ -1111,6 +1201,10 @@ final class MixerSession: ObservableObject {
             stopRecord()
             return
         }
+        if isRecordStandby {
+            stopRecordStandby()
+            return
+        }
         syncParamsToEngine()
         if isPlaying {
             engine.stop()
@@ -1132,6 +1226,9 @@ final class MixerSession: ObservableObject {
         if isRecording {
             stopRecord()
             return
+        }
+        if isRecordStandby {
+            stopRecordStandby()
         }
         syncParamsToEngine()
         do {
@@ -1314,10 +1411,11 @@ final class MixerSession: ObservableObject {
             return
         }
         isBouncing = true
-        if isPlaying || isRecording {
+        if isPlaying || isRecording || isRecordStandby {
             engine.stop()
             isPlaying = false
             isRecording = false
+            isRecordStandby = false
         }
         status = "Exporting…"
         syncParamsToEngine()
