@@ -15,6 +15,10 @@ struct ContentView: View {
     @State private var showAllWaveforms = false
     @State private var reorderStrips = false
     @State private var reorderDropID: Int?
+    @State private var confirmRemoveStrip = false
+
+    /// Narrow control between adjacent mono strips.
+    private static let monoLinkGutterWidth: CGFloat = 28
 
     var body: some View {
         ZStack {
@@ -217,10 +221,22 @@ struct ContentView: View {
                     Button("ADD STRIP") { session.addBlankStrip() }
                         .buttonStyle(MixerGhostButtonStyle())
                         .help("Adds an empty speaker strip (up to 8). Pick IN on it to record. REMOVE if you do not need it.")
-                    Button("REMOVE STRIP") { session.removeEmptyStrip(session.selectedChannelID) }
+                    Button("REMOVE STRIP") { confirmRemoveStrip = true }
                         .buttonStyle(MixerGhostButtonStyle())
                         .disabled(session.isRecording || session.isBouncing || !session.canRemoveStrip(session.selectedChannelID))
                         .help("Removes the selected speaker strip when it is empty (ADD STRIP with no recording).")
+                        .confirmationDialog(
+                            "Remove this empty strip?",
+                            isPresented: $confirmRemoveStrip,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Remove Strip", role: .destructive) {
+                                session.removeEmptyStrip(session.selectedChannelID)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text("Only empty speaker strips can be removed. This cannot be undone.")
+                        }
                     if reorderStrips {
                         Button("REORDER") { reorderStrips = false }
                             .buttonStyle(MixerPrimaryButtonStyle())
@@ -246,7 +262,7 @@ struct ContentView: View {
                         .buttonStyle(MixerGhostButtonStyle())
                     Button("ADD TRACKS…") { pickFiles(append: true) }
                         .buttonStyle(MixerGhostButtonStyle())
-                        .help("Drop or choose more audio files. Speakers cap at 8; files named music or sfx become stereo beds (up to 2).")
+                        .help("Drop or choose more audio files. Mono → speaker (up to 8); stereo → bed (up to 2).")
                 }
             }
         }
@@ -296,7 +312,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — up to 8 speakers and 2 stereo beds (music / SFX). A _speakers folder still builds the Stripper layout. Or NEW SESSION for an empty mixer.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — mono files are speakers (up to 8), stereo files are beds (up to 2). A _speakers folder still builds the Stripper layout. Or NEW SESSION for an empty mixer.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -309,7 +325,7 @@ struct ContentView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
                     .buttonStyle(MixerGhostButtonStyle())
-                    .help("Pick one or more audio files. Speakers cap at 8; names with music or sfx become stereo beds (up to 2).")
+                    .help("Pick one or more audio files. Mono → speaker (up to 8); stereo → bed (up to 2).")
                 Button("LOAD MIX…") { pickMixFile() }
                     .buttonStyle(MixerGhostButtonStyle())
             }
@@ -326,8 +342,11 @@ struct ContentView: View {
             HStack(alignment: .top, spacing: gap) {
                 ScrollView(.horizontal, showsIndicators: cluster > available + 1) {
                     HStack(alignment: .top, spacing: 10) {
-                        ForEach(session.displayChannelOrder, id: \.self) { id in
+                        ForEach(Array(session.displayChannelOrder.enumerated()), id: \.element) { index, id in
                             stripView(for: id)
+                            if let nextID = monoLinkNeighbor(after: index) {
+                                monoLinkGutter(leftID: id, rightID: nextID)
+                            }
                         }
                         masterStrip
                     }
@@ -344,9 +363,72 @@ struct ContentView: View {
 
     /// Speaker + stereo strips; master is 110pt. Extra strips scroll sideways.
     private var mixerClusterWidth: CGFloat {
-        let channels = session.voices.count + session.stereos.count
-        let gaps = CGFloat(max(0, channels)) * 10 // between channels, and before master
-        return CGFloat(channels) * ChannelStripView.stripWidth + 110 + gaps
+        let order = session.displayChannelOrder
+        let channels = order.count
+        var linkGutters = 0
+        for i in 0..<max(0, channels - 1) {
+            if monoLinkNeighbor(after: i) != nil { linkGutters += 1 }
+        }
+        let gaps = CGFloat(max(0, channels + linkGutters)) * 10 // between items, and before master
+        return CGFloat(channels) * ChannelStripView.stripWidth
+            + CGFloat(linkGutters) * Self.monoLinkGutterWidth
+            + 110
+            + gaps
+    }
+
+    /// Next display id when both this strip and the following are mono speakers.
+    private func monoLinkNeighbor(after index: Int) -> Int? {
+        let order = session.displayChannelOrder
+        guard index >= 0, index + 1 < order.count else { return nil }
+        let a = order[index]
+        let b = order[index + 1]
+        guard session.voices.contains(where: { $0.id == a }),
+              session.voices.contains(where: { $0.id == b }) else { return nil }
+        return b
+    }
+
+    @ViewBuilder
+    private func monoLinkGutter(leftID: Int, rightID: Int) -> some View {
+        let linked = session.voices.first(where: { $0.id == leftID })?.linkedPeerID == rightID
+            && session.voices.first(where: { $0.id == rightID })?.linkedPeerID == leftID
+        let leftBusy = session.isMonoLinked(leftID) && !linked
+        let rightBusy = session.isMonoLinked(rightID) && !linked
+        let canToggle = linked || (!leftBusy && !rightBusy)
+
+        Button {
+            session.toggleMonoLink(between: leftID, and: rightID)
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: linked ? "link" : "link.badge.plus")
+                    .font(.system(size: 11, weight: .bold))
+                Text(linked ? "UNLINK" : "LINK")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .tracking(0.3)
+            }
+            .foregroundStyle(linked ? MixerTheme.bgBottom : (canToggle ? MixerTheme.cyan : MixerTheme.cyanDim))
+            .frame(width: Self.monoLinkGutterWidth, height: 72)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(linked ? MixerTheme.lime : MixerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(
+                        linked ? MixerTheme.lime : MixerTheme.cyan.opacity(canToggle ? 0.45 : 0.2),
+                        lineWidth: 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(!canToggle || session.isRecording)
+        .help(
+            linked
+                ? "Unlink these speakers. DSP + fader stay at the last shared values; mute/solo/pan stay independent."
+                : (canToggle
+                   ? "Link adjacent monos: shared DSP + fader. Mute, solo, pan, and record IN stay independent."
+                   : "One of these strips is already linked to another mono.")
+        )
+        .padding(.top, 180)
     }
 
     @ViewBuilder
@@ -361,7 +443,10 @@ struct ContentView: View {
                 isRecording: session.isRecording,
                 canRemove: session.canRemoveStrip(id),
                 onSelect: { focusChannel(id) },
-                onChange: { session.syncParamsToEngine() },
+                onChange: {
+                    session.syncParamsToEngine()
+                    session.syncLinkedFrom(id)
+                },
                 onRemove: { session.removeEmptyStrip(id) },
                 stripReorderable: reorderStrips,
                 isReorderDropTarget: reorderDropID == id,
@@ -445,7 +530,10 @@ struct ContentView: View {
             SelectedChannelPanel(
                 channel: $session.voices[idx],
                 rtaBins: session.rtaBins,
-                onChange: { session.syncParamsToEngine() }
+                onChange: {
+                    session.syncParamsToEngine()
+                    session.syncLinkedFrom(session.voices[idx].id)
+                }
             )
         } else {
             VStack(spacing: 8) {

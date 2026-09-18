@@ -62,6 +62,8 @@ enum MixerMixFile {
         var dspOrder: [String]
         var muteSpans: [MuteSpan]?
         var inputChannel: Int?
+        /// Linked partner by speaker number (mono only). Older mixes omit this.
+        var linkedPeerSpeakerNumber: Int?
     }
 
     struct Comp: Codable {
@@ -77,10 +79,18 @@ enum MixerMixFile {
 
     @MainActor
     static func make(from session: MixerSession) -> Document {
-        Document(
+        let voiceSnaps: [Strip] = session.voices.map { ch in
+            let peerSpeaker: Int? = {
+                guard let peerID = ch.linkedPeerID,
+                      let peer = session.voices.first(where: { $0.id == peerID }) else { return nil }
+                return peer.speakerNumber
+            }()
+            return snapshot(ch, peerSpeakerNumber: peerSpeaker)
+        }
+        return Document(
             formatVersion: formatVersion,
             folderName: session.sourceFolder?.lastPathComponent ?? "",
-            voices: session.voices.map { snapshot($0) },
+            voices: voiceSnaps,
             music: session.stereos.first.map { snapshot($0) },
             stereos: session.stereos.isEmpty ? nil : session.stereos.map { snapshot($0) },
             masterDb: session.masterDb,
@@ -101,7 +111,7 @@ enum MixerMixFile {
         )
     }
 
-    static func snapshot(_ ch: ChannelStripState) -> Strip {
+    static func snapshot(_ ch: ChannelStripState, peerSpeakerNumber: Int? = nil) -> Strip {
         Strip(
             speakerNumber: ch.speakerNumber,
             name: ch.name,
@@ -127,7 +137,8 @@ enum MixerMixFile {
             levelerTargetDb: ch.voice.levelerTargetDb,
             dspOrder: ch.dspOrder.map(\.rawValue),
             muteSpans: ch.muteSpans,
-            inputChannel: ch.inputChannel
+            inputChannel: ch.inputChannel,
+            linkedPeerSpeakerNumber: peerSpeakerNumber
         )
     }
 
@@ -201,6 +212,24 @@ enum MixerMixFile {
         } else {
             session.replaceChannelOrderFromCurrentStrips()
         }
+
+        // Restore mono links by speaker number (bidirectional, adjacent only).
+        for i in session.voices.indices {
+            session.voices[i].linkedPeerID = nil
+        }
+        for i in session.voices.indices {
+            let number = session.voices[i].speakerNumber
+            guard let snap = doc.voices.first(where: { $0.speakerNumber == number }),
+                  let peerNumber = snap.linkedPeerSpeakerNumber,
+                  let peerIdx = session.voices.firstIndex(where: { $0.speakerNumber == peerNumber }) else { continue }
+            let a = session.voices[i].id
+            let b = session.voices[peerIdx].id
+            if session.areAdjacentMonos(a, b) {
+                session.voices[i].linkedPeerID = b
+                session.voices[peerIdx].linkedPeerID = a
+            }
+        }
+        session.pruneBrokenMonoLinks()
     }
 
     static func write(_ doc: Document, to url: URL) throws {
