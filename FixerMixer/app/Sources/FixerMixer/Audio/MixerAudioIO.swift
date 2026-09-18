@@ -19,6 +19,17 @@ enum MixerAudioIO {
         return name.contains("music") || name.contains("sfx")
     }
 
+    /// Probe channel layout without decoding samples. Used for drop/import strip type.
+    static func channelCount(url: URL) -> Int? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        return Int(file.processingFormat.channelCount)
+    }
+
+    /// Stereo (or wider) files become stereo beds; mono (or unreadable) → speaker strip.
+    static func isStereoFile(url: URL) -> Bool {
+        (channelCount(url: url) ?? 1) >= 2
+    }
+
     static func displayName(url: URL) -> String {
         let base = url.deletingPathExtension().lastPathComponent
             .replacingOccurrences(of: "_", with: " ")

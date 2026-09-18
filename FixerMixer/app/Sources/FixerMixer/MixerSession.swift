@@ -211,6 +211,8 @@ struct ChannelStripState: Identifiable, Equatable {
     var inputChannel: Int? = nil
     /// Painted silence ranges. The show does not get shorter.
     var muteSpans: [MuteSpan] = []
+    /// Other mono strip id when DSP + fader are linked. Stereo beds never use this.
+    var linkedPeerID: Int? = nil
 
     static let musicID = 1000
     static let masterID = 2000
@@ -233,6 +235,7 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.dspOrder == rhs.dspOrder
             && lhs.inputChannel == rhs.inputChannel
             && lhs.muteSpans == rhs.muteSpans
+            && lhs.linkedPeerID == rhs.linkedPeerID
     }
 
     static func voice(slot: Int, speakerNumber: Int, name: String? = nil) -> ChannelStripState {
@@ -327,6 +330,8 @@ final class MixerSession: ObservableObject {
     @Published var channelOrder: [Int] = []
 
     let engine = MixerEngine()
+    /// Guards recursive copy when a linked pair updates each other.
+    private var syncingLinkedPair = false
 
     func bindEngine() {
         engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, compInL, compInR, compOutL, compOutR, compGR in
@@ -490,12 +495,21 @@ final class MixerSession: ObservableObject {
         }
         let name = voices[index].name
         let removedID = voices[index].id
+        if let peerID = voices[index].linkedPeerID,
+           let peerIdx = voices.firstIndex(where: { $0.id == peerID }) {
+            voices[peerIdx].linkedPeerID = nil
+        }
         var remap: [Int: Int] = [:]
         voices.remove(at: index)
         engine.removeVoice(at: index)
         for (newIdx, _) in voices.enumerated() {
             remap[voices[newIdx].id] = newIdx
             voices[newIdx].id = newIdx
+        }
+        for i in voices.indices {
+            if let peer = voices[i].linkedPeerID {
+                voices[i].linkedPeerID = remap[peer]
+            }
         }
         channelOrder = channelOrder.compactMap { existing in
             if existing == removedID { return nil }
@@ -517,6 +531,99 @@ final class MixerSession: ObservableObject {
         syncParamsToEngine()
         persistMixIfPossible()
         status = "Removed \(name)."
+    }
+
+    /// True when both ids are mono voices sitting next to each other in the mixer row.
+    func areAdjacentMonos(_ a: Int, _ b: Int) -> Bool {
+        guard a != b,
+              voices.contains(where: { $0.id == a && !$0.isStereo }),
+              voices.contains(where: { $0.id == b && !$0.isStereo }) else { return false }
+        let order = displayChannelOrder
+        guard let ia = order.firstIndex(of: a), let ib = order.firstIndex(of: b) else { return false }
+        return abs(ia - ib) == 1
+    }
+
+    func isMonoLinked(_ id: Int) -> Bool {
+        voices.first(where: { $0.id == id })?.linkedPeerID != nil
+    }
+
+    /// Pair two adjacent monos, or unlink if they are already a pair. Each mono links to at most one peer.
+    func toggleMonoLink(between a: Int, and b: Int) {
+        guard areAdjacentMonos(a, b),
+              let ia = voices.firstIndex(where: { $0.id == a }),
+              let ib = voices.firstIndex(where: { $0.id == b }) else { return }
+
+        if voices[ia].linkedPeerID == b && voices[ib].linkedPeerID == a {
+            voices[ia].linkedPeerID = nil
+            voices[ib].linkedPeerID = nil
+            persistMixIfPossible()
+            status = "Unlinked \(voices[ia].name) and \(voices[ib].name)."
+            return
+        }
+
+        if let peer = voices[ia].linkedPeerID, peer != b {
+            status = "\(voices[ia].name) is already linked. Unlink it first."
+            return
+        }
+        if let peer = voices[ib].linkedPeerID, peer != a {
+            status = "\(voices[ib].name) is already linked. Unlink it first."
+            return
+        }
+
+        copyLinkedDSPAndFader(from: voices[ia], to: &voices[ib])
+        voices[ia].linkedPeerID = b
+        voices[ib].linkedPeerID = a
+        syncParamsToEngine()
+        persistMixIfPossible()
+        status = "Linked \(voices[ia].name) ↔ \(voices[ib].name) (shared DSP + fader)."
+    }
+
+    /// After any edit on a mono strip, mirror DSP + fader onto its linked peer.
+    func syncLinkedFrom(_ id: Int) {
+        guard !syncingLinkedPair,
+              let idx = voices.firstIndex(where: { $0.id == id }),
+              let peerID = voices[idx].linkedPeerID,
+              let peerIdx = voices.firstIndex(where: { $0.id == peerID }) else { return }
+        syncingLinkedPair = true
+        defer { syncingLinkedPair = false }
+        copyLinkedDSPAndFader(from: voices[idx], to: &voices[peerIdx])
+        voices[peerIdx].linkedPeerID = id
+        syncParamsToEngine()
+    }
+
+    private func copyLinkedDSPAndFader(from src: ChannelStripState, to dest: inout ChannelStripState) {
+        dest.dspBypass = src.dspBypass
+        dest.faderDb = src.faderDb
+        dest.autoBiasDb = src.autoBiasDb
+        dest.eq = src.eq
+        dest.para = src.para
+        dest.voice = src.voice
+        dest.dspOrder = src.dspOrder
+    }
+
+    /// Drop links that are no longer adjacent after reorder / id remap.
+    func pruneBrokenMonoLinks() {
+        let order = displayChannelOrder
+        var clear = Set<Int>()
+        for voice in voices {
+            guard let peer = voice.linkedPeerID else { continue }
+            guard let ia = order.firstIndex(of: voice.id),
+                  let ib = order.firstIndex(of: peer),
+                  abs(ia - ib) == 1,
+                  voices.contains(where: { $0.id == peer }) else {
+                clear.insert(voice.id)
+                clear.insert(peer)
+                continue
+            }
+            if let other = voices.first(where: { $0.id == peer }), other.linkedPeerID != voice.id {
+                clear.insert(voice.id)
+                clear.insert(peer)
+            }
+        }
+        guard !clear.isEmpty else { return }
+        for i in voices.indices where clear.contains(voices[i].id) {
+            voices[i].linkedPeerID = nil
+        }
     }
 
     func toggleRecordStandby() {
@@ -775,6 +882,7 @@ final class MixerSession: ObservableObject {
                     self.voices[index].faderDb = newValue
                 }
                 self.syncParamsToEngine()
+                self.syncLinkedFrom(self.voices[index].id)
             }
         )
     }
@@ -800,6 +908,7 @@ final class MixerSession: ObservableObject {
               let to = order.firstIndex(of: toID) else { return }
         order.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
         channelOrder = order
+        pruneBrokenMonoLinks()
         persistMixIfPossible()
         let name = voices.first(where: { $0.id == fromID })?.name
             ?? stereos.first(where: { $0.id == fromID })?.name
@@ -1042,8 +1151,8 @@ final class MixerSession: ObservableObject {
                 break
             }
 
-            let wantsMusic = MixerAudioIO.looksLikeMusic(url: url)
-            if wantsMusic {
+            let wantsStereo = MixerAudioIO.isStereoFile(url: url)
+            if wantsStereo {
                 if nextStereos.count < StripperFolderLoader.maxStereo {
                     var bed = ChannelStripState.stereo(
                         slot: nextStereos.count,
@@ -1081,7 +1190,7 @@ final class MixerSession: ObservableObject {
         let startedStereos = append ? stereos.count : 0
         if nextVoices.count == startedVoices, nextStereos.count == startedStereos {
             if hitStereoCap {
-                status = "Mixer already has \(StripperFolderLoader.maxStereo) stereo strips (music / SFX)."
+                status = "Mixer already has \(StripperFolderLoader.maxStereo) stereo strips."
             } else {
                 status = hitCap
                     ? "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
@@ -1091,6 +1200,10 @@ final class MixerSession: ObservableObject {
         }
 
         // Re-index ids so strips stay 0..<n after append.
+        var oldVoiceIDToSlot: [Int: Int] = [:]
+        for i in nextVoices.indices {
+            oldVoiceIDToSlot[nextVoices[i].id] = i
+        }
         for i in nextVoices.indices {
             let url = nextVoices[i].fileURL
             let name = nextVoices[i].name
@@ -1109,6 +1222,9 @@ final class MixerSession: ObservableObject {
             ch.dspOrder = kept.dspOrder
             ch.inputChannel = kept.inputChannel
             ch.muteSpans = kept.muteSpans
+            if let peer = kept.linkedPeerID {
+                ch.linkedPeerID = oldVoiceIDToSlot[peer]
+            }
             nextVoices[i] = ch
         }
         for i in nextStereos.indices {
@@ -1135,6 +1251,7 @@ final class MixerSession: ObservableObject {
             } else {
                 replaceChannelOrderFromCurrentStrips()
             }
+            pruneBrokenMonoLinks()
             if !append || sourceFolder == nil {
                 sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
             }

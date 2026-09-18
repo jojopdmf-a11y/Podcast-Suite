@@ -404,10 +404,11 @@ struct ChannelStripView: View {
     /// 15% narrower than the original 156pt desk.
     static let stripWidth: CGFloat = 133
     /// Keeps music strip the same height as full speaker strips.
-    static let stripHeight: CGFloat = 528
+    static let stripHeight: CGFloat = 548
 
     @State private var dropTargetSlot: ChannelDSPSlot?
     @State private var isRenaming = false
+    @State private var confirmRemove = false
     @FocusState private var nameFieldFocused: Bool
 
     private var fxDimmed: Bool { channel.dspBypass }
@@ -444,24 +445,6 @@ struct ChannelStripView: View {
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if canRemove {
-                    Button("REMOVE") { onRemove?() }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(MixerTheme.danger)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(MixerTheme.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .stroke(MixerTheme.danger.opacity(0.55), lineWidth: 1)
-                        )
-                        .help("This strip has no audio. Remove it if you added it by mistake.")
-                        .disabled(isRecording)
-                }
                 if !channel.isStereo {
                     inputRow
                 }
@@ -615,6 +598,35 @@ struct ChannelStripView: View {
                 .tint(MixerTheme.lime)
                 .frame(maxWidth: .infinity)
                 .onTapGesture(count: 2) { channel.pan = 0 }
+            }
+
+            if canRemove {
+                Button("REMOVE") { confirmRemove = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.danger)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(MixerTheme.panelRaised)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(MixerTheme.danger.opacity(0.55), lineWidth: 1)
+                    )
+                    .help("This strip has no audio. Remove it if you added it by mistake.")
+                    .disabled(isRecording)
+                    .confirmationDialog(
+                        "Remove \(channel.name)?",
+                        isPresented: $confirmRemove,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Remove Strip", role: .destructive) { onRemove?() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Only empty speaker strips can be removed. This cannot be undone.")
+                    }
             }
         }
         .padding(8)
