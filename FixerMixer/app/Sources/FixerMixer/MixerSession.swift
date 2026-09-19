@@ -40,10 +40,22 @@ enum GraphicEQBand: Int, CaseIterable, Identifiable {
 struct ChannelEQ: Equatable {
     var gains: [Float] = Array(repeating: 0, count: GraphicEQBand.allCases.count)
     var bypass: Bool = false
+    /// High-pass cutoff in Hz. `0` (or below `HighPass24DSP.minHz`) = off. Graphic bands are untouched.
+    var hpfHz: Float = 0
 
     subscript(band: GraphicEQBand) -> Float {
         get { gains[band.rawValue] }
         set { gains[band.rawValue] = max(-12, min(12, newValue)) }
+    }
+
+    var hpfIsActive: Bool { hpfHz >= HighPass24DSP.minHz }
+
+    mutating func clampHPF() {
+        if hpfHz <= 0 {
+            hpfHz = 0
+            return
+        }
+        hpfHz = min(HighPass24DSP.maxHz, max(HighPass24DSP.minHz, hpfHz))
     }
 }
 
@@ -89,6 +101,28 @@ enum ParaEQWidth: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// Para / notch relative to the 10-band graphic inside the EQ slot.
+enum ParaEQPlacement: String, CaseIterable, Identifiable, Hashable, Codable {
+    case pre
+    case post
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .pre: return "PRE"
+        case .post: return "POST"
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .pre: return "Para / notch runs before the 10-band graphic"
+        case .post: return "Para / notch runs after the 10-band graphic"
+        }
+    }
+}
+
 /// Single speaker-only parametric band. Music / master never get one.
 struct ChannelParaEQ: Equatable {
     static let minHz: Float = 40
@@ -100,6 +134,8 @@ struct ChannelParaEQ: Equatable {
     var gainDb: Float = 0
     var width: ParaEQWidth = .narrow
     var bypass: Bool = false
+    /// Default POST matches older mixes where para always followed the graphic.
+    var placement: ParaEQPlacement = .post
 
     var isActive: Bool { abs(gainDb) > 0.05 }
 
@@ -158,7 +194,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
         switch self {
         case .eq: return "EQ"
         case .deVerb: return "DE-VERB"
-        case .wetter: return "WETTER"
+        case .wetter: return "AMBIENCE"
         case .leveler: return "LEVELER"
         }
     }
@@ -167,7 +203,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
         switch self {
         case .eq: return "EQ 2520"
         case .deVerb: return "DE-VERB"
-        case .wetter: return "WETTER"
+        case .wetter: return "AMBIENCE"
         case .leveler: return "LEVELER"
         }
     }

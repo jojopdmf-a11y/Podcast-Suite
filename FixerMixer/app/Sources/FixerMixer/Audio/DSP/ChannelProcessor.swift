@@ -90,10 +90,12 @@ struct ChannelProcessor {
     var dspBypass: Bool = false
     var eqGains: [Float] = Array(repeating: 0, count: 10)
     var eqBypass: Bool = false
+    var eqHpfHz: Float = 0
     var paraFreqHz: Float = 1_000
     var paraGainDb: Float = 0
     var paraWidth: ParaEQWidth = .narrow
     var paraBypass: Bool = false
+    var paraPlacement: ParaEQPlacement = .post
 
     var deVerbAmount: Float = 0
     var deVerbBypass: Bool = false
@@ -107,6 +109,8 @@ struct ChannelProcessor {
 
     private var eqL = GraphicEQ()
     private var eqR = GraphicEQ()
+    private var hpfL = HighPass24DSP()
+    private var hpfR = HighPass24DSP()
     private var para = ParaEQDSP()
     private var deVerb = DeVerbDSP()
     private var wetter = WetterDSP()
@@ -123,6 +127,10 @@ struct ChannelProcessor {
         self.sampleRate = sampleRate
         eqL.configure(sampleRate: sampleRate, gainsDb: eqGains)
         eqR.configure(sampleRate: sampleRate, gainsDb: eqGains)
+        hpfL.cutoffHz = eqHpfHz
+        hpfR.cutoffHz = eqHpfHz
+        hpfL.configure(sampleRate: sampleRate)
+        hpfR.configure(sampleRate: sampleRate)
         if hasVoiceFX {
             para.freqHz = paraFreqHz
             para.gainDb = paraGainDb
@@ -145,10 +153,31 @@ struct ChannelProcessor {
     mutating func reset() {
         eqL.reset()
         eqR.reset()
+        hpfL.reset()
+        hpfR.reset()
         para.reset()
         deVerb.reset()
         wetter.reset()
         leveler.reset()
+    }
+
+    /// Graphic + HPF (+ optional para) for the `.eq` slot. Order: para PRE → HPF → graphic → para POST.
+    private mutating func processEQSlot(_ x: Float, useLeft: Bool) -> Float {
+        var y = x
+        let paraPre = hasVoiceFX && !paraBypass && paraPlacement == .pre
+        let paraPost = hasVoiceFX && !paraBypass && paraPlacement == .post
+        if paraPre { y = para.process(y) }
+        if !eqBypass {
+            if useLeft {
+                y = hpfL.process(y)
+                y = eqL.process(y)
+            } else {
+                y = hpfR.process(y)
+                y = eqR.process(y)
+            }
+        }
+        if paraPost { y = para.process(y) }
+        return y
     }
 
     /// FX only, in this channel’s `dspOrder`. Mute returns 0.
@@ -162,8 +191,7 @@ struct ChannelProcessor {
         for slot in order {
             switch slot {
             case .eq:
-                if !eqBypass { y = eqL.process(y) }
-                if hasVoiceFX && !paraBypass { y = para.process(y) }
+                y = processEQSlot(y, useLeft: true)
             case .deVerb:
                 if hasVoiceFX { y = deVerb.process(y, sampleRate: sampleRate) }
             case .wetter:
@@ -211,9 +239,14 @@ struct ChannelProcessor {
         }
         var l = xl
         var r = xr
-        if !dspBypass && !eqBypass {
-            l = eqL.process(xl)
-            r = eqR.process(xr)
+        if !dspBypass {
+            // Stereo beds: HPF + graphic only (no para).
+            if !eqBypass {
+                l = hpfL.process(xl)
+                r = hpfR.process(xr)
+                l = eqL.process(l)
+                r = eqR.process(r)
+            }
         }
         let g = pow(10.0, faderDb / 20.0)
         l *= g

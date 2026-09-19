@@ -123,7 +123,10 @@ struct SelectedChannelPanel: View {
         case .eq:
             VStack(alignment: .leading, spacing: 12) {
                 dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.eq.bypass) {
-                    API560EQView(eq: $channel.eq)
+                    VStack(alignment: .leading, spacing: 10) {
+                        API560EQView(eq: $channel.eq)
+                        HPFControl(hpfHz: $channel.eq.hpfHz)
+                    }
                 }
                 if !channel.isStereo {
                     dspBlock(
@@ -299,6 +302,15 @@ struct ParaEQView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("vs GRAPHIC")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                ForEach(ParaEQPlacement.allCases) { mode in
+                    placementButton(mode)
+                }
+                Spacer(minLength: 0)
+            }
             HStack(alignment: .top, spacing: 10) {
                 HardwareKnob(
                     value: logFreq,
@@ -355,6 +367,30 @@ struct ParaEQView: View {
         return String(format: "%.2f oct · Q %.1f", bw, q)
     }
 
+    private func placementButton(_ mode: ParaEQPlacement) -> some View {
+        let on = para.placement == mode
+        return Button {
+            para.placement = mode
+        } label: {
+            Text(mode.title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .foregroundStyle(on ? APILook.charcoal : APILook.label)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(mode.help)
+    }
+
     private func widthButton(_ mode: ParaEQWidth) -> some View {
         let on = para.width == mode
         return Button {
@@ -395,6 +431,57 @@ struct ParaEQView: View {
             return String(format: hz >= 10_000 ? "%.1fk" : "%.2fk", hz / 1000)
         }
         return String(format: "%.0f Hz", hz)
+    }
+}
+
+/// 24 dB/oct high-pass under the graphic. Does not move graphic faders. Left = Off.
+struct HPFControl: View {
+    @Binding var hpfHz: Float
+
+    private var sliderValue: Binding<Double> {
+        Binding(
+            get: {
+                if hpfHz < HighPass24DSP.minHz { return 0 }
+                return Double(hpfHz)
+            },
+            set: { raw in
+                if raw < Double(HighPass24DSP.minHz) * 0.5 {
+                    hpfHz = 0
+                } else {
+                    hpfHz = Float(raw)
+                    // clamp via ChannelEQ helper path
+                    if hpfHz > 0 {
+                        hpfHz = min(HighPass24DSP.maxHz, max(HighPass24DSP.minHz, hpfHz))
+                    }
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("HPF 24 dB/oct")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                Spacer()
+                Text(hpfHz < HighPass24DSP.minHz ? "OFF" : String(format: "%.0f Hz", hpfHz))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(hpfHz < HighPass24DSP.minHz ? APILook.labelDim : APILook.accentBlue)
+            }
+            Slider(
+                value: sliderValue,
+                in: 0...Double(HighPass24DSP.maxHz)
+            )
+            .tint(APILook.accentBlue)
+            .onTapGesture(count: 2) {
+                hpfHz = 0
+            }
+            Text("Real high-pass — graphic bands stay where you set them. Double-click to turn off.")
+                .font(.system(size: 8, weight: .medium, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+        }
+        .help("Double-click to turn HPF off")
     }
 }
 

@@ -17,8 +17,8 @@ struct ContentView: View {
     @State private var reorderDropID: Int?
     @State private var confirmRemoveStrip = false
 
-    /// Narrow control between adjacent mono strips.
-    private static let monoLinkGutterWidth: CGFloat = 28
+    /// Half/half seam control between adjacent mono strips (no gutter).
+    private static let monoLinkSeamWidth: CGFloat = 26
 
     var body: some View {
         ZStack {
@@ -337,43 +337,83 @@ struct ContentView: View {
         let cluster = mixerClusterWidth
         return GeometryReader { geo in
             let selectedW: CGFloat = 460
+            let masterW: CGFloat = 110
             let gap: CGFloat = 10
-            let available = max(ChannelStripView.stripWidth, geo.size.width - selectedW - gap)
+            let available = max(ChannelStripView.stripWidth, geo.size.width - selectedW - masterW - gap * 2)
             HStack(alignment: .top, spacing: gap) {
                 ScrollView(.horizontal, showsIndicators: cluster > available + 1) {
-                    HStack(alignment: .top, spacing: 10) {
-                        ForEach(Array(session.displayChannelOrder.enumerated()), id: \.element) { index, id in
-                            stripView(for: id)
-                            if let nextID = monoLinkNeighbor(after: index) {
-                                monoLinkGutter(leftID: id, rightID: nextID)
+                    ZStack(alignment: .topLeading) {
+                        HStack(alignment: .top, spacing: 0) {
+                            ForEach(Array(session.displayChannelOrder.enumerated()), id: \.element) { index, id in
+                                stripView(for: id)
+                                // Tiny gap only before a non-linkable neighbor (e.g. stereo bed).
+                                if shouldGapAfterStrip(at: index) {
+                                    Color.clear.frame(width: 8)
+                                }
                             }
                         }
-                        masterStrip
+                        .padding(.vertical, 4)
+
+                        ForEach(monoLinkSeamIndices, id: \.self) { index in
+                            let order = session.displayChannelOrder
+                            let leftID = order[index]
+                            let rightID = order[index + 1]
+                            monoLinkSeamButton(leftID: leftID, rightID: rightID)
+                                .offset(
+                                    x: linkSeamCenterX(afterStripIndex: index) - Self.monoLinkSeamWidth / 2,
+                                    y: 184
+                                )
+                        }
                     }
-                    .padding(.vertical, 4)
                 }
                 .frame(width: min(cluster, available), alignment: .leading)
                 Spacer(minLength: 0)
                 selectedChannelPane
+                masterStrip
             }
         }
         .frame(maxWidth: .infinity)
         .frame(height: ChannelStripView.stripHeight + 8)
     }
 
-    /// Speaker + stereo strips; master is 110pt. Extra strips scroll sideways.
+    /// Speaker + stereo strips only (master is pinned beside SEL). Extra strips scroll sideways.
     private var mixerClusterWidth: CGFloat {
         let order = session.displayChannelOrder
         let channels = order.count
-        var linkGutters = 0
+        var softGaps = 0
         for i in 0..<max(0, channels - 1) {
-            if monoLinkNeighbor(after: i) != nil { linkGutters += 1 }
+            if shouldGapAfterStrip(at: i) { softGaps += 1 }
         }
-        let gaps = CGFloat(max(0, channels + linkGutters)) * 10 // between items, and before master
         return CGFloat(channels) * ChannelStripView.stripWidth
-            + CGFloat(linkGutters) * Self.monoLinkGutterWidth
-            + 110
-            + gaps
+            + CGFloat(softGaps) * 8
+    }
+
+    /// Indices `i` where `order[i]` and `order[i+1]` are both mono speakers (LINK seam).
+    private var monoLinkSeamIndices: [Int] {
+        let order = session.displayChannelOrder
+        var result: [Int] = []
+        for i in 0..<max(0, order.count - 1) {
+            if monoLinkNeighbor(after: i) != nil {
+                result.append(i)
+            }
+        }
+        return result
+    }
+
+    /// Soft gap when the next strip is not a linkable mono pair (beds / end of row).
+    private func shouldGapAfterStrip(at index: Int) -> Bool {
+        let order = session.displayChannelOrder
+        guard index + 1 < order.count else { return false }
+        return monoLinkNeighbor(after: index) == nil
+    }
+
+    /// X center of the seam after strip `index`, accounting for soft gaps before it.
+    private func linkSeamCenterX(afterStripIndex index: Int) -> CGFloat {
+        var x = ChannelStripView.stripWidth * CGFloat(index + 1)
+        for i in 0..<index where shouldGapAfterStrip(at: i) {
+            x += 8
+        }
+        return x
     }
 
     /// Next display id when both this strip and the following are mono speakers.
@@ -388,36 +428,46 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private func monoLinkGutter(leftID: Int, rightID: Int) -> some View {
+    private func monoLinkSeamButton(leftID: Int, rightID: Int) -> some View {
         let linked = session.voices.first(where: { $0.id == leftID })?.linkedPeerID == rightID
             && session.voices.first(where: { $0.id == rightID })?.linkedPeerID == leftID
         let leftBusy = session.isMonoLinked(leftID) && !linked
         let rightBusy = session.isMonoLinked(rightID) && !linked
         let canToggle = linked || (!leftBusy && !rightBusy)
+        let lit = linked
+        let dark = !canToggle
 
         Button {
             session.toggleMonoLink(between: leftID, and: rightID)
         } label: {
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Image(systemName: linked ? "link" : "link.badge.plus")
-                    .font(.system(size: 11, weight: .bold))
+                    .font(.system(size: 10, weight: .bold))
                 Text(linked ? "UNLINK" : "LINK")
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .tracking(0.3)
+                    .font(.system(size: 6, weight: .bold, design: .rounded))
+                    .tracking(0.2)
             }
-            .foregroundStyle(linked ? MixerTheme.bgBottom : (canToggle ? MixerTheme.cyan : MixerTheme.cyanDim))
-            .frame(width: Self.monoLinkGutterWidth, height: 72)
+            .foregroundStyle(
+                lit ? MixerTheme.bgBottom
+                    : (dark ? MixerTheme.cyanDim.opacity(0.35) : MixerTheme.cyan)
+            )
+            .frame(width: Self.monoLinkSeamWidth, height: 56)
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(linked ? MixerTheme.lime : MixerTheme.panelRaised)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(
+                        lit ? MixerTheme.lime
+                            : (dark ? Color(white: 0.08) : MixerTheme.panelRaised)
+                    )
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .stroke(
-                        linked ? MixerTheme.lime : MixerTheme.cyan.opacity(canToggle ? 0.45 : 0.2),
+                        lit ? MixerTheme.lime
+                            : (dark ? Color.white.opacity(0.08) : MixerTheme.cyan.opacity(0.45)),
                         lineWidth: 1
                     )
             )
+            .opacity(dark ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .disabled(!canToggle || session.isRecording)
@@ -428,7 +478,7 @@ struct ContentView: View {
                    ? "Link adjacent monos: shared DSP + fader. Mute, solo, pan, and record IN stay independent."
                    : "One of these strips is already linked to another mono.")
         )
-        .padding(.top, 180)
+        .zIndex(2)
     }
 
     @ViewBuilder
@@ -582,7 +632,7 @@ struct ContentView: View {
                     )
             }
             .buttonStyle(.plain)
-            .help("Select master for the compressor panel")
+            .help("Select master — compressor / DSP opens in the selected-channel panel; strip stays pinned")
 
             HStack(spacing: 4) {
                 BypassToggle(bypass: $session.masterComp.bypass)
@@ -738,11 +788,11 @@ struct ContentView: View {
             )
 
             VStack(alignment: .leading, spacing: 2) {
-                Text("SEL / DSP chip opens the selected-channel panel · pinch or scroll the wave to zoom · swipe left/right to move")
+                Text("SEL / DSP chip opens the selected-channel panel · master strip stays pinned on the right · pinch or scroll the wave to zoom · swipe left/right to move")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
-                Text("ALL TRACKS stays in the window · extra lanes scroll · extra strips scroll sideways")
+                Text("ALL TRACKS stays in the window · extra lanes scroll · speaker/bed strips scroll sideways (master does not)")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
