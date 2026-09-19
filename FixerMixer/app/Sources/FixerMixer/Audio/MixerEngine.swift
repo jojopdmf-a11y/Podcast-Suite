@@ -471,10 +471,12 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].dspBypass = voices[i].dspBypass
             processors[i].eqGains = voices[i].eq.gains
             processors[i].eqBypass = voices[i].eq.bypass
+            processors[i].eqHpfHz = voices[i].eq.hpfHz
             processors[i].paraFreqHz = voices[i].para.freqHz
             processors[i].paraGainDb = voices[i].para.gainDb
             processors[i].paraWidth = voices[i].para.width
             processors[i].paraBypass = voices[i].para.bypass
+            processors[i].paraPlacement = voices[i].para.placement
             processors[i].deVerbAmount = voices[i].voice.deVerb
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
@@ -505,6 +507,7 @@ final class MixerEngine: @unchecked Sendable {
             stereoProcessors[i].dspBypass = false
             stereoProcessors[i].eqGains = stereos[i].eq.gains
             stereoProcessors[i].eqBypass = stereos[i].eq.bypass
+            stereoProcessors[i].eqHpfHz = stereos[i].eq.hpfHz
             stereoProcessors[i].dspOrder = stereos[i].dspOrder.isEmpty ? ChannelDSPSlot.musicDefault : stereos[i].dspOrder
             stereoProcessors[i].configure(sampleRate: sampleRate)
             if stereoMuteSpans.indices.contains(i) {

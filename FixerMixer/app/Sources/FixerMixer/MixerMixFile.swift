@@ -47,10 +47,14 @@ enum MixerMixFile {
         var pan: Float
         var eqGains: [Float]
         var eqBypass: Bool
+        /// 24 dB/oct HPF cutoff Hz. Omitted in older mixes → off.
+        var eqHpfHz: Float?
         var paraFreqHz: Float
         var paraGainDb: Float
         var paraWidth: String
         var paraBypass: Bool
+        /// `"pre"` | `"post"`. Omitted in older mixes → post (legacy order).
+        var paraPlacement: String?
         var deVerb: Float
         var deVerbBypass: Bool
         var wetter: Float
@@ -123,10 +127,12 @@ enum MixerMixFile {
             pan: ch.pan,
             eqGains: ch.eq.gains,
             eqBypass: ch.eq.bypass,
+            eqHpfHz: ch.eq.hpfHz,
             paraFreqHz: ch.para.freqHz,
             paraGainDb: ch.para.gainDb,
             paraWidth: ch.para.width.rawValue,
             paraBypass: ch.para.bypass,
+            paraPlacement: ch.para.placement.rawValue,
             deVerb: ch.voice.deVerb,
             deVerbBypass: ch.voice.deVerbBypass,
             wetter: ch.voice.wetter,
@@ -157,10 +163,13 @@ enum MixerMixFile {
         }
         ch.eq.gains = Array(gains.prefix(n))
         ch.eq.bypass = snap.eqBypass
+        ch.eq.hpfHz = snap.eqHpfHz ?? 0
+        ch.eq.clampHPF()
         ch.para.freqHz = snap.paraFreqHz
         ch.para.gainDb = snap.paraGainDb
         ch.para.width = ParaEQWidth(rawValue: snap.paraWidth) ?? .narrow
         ch.para.bypass = snap.paraBypass
+        ch.para.placement = ParaEQPlacement(rawValue: snap.paraPlacement ?? "") ?? .post
         ch.para.clamp()
         ch.voice.deVerb = snap.deVerb
         ch.voice.deVerbBypass = snap.deVerbBypass

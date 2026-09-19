@@ -745,7 +745,7 @@ struct ChannelStripView: View {
     private func isSlotActive(_ slot: ChannelDSPSlot) -> Bool {
         switch slot {
         case .eq:
-            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive
+            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive
         case .deVerb:
             return channel.voice.deVerb > 0.02
         case .wetter:

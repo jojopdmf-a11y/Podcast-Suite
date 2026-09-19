@@ -62,6 +62,26 @@ struct Biquad {
         a2 = Float(a2n / a0)
     }
 
+    /// RBJ cookbook high-pass. `q = 1/√2` ≈ Butterworth for one 12 dB/oct stage.
+    mutating func setHighPass(sampleRate: Double, freq: Double, q: Float = 0.70710678) {
+        let f = max(1.0, min(freq, sampleRate * 0.45))
+        let w0 = 2.0 * Double.pi * f / sampleRate
+        let cosw = cos(w0)
+        let sinw = sin(w0)
+        let alpha = sinw / (2.0 * Double(max(0.1, q)))
+        let b0n = (1 + cosw) / 2
+        let b1n = -(1 + cosw)
+        let b2n = (1 + cosw) / 2
+        let a0 = 1 + alpha
+        let a1n = -2 * cosw
+        let a2n = 1 - alpha
+        b0 = Float(b0n / a0)
+        b1 = Float(b1n / a0)
+        b2 = Float(b2n / a0)
+        a1 = Float(a1n / a0)
+        a2 = Float(a2n / a0)
+    }
+
     static func peaking(sampleRate: Double, freq: Double, gainDb: Float, q: Float = 1.15) -> Biquad {
         var f = Biquad()
         f.setPeaking(sampleRate: sampleRate, freq: freq, gainDb: gainDb, q: q)
@@ -72,6 +92,63 @@ struct Biquad {
         var f = Biquad()
         f.setHighShelf(sampleRate: sampleRate, freq: freq, gainDb: gainDb)
         return f
+    }
+
+    static func highPass(sampleRate: Double, freq: Double, q: Float = 0.70710678) -> Biquad {
+        var f = Biquad()
+        f.setHighPass(sampleRate: sampleRate, freq: freq, q: q)
+        return f
+    }
+}
+
+/// Cascaded 2× Butterworth high-pass → 24 dB/octave. `cutoffHz <= 0` = bypass.
+struct HighPass24DSP {
+    static let minHz: Float = 20
+    static let maxHz: Float = 300
+
+    var cutoffHz: Float = 0
+
+    private var stage1 = Biquad()
+    private var stage2 = Biquad()
+    private var sampleRate: Double = 44_100
+    private var lastCutoff: Float = -1
+    private var lastRate: Double = 0
+    private var active = false
+
+    mutating func configure(sampleRate: Double) {
+        self.sampleRate = sampleRate
+        let on = cutoffHz >= Self.minHz
+        if !on {
+            if active {
+                stage1.reset()
+                stage2.reset()
+            }
+            active = false
+            lastCutoff = cutoffHz
+            lastRate = sampleRate
+            return
+        }
+        let hz = min(Self.maxHz, max(Self.minHz, cutoffHz))
+        if !active
+            || abs(hz - lastCutoff) > 0.05
+            || abs(sampleRate - lastRate) > 0.5
+        {
+            stage1.setHighPass(sampleRate: sampleRate, freq: Double(hz))
+            stage2.setHighPass(sampleRate: sampleRate, freq: Double(hz))
+            lastCutoff = hz
+            lastRate = sampleRate
+            active = true
+        }
+    }
+
+    mutating func reset() {
+        stage1.reset()
+        stage2.reset()
+    }
+
+    mutating func process(_ x: Float) -> Float {
+        guard active else { return x }
+        return stage2.process(stage1.process(x))
     }
 }
 
