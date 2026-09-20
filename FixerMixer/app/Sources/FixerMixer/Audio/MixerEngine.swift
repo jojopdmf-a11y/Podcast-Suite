@@ -61,8 +61,18 @@ final class MixerEngine: @unchecked Sendable {
     private var recordMap: [Int: Int] = [:]
     private var inputDeviceUID: String?
     private let recLock = NSLock()
-    private var recPending: [Float] = []
+    /// Interleaved float ring for dry tape ingest (written on tap, consumed without full DSP).
+    private var recRing: [Float] = []
+    private var recRingCapacityFrames = 0
+    private var recRingWriteFrame = 0
+    private var recRingReadFrame = 0
+    private var recRingAvailableFrames = 0
     private var recPendingChannels = 1
+    /// Last good sample per hardware channel — held on underrun instead of blind zeros.
+    private var recHoldSamples: [Float] = []
+    /// Count of frames filled from hold/silence because the ring was short.
+    private(set) var recordUnderrunFrames: UInt64 = 0
+    private var recordUnderrunEvents: UInt64 = 0
     /// Peak per voice from the input tap (armed strips). Used for PRE meters in standby/record.
     private var liveInputPeaks: [Float] = []
     private var recConverter: AVAudioConverter?
@@ -72,6 +82,11 @@ final class MixerEngine: @unchecked Sendable {
     /// True only after a record tap is on inputNode. Touching inputNode at any other time makes macOS ask for the mic.
     private var didInstallInputTap = false
     private var lengthEmitCounter = 0
+
+    /// Preferred Core Audio tap size for multi-channel record headroom.
+    private static let recordTapFrames: AVAudioFrameCount = 4096
+    /// Ring capacity in frames (covers several tap blocks at 8-ch).
+    private static let recordRingCapacityFrames = 16_384
 
     private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
 
@@ -436,15 +451,16 @@ final class MixerEngine: @unchecked Sendable {
         voices: [ChannelStripState],
         stereos: [ChannelStripState],
         masterDb: Float,
-        autoBalanceEnabled: Bool,
+        autoMixMode: AutoMixMode,
         autoBalanceTargetDb: Float,
         masterComp state: MasterCompressorState
     ) {
         lock.lock()
         defer { lock.unlock() }
         masterGain = pow(10.0, masterDb / 20.0)
-        autoBalancer.enabled = autoBalanceEnabled
+        autoBalancer.mode = autoMixMode
         autoBalancer.targetDb = autoBalanceTargetDb
+        autoBalancer.included = voices.map(\.includeInAutoMix)
         autoBalancer.resize(to: voices.count)
         masterComp.bypass = state.bypass
         masterComp.thresholdDb = state.thresholdDb
@@ -462,11 +478,12 @@ final class MixerEngine: @unchecked Sendable {
         if processors.count > voices.count {
             processors = Array(processors.prefix(voices.count))
         }
+        let autoActive = autoMixMode.isActive
         for i in 0..<voices.count {
             processors[i].mute = voices[i].mute
             processors[i].solo = voices[i].solo
             // While auto is on, channel fader becomes the relative bias trim
-            processors[i].faderDb = autoBalanceEnabled ? voices[i].autoBiasDb : voices[i].faderDb
+            processors[i].faderDb = autoActive ? voices[i].autoBiasDb : voices[i].faderDb
             processors[i].pan = voices[i].pan
             processors[i].dspBypass = voices[i].dspBypass
             processors[i].eqGains = voices[i].eq.gains
@@ -566,8 +583,12 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.reset()
         masterComp.reset()
         recLock.lock()
-        recPending = []
+        resetRecordRingLocked(channels: max(1, recPendingChannels))
         liveInputPeaks = Array(repeating: 0, count: max(voiceCount, 1))
+        if recording {
+            recordUnderrunFrames = 0
+            recordUnderrunEvents = 0
+        }
         recLock.unlock()
         lengthEmitCounter = 0
         lock.unlock()
@@ -630,8 +651,9 @@ final class MixerEngine: @unchecked Sendable {
                     var muted = [Bool](repeating: false, count: voiceN)
                     for c in 0..<voiceN {
                         var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
-                        if liveRecord, self.recordMap[c] != nil {
-                            // Armed strips write to disk but stay silent in Mixer — monitor on the interface.
+                        let armedSilent = liveRecord && self.recordMap[c] != nil
+                        if armedSilent {
+                            // Armed strips write dry tape but stay silent in the mix — skip FX on zeros.
                             sample = 0
                         } else {
                             let spans = c < self.voiceMuteSpans.count ? self.voiceMuteSpans[c] : []
@@ -639,9 +661,14 @@ final class MixerEngine: @unchecked Sendable {
                         }
                         if self.processors.indices.contains(c) {
                             muted[c] = self.processors[c].mute || (anySolo && !self.processors[c].solo)
-                            let fx = self.processors[c].processEffects(sample)
-                            fxSamples[c] = fx
-                            levels[c] = abs(fx)
+                            if armedSilent {
+                                fxSamples[c] = 0
+                                levels[c] = 0
+                            } else {
+                                let fx = self.processors[c].processEffects(sample)
+                                fxSamples[c] = fx
+                                levels[c] = abs(fx)
+                            }
                         }
                     }
                     let autoGains = self.autoBalancer.process(
@@ -865,7 +892,7 @@ final class MixerEngine: @unchecked Sendable {
         recDestFormat = nil
         audioEngine = nil
         recLock.lock()
-        recPending = []
+        resetRecordRingLocked(channels: max(1, recPendingChannels))
         liveInputPeaks = []
         recLock.unlock()
         if wasRecording {
@@ -1126,36 +1153,70 @@ final class MixerEngine: @unchecked Sendable {
         frameCount = max(frameCount, need)
     }
 
+    private func resetRecordRingLocked(channels: Int) {
+        let ch = max(1, channels)
+        recPendingChannels = ch
+        recRingCapacityFrames = Self.recordRingCapacityFrames
+        recRing = Array(repeating: 0, count: recRingCapacityFrames * ch)
+        recRingWriteFrame = 0
+        recRingReadFrame = 0
+        recRingAvailableFrames = 0
+        recHoldSamples = Array(repeating: 0, count: ch)
+    }
+
+    /// Dry tape ingest: pull only the frames we need from the ring; leave the rest.
+    /// Shortfall holds last sample per channel (counted underrun) — never blind zero-fill without logging.
     private func consumeRecordLocked(from head: Int, frames n: Int) {
-        recLock.lock()
-        let pending = recPending
-        let ch = max(1, recPendingChannels)
-        recPending.removeAll(keepingCapacity: true)
-        recLock.unlock()
-        let pendingFrames = ch > 0 ? pending.count / ch : 0
         guard n > 0 else { return }
-        if pendingFrames > n {
-            recLock.lock()
-            recPending = Array(pending[(n * ch)...])
-            recPendingChannels = ch
-            recLock.unlock()
+        recLock.lock()
+        let ch = max(1, recPendingChannels)
+        if recHoldSamples.count < ch {
+            recHoldSamples.append(contentsOf: Array(repeating: 0, count: ch - recHoldSamples.count))
         }
+        var underrunThisBlock = 0
         for i in 0..<n {
-            let src = i < pendingFrames ? i : -1
+            let haveFrame: Bool
+            let frameIdx: Int
+            if recRingAvailableFrames > 0, recRingCapacityFrames > 0 {
+                haveFrame = true
+                frameIdx = recRingReadFrame
+                recRingReadFrame = (recRingReadFrame + 1) % recRingCapacityFrames
+                recRingAvailableFrames -= 1
+            } else {
+                haveFrame = false
+                frameIdx = 0
+                underrunThisBlock += 1
+            }
             for (voiceIndex, hwCh) in recordMap {
                 guard voiceBuffers.indices.contains(voiceIndex) else { continue }
                 let dest = head + i
                 guard dest < voiceBuffers[voiceIndex].count else { continue }
-                var sample: Float = 0
-                if src >= 0 {
-                    let idx = src * ch + min(max(0, hwCh), ch - 1)
-                    if idx < pending.count {
-                        sample = pending[idx]
-                    }
+                let channel = min(max(0, hwCh), ch - 1)
+                var sample: Float
+                if haveFrame {
+                    let idx = frameIdx * ch + channel
+                    sample = idx < recRing.count ? recRing[idx] : 0
+                    recHoldSamples[channel] = sample
+                } else {
+                    sample = channel < recHoldSamples.count ? recHoldSamples[channel] : 0
                 }
                 voiceBuffers[voiceIndex][dest] = sample
             }
         }
+        if underrunThisBlock > 0 {
+            recordUnderrunFrames += UInt64(underrunThisBlock)
+            recordUnderrunEvents += 1
+            if recordUnderrunEvents == 1 || recordUnderrunEvents % 64 == 0 {
+                NSLog(
+                    "PodProducer record underrun: +%d frames (total %llu frames / %llu events) playhead=%d",
+                    underrunThisBlock,
+                    recordUnderrunFrames,
+                    recordUnderrunEvents,
+                    head
+                )
+            }
+        }
+        recLock.unlock()
     }
 
     private func attachSilentInput(_ engine: AVAudioEngine) throws {
@@ -1185,11 +1246,10 @@ final class MixerEngine: @unchecked Sendable {
         recConverter = nil
 
         recLock.lock()
-        recPending = []
-        recPendingChannels = Int(hwFormat.channelCount)
+        resetRecordRingLocked(channels: Int(hwFormat.channelCount))
         recLock.unlock()
 
-        input.installTap(onBus: 0, bufferSize: 1024, format: hwFormat) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: Self.recordTapFrames, format: hwFormat) { [weak self] buffer, _ in
             self?.ingestRecordBuffer(buffer)
         }
         didInstallInputTap = true
@@ -1263,10 +1323,39 @@ final class MixerEngine: @unchecked Sendable {
             }
         }
         if writing {
-            recPending.append(contentsOf: out)
-            recPendingChannels = outCh
+            writeRecordRingLocked(interleaved: out, channels: outCh, frames: pendingFrames)
         }
         recLock.unlock()
+    }
+
+    /// Append interleaved frames into the ring. Drop oldest on overflow (prefer not stalling the tap).
+    private func writeRecordRingLocked(interleaved out: [Float], channels outCh: Int, frames pendingFrames: Int) {
+        guard pendingFrames > 0, outCh > 0 else { return }
+        if outCh != recPendingChannels || recRing.isEmpty || recRingCapacityFrames == 0 {
+            resetRecordRingLocked(channels: outCh)
+        }
+        let ch = recPendingChannels
+        let cap = recRingCapacityFrames
+        for f in 0..<pendingFrames {
+            if recRingAvailableFrames >= cap {
+                recRingReadFrame = (recRingReadFrame + 1) % cap
+                recRingAvailableFrames -= 1
+            }
+            let destFrame = recRingWriteFrame
+            for c in 0..<ch {
+                let srcIdx = f * outCh + min(c, outCh - 1)
+                let dstIdx = destFrame * ch + c
+                let sample = srcIdx < out.count ? out[srcIdx] : 0
+                if dstIdx < recRing.count {
+                    recRing[dstIdx] = sample
+                }
+                if c < recHoldSamples.count {
+                    recHoldSamples[c] = sample
+                }
+            }
+            recRingWriteFrame = (recRingWriteFrame + 1) % cap
+            recRingAvailableFrames += 1
+        }
     }
 
     /// Dante / interfaces often deliver int PCM. Store float at the file’s native rate.

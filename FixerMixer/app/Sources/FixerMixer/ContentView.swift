@@ -18,10 +18,10 @@ struct ContentView: View {
     @State private var confirmRemoveStrip = false
 
     /// Half/half seam control between adjacent mono strips (no gutter).
-    private static let monoLinkSeamWidth: CGFloat = 26
-    /// Vertical offset of LINK/UNLINK — sits in the gap between LEVELER and the fader
-    /// (beside “DRAG TO REORDER”), not up at AMBIENCE.
+    private static let monoLinkSeamWidth: CGFloat = 36
+    /// Vertical center between last DSP chip (LEVELER) and the fader row.
     private static let monoLinkSeamY: CGFloat = 256
+    private static let monoLinkSeamHeight: CGFloat = 22
 
     var body: some View {
         ZStack {
@@ -65,7 +65,6 @@ struct ContentView: View {
                                 .id(session.sourceFolder?.path ?? "empty")
                             }
                             mixerRow
-                            transport
                         } else {
                             dropZone
                         }
@@ -260,6 +259,34 @@ struct ContentView: View {
                         .buttonStyle(MixerGhostButtonStyle())
                         .help("Choose a folder and name for this mix. Audio stays in the WAV files. Mute paints are saved here.")
                 }
+                headerGroup(label: "TRANSPORT") {
+                    Button("BACK TO TOP") {
+                        session.restartPlay()
+                    }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Jump to the start of the timeline")
+                    Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
+                        session.togglePlay()
+                    }
+                    .buttonStyle(MixerPrimaryButtonStyle())
+                    .keyboardShortcut(.space, modifiers: [])
+                    .disabled(session.isRecording)
+                    .help(
+                        session.isRecording
+                            ? "Spacebar stops Record"
+                            : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
+                    )
+                    Button(session.isBouncing ? "EXPORTING…" : "EXPORT…") {
+                        exportItems = session.makeExportItems()
+                        exportFolder = session.suggestedExportFolder()
+                        exportSampleRate = .native
+                        exportFormat = .wav16
+                        showExport = true
+                    }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .disabled(session.isBouncing || session.frameCount == 0)
+                    .help("Choose speaker stems, stereo beds, and the master 2-mix. Pick sample rate and WAV/AIFF here — playback stays at the file rate.")
+                }
                 headerGroup(label: "IMPORT") {
                     Button("LOAD OTHER FOLDER…") { pickFolder() }
                         .buttonStyle(MixerGhostButtonStyle())
@@ -443,42 +470,38 @@ struct ContentView: View {
         Button {
             session.toggleMonoLink(between: leftID, and: rightID)
         } label: {
-            VStack(spacing: 3) {
-                Image(systemName: linked ? "link" : "link.badge.plus")
-                    .font(.system(size: 10, weight: .bold))
-                Text(linked ? "UNLINK" : "LINK")
-                    .font(.system(size: 6, weight: .bold, design: .rounded))
-                    .tracking(0.2)
-            }
-            .foregroundStyle(
-                lit ? MixerTheme.bgBottom
-                    : (dark ? MixerTheme.cyanDim.opacity(0.35) : MixerTheme.cyan)
-            )
-            .frame(width: Self.monoLinkSeamWidth, height: 56)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(
-                        lit ? MixerTheme.lime
-                            : (dark ? Color(white: 0.08) : MixerTheme.panelRaised)
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(
-                        lit ? MixerTheme.lime
-                            : (dark ? Color.white.opacity(0.08) : MixerTheme.cyan.opacity(0.45)),
-                        lineWidth: 1
-                    )
-            )
-            .opacity(dark ? 0.55 : 1)
+            Text("link")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .foregroundStyle(
+                    lit ? MixerTheme.bgBottom
+                        : (dark ? MixerTheme.cyanDim.opacity(0.35) : MixerTheme.cyan)
+                )
+                .frame(width: Self.monoLinkSeamWidth, height: Self.monoLinkSeamHeight)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(
+                            lit ? MixerTheme.lime
+                                : (dark ? Color(white: 0.08) : MixerTheme.panelRaised)
+                        )
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(
+                            lit ? MixerTheme.lime
+                                : (dark ? Color.white.opacity(0.08) : MixerTheme.cyan.opacity(0.45)),
+                            lineWidth: 1
+                        )
+                )
+                .opacity(dark ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .disabled(!canToggle || session.isRecording)
         .help(
             linked
-                ? "Unlink these speakers. DSP + fader stay at the last shared values; mute/solo/pan stay independent."
+                ? "Unlink these speakers. DSP + fader + mute stay at the last shared values; solo/pan stay independent."
                 : (canToggle
-                   ? "Link adjacent monos: shared DSP + fader. Mute, solo, pan, and record IN stay independent."
+                   ? "Link adjacent monos: shared DSP + fader + mute. Solo, pan, and record IN stay independent."
                    : "One of these strips is already linked to another mono.")
         )
         .zIndex(2)
@@ -490,7 +513,9 @@ struct ContentView: View {
             ChannelStripView(
                 channel: $session.voices[index],
                 faderDb: session.voiceFaderBinding(at: index),
-                autoDriven: session.autoBalanceEnabled,
+                autoDriven: session.autoMixMode.isActive,
+                autoGainDb: session.autoGainDb.indices.contains(index) ? session.autoGainDb[index] : nil,
+                showAutoInclude: session.autoMixMode.isActive,
                 isSelected: session.selectedChannelID == id,
                 hardwareInputChannels: session.selectedInputChannelCount,
                 isRecording: session.isRecording,
@@ -653,20 +678,20 @@ struct ContentView: View {
             }
 
             Button {
-                session.setAutoBalanceEnabled(!session.autoBalanceEnabled)
+                session.cycleAutoMixMode()
             } label: {
                 VStack(spacing: 2) {
                     Text("AUTO")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
-                    Text(session.autoBalanceEnabled ? "ON" : "OFF")
+                    Text(session.autoMixMode.shortLabel)
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .foregroundStyle(session.autoBalanceEnabled ? MixerTheme.bgBottom : MixerTheme.cyan)
+                .foregroundStyle(session.autoMixMode.isActive ? MixerTheme.bgBottom : MixerTheme.cyan)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(session.autoBalanceEnabled ? MixerTheme.meterGreen : MixerTheme.panelRaised)
+                        .fill(session.autoMixMode.isActive ? MixerTheme.meterGreen : MixerTheme.panelRaised)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -674,9 +699,9 @@ struct ContentView: View {
                 )
             }
             .buttonStyle(.plain)
-            .help("Auto Balance rides speaker faders. Drag a fader to favor that speaker.")
+            .help("Cycles OFF → Auto Mix (target level) → Auto Duck (gain share). Check AUTO on each mono to include it. Drag a fader to favor that speaker.")
 
-            if session.autoBalanceEnabled {
+            if session.autoMixMode == .mix {
                 VStack(spacing: 4) {
                     Text("TARGET")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -694,6 +719,11 @@ struct ContentView: View {
                     .tint(MixerTheme.cyan)
                     .padding(.bottom, 4)
                 }
+            } else if session.autoMixMode == .duck {
+                Text("DUCK")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                    .help("Proportional gain share across included monos. Silence shares medium gains.")
             }
 
             Spacer(minLength: 8)
@@ -757,68 +787,20 @@ struct ContentView: View {
         return MixerTheme.lime
     }
 
-    private var transport: some View {
-        HStack(spacing: 12) {
-            Button("BACK TO TOP") {
-                session.restartPlay()
-            }
-            .buttonStyle(MixerGhostButtonStyle())
-            .help("Jump to the start of the timeline")
-
-            Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
-                session.togglePlay()
-            }
-            .buttonStyle(MixerPrimaryButtonStyle())
-            .keyboardShortcut(.space, modifiers: [])
-            .disabled(session.isRecording)
-            .help(
-                session.isRecording
-                    ? "Spacebar stops Record"
-                    : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
-            )
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("SEL / DSP chip opens the selected-channel panel · master strip stays pinned on the right · pinch or scroll the wave to zoom · swipe left/right to move")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
-                    .lineLimit(1)
-                Text("ALL TRACKS stays in the window · extra lanes scroll · speaker/bed strips scroll sideways (master does not)")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
-                    .lineLimit(1)
-                Text("SEL a strip, then Shift-drag the waveform to silence that span (not a cut) · Option-drag clears")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
-                    .lineLimit(1)
-                Text("Monitor mics on your interface. PodProducer does not play the mic back.")
-                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundStyle(MixerTheme.lime)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 8)
-
-            Button(session.isBouncing ? "EXPORTING…" : "EXPORT…") {
-                exportItems = session.makeExportItems()
-                exportFolder = session.suggestedExportFolder()
-                exportSampleRate = .native
-                exportFormat = .wav16
-                showExport = true
-            }
-            .buttonStyle(MixerGhostButtonStyle())
-            .disabled(session.isBouncing || session.frameCount == 0)
-            .help("Choose speaker stems, stereo beds, and the master 2-mix. Pick sample rate and WAV/AIFF here — playback stays at the file rate.")
-        }
-        .padding(12)
-        .mixerPanel()
-    }
-
     private var statusBar: some View {
-        Text(session.status)
-            .font(.system(size: 11, weight: .semibold, design: .rounded))
-            .foregroundStyle(MixerTheme.textPrimary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 4)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(session.status)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(MixerTheme.textPrimary)
+            if session.hasSession {
+                Text("SEL / DSP chip opens the selected-channel panel · Shift-drag waveform to silence · Option-drag clears · Monitor mics on your interface")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(MixerTheme.textSecondary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 4)
     }
 
     private func formatTime(_ frames: Int) -> String {

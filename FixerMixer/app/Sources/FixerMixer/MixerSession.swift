@@ -233,8 +233,10 @@ struct ChannelStripState: Identifiable, Equatable {
     /// Bypass all DSP (EQ + voice FX); fader/pan/mute still apply.
     var dspBypass: Bool = false
     var faderDb: Float = 0
-    /// Relative preference while Auto Balance is on (favor/cut this speaker).
+    /// Relative preference while Auto Mix / Auto Duck is on (favor/cut this speaker).
     var autoBiasDb: Float = 0
+    /// When true, this mono participates in Auto Mix / Auto Duck. Stereo beds ignore this.
+    var includeInAutoMix: Bool = true
     var pan: Float = 0
     var eq = ChannelEQ()
     var para = ChannelParaEQ()
@@ -247,7 +249,7 @@ struct ChannelStripState: Identifiable, Equatable {
     var inputChannel: Int? = nil
     /// Painted silence ranges. The show does not get shorter.
     var muteSpans: [MuteSpan] = []
-    /// Other mono strip id when DSP + fader are linked. Stereo beds never use this.
+    /// Other mono strip id when DSP + fader + mute are linked. Stereo beds never use this.
     var linkedPeerID: Int? = nil
 
     static let musicID = 1000
@@ -264,6 +266,7 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.dspBypass == rhs.dspBypass
             && lhs.faderDb == rhs.faderDb
             && lhs.autoBiasDb == rhs.autoBiasDb
+            && lhs.includeInAutoMix == rhs.includeInAutoMix
             && lhs.pan == rhs.pan
             && lhs.eq == rhs.eq
             && lhs.para == rhs.para
@@ -340,9 +343,14 @@ final class MixerSession: ObservableObject {
     @Published var masterCompOutL: Float = 0
     @Published var masterCompOutR: Float = 0
     @Published var masterCompGRDb: Float = 0
-    @Published var autoBalanceEnabled = false
+    @Published var autoMixMode: AutoMixMode = .off
+    /// Convenience for older call sites / mix-file compat.
+    var autoBalanceEnabled: Bool {
+        get { autoMixMode.isActive }
+        set { autoMixMode = newValue ? (autoMixMode.isActive ? autoMixMode : .mix) : .off }
+    }
     @Published var autoBalanceTargetDb: Float = -18
-    /// Live auto-mix gains in dB (one per voice). Fader display = this + autoBiasDb.
+    /// Live auto-mix / auto-duck gains in dB (one per voice). Fader display = this + autoBiasDb.
     @Published var autoGainDb: [Float] = []
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
@@ -466,7 +474,7 @@ final class MixerSession: ObservableObject {
         frameCount = 0
         playheadFrame = 0
         selectedChannelID = ChannelStripState.masterID
-        autoBalanceEnabled = false
+        autoMixMode = .off
         autoGainDb = []
         channelOrder = []
         refreshWaveform()
@@ -611,10 +619,10 @@ final class MixerSession: ObservableObject {
         voices[ib].linkedPeerID = a
         syncParamsToEngine()
         persistMixIfPossible()
-        status = "Linked \(voices[ia].name) ↔ \(voices[ib].name) (shared DSP + fader)."
+        status = "Linked \(voices[ia].name) ↔ \(voices[ib].name) (shared DSP + fader + mute)."
     }
 
-    /// After any edit on a mono strip, mirror DSP + fader onto its linked peer.
+    /// After any edit on a mono strip, mirror DSP + fader + mute onto its linked peer.
     func syncLinkedFrom(_ id: Int) {
         guard !syncingLinkedPair,
               let idx = voices.firstIndex(where: { $0.id == id }),
@@ -631,6 +639,8 @@ final class MixerSession: ObservableObject {
         dest.dspBypass = src.dspBypass
         dest.faderDb = src.faderDb
         dest.autoBiasDb = src.autoBiasDb
+        dest.includeInAutoMix = src.includeInAutoMix
+        dest.mute = src.mute
         dest.eq = src.eq
         dest.para = src.para
         dest.voice = src.voice
@@ -809,12 +819,22 @@ final class MixerSession: ObservableObject {
                 let mixURL = MixerMixFile.sidecarURL(in: folder)
                 try MixerMixFile.write(MixerMixFile.make(from: self), to: mixURL)
                 lastMixURL = mixURL
-                status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
+                let underruns = engine.recordUnderrunFrames
+                if underruns > 0 {
+                    status = "Recorded to \(folder.lastPathComponent) · \(underruns) underrun frame(s) — check take vs interface backup. Tape is dry (no EQ on record)."
+                } else {
+                    status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
+                }
             } catch {
                 status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription)"
             }
         } else {
-            status = "Recorded in this window. Export to keep it. Shift-drag the waveform to mute a cough."
+            let underruns = engine.recordUnderrunFrames
+            if underruns > 0 {
+                status = "Recorded in this window · \(underruns) underrun frame(s). Export to keep it."
+            } else {
+                status = "Recorded in this window. Export to keep it. Shift-drag the waveform to mute a cough."
+            }
         }
         if keepStandby {
             // Return to metering-only after tape stops.
@@ -879,13 +899,24 @@ final class MixerSession: ObservableObject {
     }
 
     func setAutoBalanceEnabled(_ enabled: Bool) {
-        if enabled && !autoBalanceEnabled {
+        setAutoMixMode(enabled ? .mix : .off)
+    }
+
+    /// Cycle OFF → MIX → DUCK → OFF.
+    func cycleAutoMixMode() {
+        setAutoMixMode(autoMixMode.next)
+    }
+
+    func setAutoMixMode(_ mode: AutoMixMode) {
+        let wasActive = autoMixMode.isActive
+        let willActive = mode.isActive
+        if willActive && !wasActive {
             // Keep current fader positions as relative favor when auto takes over
             for i in voices.indices {
                 voices[i].autoBiasDb = voices[i].faderDb
             }
             autoGainDb = Array(repeating: 0, count: voices.count)
-        } else if !enabled && autoBalanceEnabled {
+        } else if !willActive && wasActive {
             // Bake auto + bias into manual faders so levels don't jump
             for i in voices.indices {
                 let auto = autoGainDb.indices.contains(i) ? autoGainDb[i] : 0
@@ -894,8 +925,9 @@ final class MixerSession: ObservableObject {
             }
             autoGainDb = []
         }
-        autoBalanceEnabled = enabled
+        autoMixMode = mode
         syncParamsToEngine()
+        persistMixIfPossible()
     }
 
     /// Fader binding for a voice strip: shows auto rides; drags adjust bias.
@@ -903,7 +935,7 @@ final class MixerSession: ObservableObject {
         Binding(
             get: {
                 guard self.voices.indices.contains(index) else { return 0 }
-                if self.autoBalanceEnabled {
+                if self.autoMixMode.isActive {
                     let auto = self.autoGainDb.indices.contains(index) ? self.autoGainDb[index] : 0
                     return max(-60, min(12, auto + self.voices[index].autoBiasDb))
                 }
@@ -911,7 +943,7 @@ final class MixerSession: ObservableObject {
             },
             set: { newValue in
                 guard self.voices.indices.contains(index) else { return }
-                if self.autoBalanceEnabled {
+                if self.autoMixMode.isActive {
                     let auto = self.autoGainDb.indices.contains(index) ? self.autoGainDb[index] : 0
                     self.voices[index].autoBiasDb = max(-24, min(18, newValue - auto))
                 } else {
@@ -1251,6 +1283,7 @@ final class MixerSession: ObservableObject {
             ch.dspBypass = kept.dspBypass
             ch.faderDb = kept.faderDb
             ch.autoBiasDb = kept.autoBiasDb
+            ch.includeInAutoMix = kept.includeInAutoMix
             ch.pan = kept.pan
             ch.eq = kept.eq
             ch.para = kept.para
@@ -1302,7 +1335,7 @@ final class MixerSession: ObservableObject {
             playheadFrame = 0
             if !append {
                 lastMixURL = nil
-                autoBalanceEnabled = false
+                autoMixMode = .off
                 autoGainDb = []
             }
             if let first = voices.first {
@@ -1343,7 +1376,7 @@ final class MixerSession: ObservableObject {
             voices: voices,
             stereos: stereos,
             masterDb: masterDb,
-            autoBalanceEnabled: autoBalanceEnabled,
+            autoMixMode: autoMixMode,
             autoBalanceTargetDb: autoBalanceTargetDb,
             masterComp: masterComp
         )
