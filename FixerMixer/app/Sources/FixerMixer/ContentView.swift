@@ -19,6 +19,9 @@ struct ContentView: View {
 
     /// Half/half seam control between adjacent mono strips (no gutter).
     private static let monoLinkSeamWidth: CGFloat = 26
+    /// Vertical offset of LINK/UNLINK — sits in the gap between LEVELER and the fader
+    /// (beside “DRAG TO REORDER”), not up at AMBIENCE.
+    private static let monoLinkSeamY: CGFloat = 256
 
     var body: some View {
         ZStack {
@@ -361,7 +364,7 @@ struct ContentView: View {
                             monoLinkSeamButton(leftID: leftID, rightID: rightID)
                                 .offset(
                                     x: linkSeamCenterX(afterStripIndex: index) - Self.monoLinkSeamWidth / 2,
-                                    y: 184
+                                    y: Self.monoLinkSeamY
                                 )
                         }
                     }
@@ -612,26 +615,13 @@ struct ContentView: View {
                 .minimumScaleFactor(0.85)
                 .frame(maxWidth: .infinity)
 
-            Button {
+            SelectChannelButton(
+                isSelected: session.selectedChannelID == ChannelStripState.masterID,
+                expandsHorizontally: true
+            ) {
                 session.selectChannel(ChannelStripState.masterID)
                 showAllWaveforms = false
-            } label: {
-                Text(session.selectedChannelID == ChannelStripState.masterID ? "SEL●" : "SEL")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .tracking(0.4)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 7)
-                    .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.bgBottom : MixerTheme.cyan)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.panelRaised)
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                    )
             }
-            .buttonStyle(.plain)
             .help("Select master — compressor / DSP opens in the selected-channel panel; strip stays pinned")
 
             HStack(spacing: 4) {

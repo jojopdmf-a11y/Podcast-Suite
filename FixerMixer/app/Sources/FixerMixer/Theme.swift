@@ -96,3 +96,41 @@ struct MixerStandbyButtonStyle: ButtonStyle {
             )
     }
 }
+
+/// Shared SEL control — selected = solid lime fill, black “SEL” + black dot (Julie’s style).
+struct SelectChannelButton: View {
+    var isSelected: Bool
+    /// Master strip uses a full-width SEL; channel strips stay compact.
+    var expandsHorizontally: Bool = false
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Text("SEL")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(0.4)
+                Circle()
+                    .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
+                    .frame(width: 5, height: 5)
+            }
+            .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
+            .frame(maxWidth: expandsHorizontally ? .infinity : nil)
+            .frame(minWidth: expandsHorizontally ? nil : 54, minHeight: 28)
+            .padding(.horizontal, expandsHorizontally ? 0 : 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(
+                        isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45),
+                        lineWidth: isSelected ? 1.5 : 1
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}

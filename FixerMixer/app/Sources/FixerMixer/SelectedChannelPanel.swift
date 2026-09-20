@@ -477,9 +477,6 @@ struct HPFControl: View {
             .onTapGesture(count: 2) {
                 hpfHz = 0
             }
-            Text("Real high-pass — graphic bands stay where you set them. Double-click to turn off.")
-                .font(.system(size: 8, weight: .medium, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
         }
         .help("Double-click to turn HPF off")
     }

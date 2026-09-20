@@ -421,24 +421,8 @@ struct ChannelStripView: View {
                 HStack(alignment: .center, spacing: 6) {
                     channelNameLabel
                     Spacer(minLength: 0)
-                    Button(action: onSelect) {
-                        Text(isSelected ? "SEL●" : "SEL")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .tracking(0.4)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 7)
-                            .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("Select this channel for the waveform timeline")
+                    SelectChannelButton(isSelected: isSelected, action: onSelect)
+                        .help("Select this channel for the waveform timeline")
                 }
                 Text(channel.fileURL?.lastPathComponent ?? "— empty —")
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
