@@ -389,6 +389,10 @@ struct ChannelStripView: View {
     @Binding var channel: ChannelStripState
     var faderDb: Binding<Float>
     var autoDriven: Bool
+    /// Live applied auto-mix / auto-duck gain in dB (nil when off).
+    var autoGainDb: Float? = nil
+    /// Show per-mono AUTO include checkbox.
+    var showAutoInclude: Bool = false
     var isSelected: Bool
     var hardwareInputChannels: Int = 0
     var isRecording: Bool = false
@@ -517,14 +521,38 @@ struct ChannelStripView: View {
 
             Spacer(minLength: 0)
 
+            if showAutoInclude, !channel.isStereo {
+                Toggle(isOn: Binding(
+                    get: { channel.includeInAutoMix },
+                    set: {
+                        channel.includeInAutoMix = $0
+                        onChange()
+                    }
+                )) {
+                    Text("AUTO")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(channel.includeInAutoMix ? MixerTheme.lime : MixerTheme.cyanDim)
+                }
+                .toggleStyle(.checkbox)
+                .help("Include this mono in Auto Mix / Auto Duck. Unchecked = bypass (unity).")
+            }
+
             HStack(spacing: 6) {
                 LevelMeter(level: channel.prePeak, label: "PRE")
-                VerticalFader(valueDb: faderDb, autoDriven: autoDriven)
+                VStack(spacing: 2) {
+                    VerticalFader(valueDb: faderDb, autoDriven: autoDriven)
+                    if autoDriven, let g = autoGainDb {
+                        Text(String(format: "%+.1f", g))
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(MixerTheme.lime.opacity(0.9))
+                            .help("Applied auto-mix / auto-duck gain (dB)")
+                    }
+                }
                 LevelMeter(level: channel.postPeak, label: "POST")
             }
-            .frame(height: 130)
+            .frame(height: autoDriven && autoGainDb != nil ? 148 : 130)
             .help(autoDriven
-                  ? "Auto Balance rides this fader. Drag to favor/cut this speaker relative to auto."
+                  ? "Auto rides this fader. Drag to favor/cut this speaker relative to auto."
                   : "Channel level")
 
             HStack(spacing: 6) {
@@ -547,7 +575,7 @@ struct ChannelStripView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .help("Mutes the whole strip. To punch a cough, select this strip and Shift-drag on the waveform.")
+                .help("Mutes the whole strip. Linked monos share mute. To punch a cough, select this strip and Shift-drag on the waveform.")
 
                 Button {
                     channel.solo.toggle()

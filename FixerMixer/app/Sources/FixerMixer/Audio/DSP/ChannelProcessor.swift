@@ -1,19 +1,59 @@
 import Foundation
 
-/// Cross-channel podcast auto-mixer: rides each active speaker toward a shared target level.
-/// Silent channels release to unity (no noise boost). Music is never included.
-/// Expansion (gain up) is intentionally slow/mild so speech pauses don’t pump.
+/// Public auto-mix modes. Never surface “Dugan” in product UI.
+enum AutoMixMode: String, Codable, CaseIterable, Equatable {
+    /// Manual faders only.
+    case off
+    /// Target-level ride (legacy Auto Balance).
+    case mix
+    /// Proportional gain-sharing: G_i = L_i / L_sum.
+    case duck
+
+    var isActive: Bool { self != .off }
+
+    var shortLabel: String {
+        switch self {
+        case .off: return "OFF"
+        case .mix: return "MIX"
+        case .duck: return "DUCK"
+        }
+    }
+
+    var next: AutoMixMode {
+        switch self {
+        case .off: return .mix
+        case .mix: return .duck
+        case .duck: return .off
+        }
+    }
+}
+
+/// Cross-channel auto-mixer: target-level **Mix** or proportional **Duck**.
+/// Silent / excluded channels release to unity (no noise boost). Music is never included.
+/// Expansion (gain up) in Mix mode is intentionally slow/mild so speech pauses don’t pump.
 struct AutoBalancer {
-    var enabled: Bool = false
+    var mode: AutoMixMode = .off
     var targetDb: Float = -18
+    /// Per-voice pool membership. Missing / short arrays treat as included.
+    var included: [Bool] = []
 
     private var envs: [Float] = []
     private var gains: [Float] = []
+
+    var enabled: Bool {
+        get { mode.isActive }
+        set { if !newValue { mode = .off } else if mode == .off { mode = .mix } }
+    }
 
     mutating func resize(to n: Int) {
         guard envs.count != n else { return }
         envs = Array(repeating: 0, count: n)
         gains = Array(repeating: 1, count: n)
+        if included.count < n {
+            included.append(contentsOf: Array(repeating: true, count: n - included.count))
+        } else if included.count > n {
+            included = Array(included.prefix(n))
+        }
     }
 
     mutating func reset() {
@@ -27,11 +67,28 @@ struct AutoBalancer {
     mutating func process(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
         let n = levels.count
         resize(to: n)
-        if !enabled || n == 0 {
+        if !mode.isActive || n == 0 {
             for i in gains.indices { gains[i] = 1 }
             return Array(gains.prefix(n))
         }
+        switch mode {
+        case .off:
+            for i in gains.indices { gains[i] = 1 }
+            return Array(gains.prefix(n))
+        case .mix:
+            return processMix(levels: levels, muted: muted, sampleRate: sampleRate)
+        case .duck:
+            return processDuck(levels: levels, muted: muted, sampleRate: sampleRate)
+        }
+    }
 
+    private func isIncluded(_ i: Int) -> Bool {
+        guard included.indices.contains(i) else { return true }
+        return included[i]
+    }
+
+    private mutating func processMix(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
+        let n = levels.count
         // Envelope: slow release so brief pauses don’t look like “quiet talker”
         let envAtk = exp(-1.0 / (0.05 * Float(sampleRate)))
         let envRel = exp(-1.0 / (1.10 * Float(sampleRate)))
@@ -47,7 +104,7 @@ struct AutoBalancer {
         let strength: Float = 0.5 // only correct half the error
 
         for i in 0..<n {
-            if muted.indices.contains(i), muted[i] {
+            if (muted.indices.contains(i) && muted[i]) || !isIncluded(i) {
                 envs[i] *= envRel
                 gains[i] = unitySmooth * gains[i] + (1 - unitySmooth) * 1
                 continue
@@ -74,6 +131,59 @@ struct AutoBalancer {
             } else {
                 gains[i] = cutSmooth * gains[i] + (1 - cutSmooth) * Float(desired)
             }
+        }
+        return Array(gains.prefix(n))
+    }
+
+    /// Proportional gain-sharing: G_i = L_i / (L_sum + ε).
+    /// When the pool is silent, share medium gains that sum ≈ unity (not gates / not all-zero).
+    private mutating func processDuck(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
+        let n = levels.count
+        let envAtk = exp(-1.0 / (0.03 * Float(sampleRate)))
+        let envRel = exp(-1.0 / (0.25 * Float(sampleRate)))
+        let gainSmooth = exp(-1.0 / (0.08 * Float(sampleRate)))
+        let epsilon: Float = 1e-4
+
+        var poolIndices: [Int] = []
+        poolIndices.reserveCapacity(n)
+        for i in 0..<n {
+            let x = levels[i]
+            if x > envs[i] {
+                envs[i] = envAtk * envs[i] + (1 - envAtk) * x
+            } else {
+                envs[i] = envRel * envs[i] + (1 - envRel) * x
+            }
+            let inPool = isIncluded(i) && !(muted.indices.contains(i) && muted[i])
+            if inPool {
+                poolIndices.append(i)
+            } else {
+                // Excluded / muted: unity (not in the share).
+                gains[i] = gainSmooth * gains[i] + (1 - gainSmooth) * 1
+            }
+        }
+
+        guard !poolIndices.isEmpty else {
+            return Array(gains.prefix(n))
+        }
+
+        var sum: Float = 0
+        for i in poolIndices {
+            sum += envs[i]
+        }
+
+        let desired: [Float]
+        if sum <= epsilon {
+            // Shared medium gains summing ~unity — equal weights MVP.
+            let share = 1.0 / Float(poolIndices.count)
+            desired = poolIndices.map { _ in share }
+        } else {
+            let denom = sum + epsilon
+            desired = poolIndices.map { envs[$0] / denom }
+        }
+
+        for (k, i) in poolIndices.enumerated() {
+            let d = desired[k]
+            gains[i] = gainSmooth * gains[i] + (1 - gainSmooth) * d
         }
         return Array(gains.prefix(n))
     }

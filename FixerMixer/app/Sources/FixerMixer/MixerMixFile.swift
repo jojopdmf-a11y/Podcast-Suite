@@ -30,6 +30,8 @@ enum MixerMixFile {
         var masterDb: Float
         var autoBalanceEnabled: Bool
         var autoBalanceTargetDb: Float
+        /// `"off"` | `"mix"` | `"duck"`. Older mixes omit → derived from autoBalanceEnabled.
+        var autoMixMode: String?
         var masterComp: Comp
         var inputDeviceUID: String?
         /// Left-to-right strip ids. Older mix files omit this.
@@ -44,6 +46,8 @@ enum MixerMixFile {
         var dspBypass: Bool
         var faderDb: Float
         var autoBiasDb: Float
+        /// Participate in Auto Mix / Auto Duck. Older mixes omit → true.
+        var includeInAutoMix: Bool?
         var pan: Float
         var eqGains: [Float]
         var eqBypass: Bool
@@ -98,8 +102,9 @@ enum MixerMixFile {
             music: session.stereos.first.map { snapshot($0) },
             stereos: session.stereos.isEmpty ? nil : session.stereos.map { snapshot($0) },
             masterDb: session.masterDb,
-            autoBalanceEnabled: session.autoBalanceEnabled,
+            autoBalanceEnabled: session.autoMixMode.isActive,
             autoBalanceTargetDb: session.autoBalanceTargetDb,
+            autoMixMode: session.autoMixMode.rawValue,
             masterComp: Comp(
                 bypass: session.masterComp.bypass,
                 thresholdDb: session.masterComp.thresholdDb,
@@ -124,6 +129,7 @@ enum MixerMixFile {
             dspBypass: ch.dspBypass,
             faderDb: ch.faderDb,
             autoBiasDb: ch.autoBiasDb,
+            includeInAutoMix: ch.isStereo ? nil : ch.includeInAutoMix,
             pan: ch.pan,
             eqGains: ch.eq.gains,
             eqBypass: ch.eq.bypass,
@@ -155,6 +161,9 @@ enum MixerMixFile {
         ch.dspBypass = snap.dspBypass
         ch.faderDb = snap.faderDb
         ch.autoBiasDb = snap.autoBiasDb
+        if !ch.isStereo {
+            ch.includeInAutoMix = snap.includeInAutoMix ?? true
+        }
         ch.pan = snap.pan
         var gains = snap.eqGains
         let n = GraphicEQBand.allCases.count
@@ -202,7 +211,11 @@ enum MixerMixFile {
             apply(musicSnap, to: &session.stereos[0])
         }
         session.masterDb = doc.masterDb
-        session.autoBalanceEnabled = doc.autoBalanceEnabled
+        if let raw = doc.autoMixMode, let mode = AutoMixMode(rawValue: raw) {
+            session.autoMixMode = mode
+        } else {
+            session.autoMixMode = doc.autoBalanceEnabled ? .mix : .off
+        }
         session.autoBalanceTargetDb = doc.autoBalanceTargetDb
         session.masterComp.bypass = doc.masterComp.bypass
         session.masterComp.thresholdDb = doc.masterComp.thresholdDb
