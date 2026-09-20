@@ -19,8 +19,8 @@ struct ContentView: View {
 
     /// Half/half seam control between adjacent mono strips (no gutter).
     private static let monoLinkSeamWidth: CGFloat = 36
-    /// Vertical center between last DSP chip (LEVELER) and the fader row.
-    private static let monoLinkSeamY: CGFloat = 256
+    /// Vertical center in the open gap between last DSP chip (LEVELER) and the fader row.
+    private static let monoLinkSeamY: CGFloat = 308
     private static let monoLinkSeamHeight: CGFloat = 22
 
     var body: some View {
@@ -678,52 +678,76 @@ struct ContentView: View {
             }
 
             Button {
-                session.cycleAutoMixMode()
+                session.toggleAutoMix()
             } label: {
                 VStack(spacing: 2) {
                     Text("AUTO")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                    Text(session.autoMixMode.shortLabel)
                         .font(.system(size: 8, weight: .bold, design: .rounded))
+                    Text("MIX")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 10)
-                .foregroundStyle(session.autoMixMode.isActive ? MixerTheme.bgBottom : MixerTheme.cyan)
+                .padding(.vertical, 8)
+                .foregroundStyle(session.autoMixMode == .mix ? MixerTheme.bgBottom : MixerTheme.cyan)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(session.autoMixMode.isActive ? MixerTheme.meterGreen : MixerTheme.panelRaised)
+                        .fill(session.autoMixMode == .mix ? MixerTheme.meterGreen : MixerTheme.panelRaised)
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
                 )
+                .opacity(session.autoMixMode == .duck ? 0.4 : 1)
             }
             .buttonStyle(.plain)
-            .help("Cycles OFF → Auto Mix (target level) → Auto Duck (gain share). Check AUTO on each mono to include it. Drag a fader to favor that speaker.")
+            .disabled(session.autoMixMode == .duck)
+            .help("Auto Mix: per-channel vocal rider around each fader baseline. Click again for OFF. Greys Auto Duck while on.")
 
-            if session.autoMixMode == .mix {
+            Button {
+                session.toggleAutoDuck()
+            } label: {
+                VStack(spacing: 2) {
+                    Text("AUTO")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                    Text("DUCK")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .foregroundStyle(session.autoMixMode == .duck ? MixerTheme.bgBottom : MixerTheme.cyan)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(session.autoMixMode == .duck ? MixerTheme.meterGreen : MixerTheme.panelRaised)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
+                )
+                .opacity(session.autoMixMode == .mix ? 0.4 : 1)
+            }
+            .buttonStyle(.plain)
+            .disabled(session.autoMixMode == .mix)
+            .help("Auto Duck: proportional gain share across included monos. Click again for OFF. Greys Auto Mix while on.")
+
+            if session.autoMixMode == .duck {
                 VStack(spacing: 4) {
-                    Text("TARGET")
+                    Text("MAX PULL")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .foregroundStyle(MixerTheme.cyanDim)
-                    Text(String(format: "%.0f dB", session.autoBalanceTargetDb))
+                    Text(String(format: "%.0f dB", session.autoDuckMaxAttenuationDb))
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(MixerTheme.lime)
                     Slider(value: Binding(
-                        get: { Double(session.autoBalanceTargetDb) },
+                        get: { Double(session.autoDuckMaxAttenuationDb) },
                         set: {
-                            session.autoBalanceTargetDb = Float($0)
+                            session.autoDuckMaxAttenuationDb = Float($0)
                             session.syncParamsToEngine()
                         }
-                    ), in: -30...(-6))
+                    ), in: 0...18)
                     .tint(MixerTheme.cyan)
                     .padding(.bottom, 4)
                 }
-            } else if session.autoMixMode == .duck {
-                Text("DUCK")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(MixerTheme.cyanDim)
-                    .help("Proportional gain share across included monos. Silence shares medium gains.")
+                .help("Limits how far Auto Duck can attenuate a channel (0 = no duck).")
             }
 
             Spacer(minLength: 8)

@@ -233,7 +233,7 @@ struct ChannelStripState: Identifiable, Equatable {
     /// Bypass all DSP (EQ + voice FX); fader/pan/mute still apply.
     var dspBypass: Bool = false
     var faderDb: Float = 0
-    /// Relative preference while Auto Mix / Auto Duck is on (favor/cut this speaker).
+    /// Legacy mix-file field. Live baseline is always `faderDb`; kept for load migration only.
     var autoBiasDb: Float = 0
     /// When true, this mono participates in Auto Mix / Auto Duck. Stereo beds ignore this.
     var includeInAutoMix: Bool = true
@@ -245,6 +245,8 @@ struct ChannelStripState: Identifiable, Equatable {
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
     var prePeak: Float = 0
     var postPeak: Float = 0
+    /// Live Leveler gain reduction (dB ≥ 0) for the detail-panel GR meter.
+    var levelerGRDb: Float = 0
     /// Hardware input channel (0-based) this strip records. Nil = not armed.
     var inputChannel: Int? = nil
     /// Painted silence ranges. The show does not get shorter.
@@ -349,8 +351,11 @@ final class MixerSession: ObservableObject {
         get { autoMixMode.isActive }
         set { autoMixMode = newValue ? (autoMixMode.isActive ? autoMixMode : .mix) : .off }
     }
+    /// Legacy shared Mix TARGET (no longer in UI). Kept so older mix files still decode.
     @Published var autoBalanceTargetDb: Float = -18
-    /// Live auto-mix / auto-duck gains in dB (one per voice). Fader display = this + autoBiasDb.
+    /// Auto Duck max pull-back in dB (0 = no attenuation …). Default mild.
+    @Published var autoDuckMaxAttenuationDb: Float = 9
+    /// Live auto-mix / auto-duck gains in dB (one per voice). Additive while active; fader stays on baseline.
     @Published var autoGainDb: [Float] = []
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
@@ -378,13 +383,16 @@ final class MixerSession: ObservableObject {
     private var syncingLinkedPair = false
 
     func bindEngine() {
-        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, compInL, compInR, compOutL, compOutR, compGR in
+        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, compInL, compInR, compOutL, compOutR, compGR in
             Task { @MainActor in
                 guard let self else { return }
                 let n = self.voices.count
                 for i in 0..<min(n, pre.count) {
                     self.voices[i].prePeak = pre[i]
                     self.voices[i].postPeak = post[i]
+                }
+                for i in 0..<min(n, levelerGR.count) {
+                    self.voices[i].levelerGRDb = levelerGR[i]
                 }
                 for i in self.stereos.indices {
                     let slot = n + i
@@ -902,53 +910,48 @@ final class MixerSession: ObservableObject {
         setAutoMixMode(enabled ? .mix : .off)
     }
 
-    /// Cycle OFF → MIX → DUCK → OFF.
-    func cycleAutoMixMode() {
-        setAutoMixMode(autoMixMode.next)
+    /// Toggle AUTOMIX: engage if off/other, or OFF if already mix.
+    func toggleAutoMix() {
+        setAutoMixMode(autoMixMode == .mix ? .off : .mix)
+    }
+
+    /// Toggle AUTODUCK: engage if off/other, or OFF if already duck.
+    func toggleAutoDuck() {
+        setAutoMixMode(autoMixMode == .duck ? .off : .duck)
     }
 
     func setAutoMixMode(_ mode: AutoMixMode) {
         let wasActive = autoMixMode.isActive
         let willActive = mode.isActive
         if willActive && !wasActive {
-            // Keep current fader positions as relative favor when auto takes over
-            for i in voices.indices {
-                voices[i].autoBiasDb = voices[i].faderDb
-            }
             autoGainDb = Array(repeating: 0, count: voices.count)
-        } else if !willActive && wasActive {
-            // Bake auto + bias into manual faders so levels don't jump
+            // Clear legacy bias — baseline is faderDb.
             for i in voices.indices {
-                let auto = autoGainDb.indices.contains(i) ? autoGainDb[i] : 0
-                voices[i].faderDb = max(-60, min(12, auto + voices[i].autoBiasDb))
                 voices[i].autoBiasDb = 0
             }
+        } else if !willActive && wasActive {
+            // Snap back to manual baselines — do NOT bake ridden auto gain into faders.
             autoGainDb = []
+            for i in voices.indices {
+                voices[i].autoBiasDb = 0
+            }
         }
         autoMixMode = mode
         syncParamsToEngine()
         persistMixIfPossible()
     }
 
-    /// Fader binding for a voice strip: shows auto rides; drags adjust bias.
+    /// Fader binding: always edits baseline `faderDb`. Auto ride is additive (shown under fader).
     func voiceFaderBinding(at index: Int) -> Binding<Float> {
         Binding(
             get: {
                 guard self.voices.indices.contains(index) else { return 0 }
-                if self.autoMixMode.isActive {
-                    let auto = self.autoGainDb.indices.contains(index) ? self.autoGainDb[index] : 0
-                    return max(-60, min(12, auto + self.voices[index].autoBiasDb))
-                }
                 return self.voices[index].faderDb
             },
             set: { newValue in
                 guard self.voices.indices.contains(index) else { return }
-                if self.autoMixMode.isActive {
-                    let auto = self.autoGainDb.indices.contains(index) ? self.autoGainDb[index] : 0
-                    self.voices[index].autoBiasDb = max(-24, min(18, newValue - auto))
-                } else {
-                    self.voices[index].faderDb = newValue
-                }
+                self.voices[index].faderDb = newValue
+                self.voices[index].autoBiasDb = 0
                 self.syncParamsToEngine()
                 self.syncLinkedFrom(self.voices[index].id)
             }
@@ -1377,7 +1380,7 @@ final class MixerSession: ObservableObject {
             stereos: stereos,
             masterDb: masterDb,
             autoMixMode: autoMixMode,
-            autoBalanceTargetDb: autoBalanceTargetDb,
+            autoDuckMaxAttenuationDb: autoDuckMaxAttenuationDb,
             masterComp: masterComp
         )
     }

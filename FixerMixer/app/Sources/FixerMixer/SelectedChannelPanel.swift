@@ -156,8 +156,9 @@ struct SelectedChannelPanel: View {
         case .leveler:
             dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.levelerBypass) {
                 VStack(spacing: 8) {
-                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...(-6), asPercent: false, defaultValue: -6)
+                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...0, asPercent: false, defaultValue: -6)
                     MixerLabeledSlider(title: "DRIVE", value: $channel.voice.levelerDrive, range: 0...1, asPercent: true, defaultValue: 0)
+                    LevelerGRMeter(grDb: channel.levelerGRDb)
                 }
             }
         }
@@ -479,6 +480,45 @@ struct HPFControl: View {
             }
         }
         .help("Double-click to turn HPF off")
+    }
+}
+
+/// Compact gain-reduction bar for the Leveler detail panel (0…12 dB display).
+private struct LevelerGRMeter: View {
+    var grDb: Float
+    private let maxDisplay: Float = 12
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("GR")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                Spacer()
+                Text(String(format: "%.1f dB", max(0, grDb)))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
+                ZStack(alignment: .trailing) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.4))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [APILook.ledYellow.opacity(0.85), APILook.ledRed.opacity(0.9)],
+                                startPoint: .trailing,
+                                endPoint: .leading
+                            )
+                        )
+                        .frame(width: max(2, w * fill))
+                }
+            }
+            .frame(height: 8)
+        }
+        .help("Leveler gain reduction")
     }
 }
 

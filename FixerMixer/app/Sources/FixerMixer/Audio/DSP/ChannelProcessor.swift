@@ -4,9 +4,9 @@ import Foundation
 enum AutoMixMode: String, Codable, CaseIterable, Equatable {
     /// Manual faders only.
     case off
-    /// Target-level ride (legacy Auto Balance).
+    /// Per-channel vocal rider around each channel’s manual baseline.
     case mix
-    /// Proportional gain-sharing: G_i = L_i / L_sum.
+    /// Proportional gain-sharing: G_i = L_i / L_sum (baseline-weighted).
     case duck
 
     var isActive: Bool { self != .off }
@@ -18,24 +18,22 @@ enum AutoMixMode: String, Codable, CaseIterable, Equatable {
         case .duck: return "DUCK"
         }
     }
-
-    var next: AutoMixMode {
-        switch self {
-        case .off: return .mix
-        case .mix: return .duck
-        case .duck: return .off
-        }
-    }
 }
 
-/// Cross-channel auto-mixer: target-level **Mix** or proportional **Duck**.
+/// Cross-channel auto-mixer: baseline-relative **Mix** or proportional **Duck**.
 /// Silent / excluded channels release to unity (no noise boost). Music is never included.
 /// Expansion (gain up) in Mix mode is intentionally slow/mild so speech pauses don’t pump.
+/// Manual baselines live in `faderDb` on the strip; auto gain here is purely additive while active.
 struct AutoBalancer {
     var mode: AutoMixMode = .off
-    var targetDb: Float = -18
     /// Per-voice pool membership. Missing / short arrays treat as included.
     var included: [Bool] = []
+    /// Manual fader baselines (dB). Mix rides around these; Duck weights detectors by them.
+    var baselineDb: [Float] = []
+    /// Duck only: max attenuation below unity (0 = no duck, …). Default mild.
+    var maxAttenuationDb: Float = 9
+    /// Internal Mix comfort level (not exposed in UI). Channel target = this + baselineDb.
+    private let mixBaseTargetDb: Float = -18
 
     private var envs: [Float] = []
     private var gains: [Float] = []
@@ -53,6 +51,11 @@ struct AutoBalancer {
             included.append(contentsOf: Array(repeating: true, count: n - included.count))
         } else if included.count > n {
             included = Array(included.prefix(n))
+        }
+        if baselineDb.count < n {
+            baselineDb.append(contentsOf: Array(repeating: Float(0), count: n - baselineDb.count))
+        } else if baselineDb.count > n {
+            baselineDb = Array(baselineDb.prefix(n))
         }
     }
 
@@ -85,6 +88,11 @@ struct AutoBalancer {
     private func isIncluded(_ i: Int) -> Bool {
         guard included.indices.contains(i) else { return true }
         return included[i]
+    }
+
+    private func baseline(at i: Int) -> Float {
+        guard baselineDb.indices.contains(i) else { return 0 }
+        return baselineDb[i]
     }
 
     private mutating func processMix(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
@@ -121,6 +129,8 @@ struct AutoBalancer {
                 continue
             }
 
+            // Ride around this channel’s baseline weighting (no shared TARGET knob).
+            let targetDb = mixBaseTargetDb + baseline(at: i)
             let currentDb = 20 * log10(max(envs[i], 1e-6))
             let error = (targetDb - currentDb) * strength
             let correction = max(-maxCutDb, min(maxBoostDb, error))
@@ -135,14 +145,18 @@ struct AutoBalancer {
         return Array(gains.prefix(n))
     }
 
-    /// Proportional gain-sharing: G_i = L_i / (L_sum + ε).
+    /// Proportional gain-sharing: G_i = L_i_weighted / (L_sum + ε).
+    /// Detectors are weighted by baseline linear gain so hotter faders win more share.
+    /// `maxAttenuationDb` floors how far a channel can be pulled below unity.
     /// When the pool is silent, share medium gains that sum ≈ unity (not gates / not all-zero).
     private mutating func processDuck(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
         let n = levels.count
-        let envAtk = exp(-1.0 / (0.03 * Float(sampleRate)))
-        let envRel = exp(-1.0 / (0.25 * Float(sampleRate)))
-        let gainSmooth = exp(-1.0 / (0.08 * Float(sampleRate)))
+        // Faster than the first Duck ship (~30/250/80 ms → ~15/180/30 ms).
+        let envAtk = exp(-1.0 / (0.015 * Float(sampleRate)))
+        let envRel = exp(-1.0 / (0.18 * Float(sampleRate)))
+        let gainSmooth = exp(-1.0 / (0.030 * Float(sampleRate)))
         let epsilon: Float = 1e-4
+        let floorLin = pow(10.0, -max(0, maxAttenuationDb) / 20.0)
 
         var poolIndices: [Int] = []
         poolIndices.reserveCapacity(n)
@@ -166,19 +180,23 @@ struct AutoBalancer {
             return Array(gains.prefix(n))
         }
 
+        var weighted: [Float] = Array(repeating: 0, count: poolIndices.count)
         var sum: Float = 0
-        for i in poolIndices {
-            sum += envs[i]
+        for (k, i) in poolIndices.enumerated() {
+            let w = pow(10.0, baseline(at: i) / 20.0)
+            let lw = envs[i] * w
+            weighted[k] = lw
+            sum += lw
         }
 
         let desired: [Float]
         if sum <= epsilon {
             // Shared medium gains summing ~unity — equal weights MVP.
             let share = 1.0 / Float(poolIndices.count)
-            desired = poolIndices.map { _ in share }
+            desired = poolIndices.map { _ in max(share, floorLin) }
         } else {
             let denom = sum + epsilon
-            desired = poolIndices.map { envs[$0] / denom }
+            desired = weighted.map { max($0 / denom, floorLin) }
         }
 
         for (k, i) in poolIndices.enumerated() {
@@ -226,6 +244,9 @@ struct ChannelProcessor {
     private var wetter = WetterDSP()
     private var leveler = LevelerDSP()
     private var sampleRate: Double = 44100
+
+    /// Live Leveler gain-reduction (dB ≥ 0) for the selected-channel GR meter.
+    var levelerMeterGRDb: Float { leveler.meterGRDb }
 
     init(isStereo: Bool, hasVoiceFX: Bool) {
         self.isStereo = isStereo
