@@ -727,7 +727,7 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
             .disabled(session.autoMixMode == .mix)
-            .help("Auto Duck: proportional gain share across included monos. Click again for OFF. Greys Auto Mix while on.")
+            .help("Auto Duck: hold featured talker at baseline; duck other included monos. Click again for OFF. Greys Auto Mix while on.")
 
             if session.autoMixMode == .duck {
                 VStack(spacing: 4) {
