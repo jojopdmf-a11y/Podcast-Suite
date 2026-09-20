@@ -6,7 +6,7 @@ enum AutoMixMode: String, Codable, CaseIterable, Equatable {
     case off
     /// Per-channel vocal rider around each channel’s manual baseline.
     case mix
-    /// Proportional gain-sharing: G_i = L_i / L_sum (baseline-weighted).
+    /// Hold featured talker at baseline; attenuate other pool members (MAX PULL).
     case duck
 
     var isActive: Bool { self != .off }
@@ -20,7 +20,7 @@ enum AutoMixMode: String, Codable, CaseIterable, Equatable {
     }
 }
 
-/// Cross-channel auto-mixer: baseline-relative **Mix** or proportional **Duck**.
+/// Cross-channel auto-mixer: baseline-relative **Mix** or hold-winner **Duck**.
 /// Silent / excluded channels release to unity (no noise boost). Music is never included.
 /// Expansion (gain up) in Mix mode is intentionally slow/mild so speech pauses don’t pump.
 /// Manual baselines live in `faderDb` on the strip; auto gain here is purely additive while active.
@@ -28,15 +28,17 @@ struct AutoBalancer {
     var mode: AutoMixMode = .off
     /// Per-voice pool membership. Missing / short arrays treat as included.
     var included: [Bool] = []
-    /// Manual fader baselines (dB). Mix rides around these; Duck weights detectors by them.
+    /// Manual fader baselines (dB). Mix rides around these; Duck leaves winner at baseline.
     var baselineDb: [Float] = []
-    /// Duck only: max attenuation below unity (0 = no duck, …). Default mild.
+    /// Duck only: max attenuation below unity for losers (0 = no duck, …). Default mild.
     var maxAttenuationDb: Float = 9
     /// Internal Mix comfort level (not exposed in UI). Channel target = this + baselineDb.
     private let mixBaseTargetDb: Float = -18
 
     private var envs: [Float] = []
     private var gains: [Float] = []
+    /// Locked featured talker for Duck (−1 = none). Prefer stable lock over hair-trigger.
+    private var duckWinnerIndex: Int = -1
 
     var enabled: Bool {
         get { mode.isActive }
@@ -47,6 +49,7 @@ struct AutoBalancer {
         guard envs.count != n else { return }
         envs = Array(repeating: 0, count: n)
         gains = Array(repeating: 1, count: n)
+        duckWinnerIndex = -1
         if included.count < n {
             included.append(contentsOf: Array(repeating: true, count: n - included.count))
         } else if included.count > n {
@@ -64,6 +67,7 @@ struct AutoBalancer {
             envs[i] = 0
             gains[i] = 1
         }
+        duckWinnerIndex = -1
     }
 
     /// `levels` = absolute amplitude of each voice (post-FX, pre-auto/fader).
@@ -145,17 +149,19 @@ struct AutoBalancer {
         return Array(gains.prefix(n))
     }
 
-    /// Proportional gain-sharing: G_i = L_i_weighted / (L_sum + ε).
-    /// Detectors are weighted by baseline linear gain so hotter faders win more share.
-    /// `maxAttenuationDb` floors how far a channel can be pulled below unity.
-    /// When the pool is silent, share medium gains that sum ≈ unity (not gates / not all-zero).
+    /// Hold-winner duck: featured talker auto gain ≈ 0 dB (baseline audible level);
+    /// losers attenuate up to `maxAttenuationDb`. No L_i/L_sum share (that pulled the winner down).
+    /// When silent / no clear winner, all pool members return toward unity.
     private mutating func processDuck(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
         let n = levels.count
-        // Faster than the first Duck ship (~30/250/80 ms → ~15/180/30 ms).
-        let envAtk = exp(-1.0 / (0.015 * Float(sampleRate)))
-        let envRel = exp(-1.0 / (0.18 * Float(sampleRate)))
-        let gainSmooth = exp(-1.0 / (0.030 * Float(sampleRate)))
-        let epsilon: Float = 1e-4
+        // Prefer stable lock over #66 hair-trigger — restore first-ship timing (~30/250/80 ms).
+        let envAtk = exp(-1.0 / (0.03 * Float(sampleRate)))
+        let envRel = exp(-1.0 / (0.25 * Float(sampleRate)))
+        let duckDownSmooth = exp(-1.0 / (0.05 * Float(sampleRate)))
+        let releaseSmooth = exp(-1.0 / (0.10 * Float(sampleRate)))
+        let gate: Float = 0.012
+        /// Stick with current winner while still active and within this fraction of loudest.
+        let holdRatio: Float = 0.65
         let floorLin = pow(10.0, -max(0, maxAttenuationDb) / 20.0)
 
         var poolIndices: [Int] = []
@@ -171,37 +177,52 @@ struct AutoBalancer {
             if inPool {
                 poolIndices.append(i)
             } else {
-                // Excluded / muted: unity (not in the share).
-                gains[i] = gainSmooth * gains[i] + (1 - gainSmooth) * 1
+                // Excluded / muted: unity (not ducked).
+                gains[i] = releaseSmooth * gains[i] + (1 - releaseSmooth) * 1
             }
         }
 
         guard !poolIndices.isEmpty else {
+            duckWinnerIndex = -1
             return Array(gains.prefix(n))
         }
 
-        var weighted: [Float] = Array(repeating: 0, count: poolIndices.count)
-        var sum: Float = 0
-        for (k, i) in poolIndices.enumerated() {
-            let w = pow(10.0, baseline(at: i) / 20.0)
-            let lw = envs[i] * w
-            weighted[k] = lw
-            sum += lw
+        var bestIdx = -1
+        var bestEnv: Float = 0
+        for i in poolIndices {
+            let e = envs[i]
+            if e > gate && e > bestEnv {
+                bestEnv = e
+                bestIdx = i
+            }
         }
 
-        let desired: [Float]
-        if sum <= epsilon {
-            // Shared medium gains summing ~unity — equal weights MVP.
-            let share = 1.0 / Float(poolIndices.count)
-            desired = poolIndices.map { _ in max(share, floorLin) }
+        let winner: Int
+        if bestIdx < 0 {
+            winner = -1
+        } else if duckWinnerIndex >= 0,
+                  poolIndices.contains(duckWinnerIndex),
+                  envs[duckWinnerIndex] > gate,
+                  envs[duckWinnerIndex] >= bestEnv * holdRatio {
+            winner = duckWinnerIndex
         } else {
-            let denom = sum + epsilon
-            desired = weighted.map { max($0 / denom, floorLin) }
+            winner = bestIdx
         }
+        duckWinnerIndex = winner
 
-        for (k, i) in poolIndices.enumerated() {
-            let d = desired[k]
-            gains[i] = gainSmooth * gains[i] + (1 - gainSmooth) * d
+        for i in poolIndices {
+            let desired: Float
+            if winner < 0 {
+                // No clear talker — return toward baselines (unity auto gain).
+                desired = 1
+            } else if i == winner {
+                // Hold featured mic: no pull-back, no boost-to-target.
+                desired = 1
+            } else {
+                desired = floorLin
+            }
+            let smooth = desired < gains[i] ? duckDownSmooth : releaseSmooth
+            gains[i] = smooth * gains[i] + (1 - smooth) * desired
         }
         return Array(gains.prefix(n))
     }
