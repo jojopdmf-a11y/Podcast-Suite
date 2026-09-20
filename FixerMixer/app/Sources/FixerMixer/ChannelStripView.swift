@@ -132,16 +132,15 @@ struct VerticalFader: View {
                     }
             )
             .onTapGesture(count: 2) {
-                guard !autoDriven else { return }
                 valueDb = defaultValue
             }
 
-            Text(caption ?? (autoDriven ? "AUTO" : "FADER"))
+            Text(caption ?? "FADER")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(autoDriven ? MixerTheme.lime.opacity(0.8) : MixerTheme.cyanDim)
+                .foregroundStyle(MixerTheme.cyanDim)
                 .padding(.bottom, 1)
         }
-        .help(autoDriven ? "Auto Balance" : "Double-click to zero")
+        .help("Double-click to zero")
     }
 
     private var zeroTickOffset: CGFloat {
@@ -218,6 +217,83 @@ private struct FaderCap: View {
                 .padding(1.5)
                 .allowsHitTesting(false)
         }
+    }
+}
+
+/// Pan −1…+1 with ±50 readout; fill grows from center outward toward the thumb.
+private struct CenterOutPanSlider: View {
+    @Binding var pan: Float
+
+    private var panReadout: Int {
+        Int((pan * 50).rounded())
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text("PAN")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                Spacer(minLength: 0)
+                Text(panReadout == 0 ? "0" : String(format: "%+d", panReadout))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.lime)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let trackH: CGFloat = 4
+                let thumbW: CGFloat = 10
+                let travel = max(w - thumbW, 1)
+                let norm = CGFloat((pan + 1) / 2) // 0…1
+                let thumbX = thumbW / 2 + norm * travel
+                let centerX = w / 2
+                let fillLeft = min(centerX, thumbX)
+                let fillWidth = abs(thumbX - centerX)
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.45))
+                        .frame(height: trackH)
+                        .frame(maxWidth: .infinity)
+                        .position(x: w / 2, y: h / 2)
+
+                    Capsule()
+                        .fill(MixerTheme.lime.opacity(0.85))
+                        .frame(width: max(fillWidth, 0), height: trackH)
+                        .position(x: fillLeft + fillWidth / 2, y: h / 2)
+
+                    Rectangle()
+                        .fill(MixerTheme.cyan.opacity(0.7))
+                        .frame(width: 1.5, height: trackH + 6)
+                        .position(x: centerX, y: h / 2)
+
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.95), Color(white: 0.7)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.8))
+                        .frame(width: thumbW, height: thumbW)
+                        .position(x: thumbX, y: h / 2)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { g in
+                            let x = min(w - thumbW / 2, max(thumbW / 2, g.location.x))
+                            let n = (x - thumbW / 2) / travel
+                            pan = Float(min(1, max(-1, n * 2 - 1)))
+                        }
+                )
+                .onTapGesture(count: 2) { pan = 0 }
+            }
+            .frame(height: 16)
+        }
+        .help("Pan L/R (−50…+50). Double-click to center.")
     }
 }
 
@@ -540,19 +616,20 @@ struct ChannelStripView: View {
             HStack(spacing: 6) {
                 LevelMeter(level: channel.prePeak, label: "PRE")
                 VStack(spacing: 2) {
-                    VerticalFader(valueDb: faderDb, autoDriven: autoDriven)
+                    // Fader always shows baseline weighting; auto ride is the readout below.
+                    VerticalFader(valueDb: faderDb, autoDriven: false)
                     if autoDriven, let g = autoGainDb {
                         Text(String(format: "%+.1f", g))
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
                             .foregroundStyle(MixerTheme.lime.opacity(0.9))
-                            .help("Applied auto-mix / auto-duck gain (dB)")
+                            .help("Applied auto-mix / auto-duck gain (dB). Fader = baseline weighting.")
                     }
                 }
                 LevelMeter(level: channel.postPeak, label: "POST")
             }
             .frame(height: autoDriven && autoGainDb != nil ? 148 : 130)
             .help(autoDriven
-                  ? "Auto rides this fader. Drag to favor/cut this speaker relative to auto."
+                  ? "Fader sets baseline weighting while Auto Mix / Auto Duck is on. Live ride is the readout under the fader."
                   : "Channel level")
 
             HStack(spacing: 6) {
@@ -599,18 +676,13 @@ struct ChannelStripView: View {
                 .help("Hear this strip alone. Turn SOLO on more than one to hear those together. MUTE still silences a strip.")
             }
 
-            VStack(spacing: 2) {
-                Text("PAN")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(MixerTheme.cyanDim)
-                Slider(value: Binding(
-                    get: { Double(channel.pan) },
-                    set: { channel.pan = Float($0) }
-                ), in: -1...1)
-                .tint(MixerTheme.lime)
-                .frame(maxWidth: .infinity)
-                .onTapGesture(count: 2) { channel.pan = 0 }
-            }
+            CenterOutPanSlider(pan: Binding(
+                get: { channel.pan },
+                set: {
+                    channel.pan = $0
+                    onChange()
+                }
+            ))
 
             if canRemove {
                 Button("REMOVE") { confirmRemove = true }

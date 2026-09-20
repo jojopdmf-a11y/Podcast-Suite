@@ -33,8 +33,8 @@ final class MixerEngine: @unchecked Sendable {
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
 
-    /// pre, post, masterL, masterR, autoGainDb, rtaBins, compInL, compInR, compOutL, compOutR, compGRDb
-    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
+    /// pre, post, masterL, masterR, autoGainDb, rtaBins, levelerGRDb, compInL, compInR, compOutL, compOutR, compGRDb
+    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
     var onPlayhead: ((Int) -> Void)?
     var onPlaybackEnded: (() -> Void)?
     var onSessionLength: ((Int) -> Void)?
@@ -46,6 +46,7 @@ final class MixerEngine: @unchecked Sendable {
     private var meterCounter: Int = 0
     private var playheadEmitCounter: Int = 0
     private var lastAutoGainDb: [Float] = []
+    private var lastLevelerGRDb: [Float] = []
     private var lastRTABins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     /// Separate from the audio lock so channel-select waveform swaps never stall the render thread.
     private let waveformLock = NSLock()
@@ -452,15 +453,16 @@ final class MixerEngine: @unchecked Sendable {
         stereos: [ChannelStripState],
         masterDb: Float,
         autoMixMode: AutoMixMode,
-        autoBalanceTargetDb: Float,
+        autoDuckMaxAttenuationDb: Float,
         masterComp state: MasterCompressorState
     ) {
         lock.lock()
         defer { lock.unlock() }
         masterGain = pow(10.0, masterDb / 20.0)
         autoBalancer.mode = autoMixMode
-        autoBalancer.targetDb = autoBalanceTargetDb
         autoBalancer.included = voices.map(\.includeInAutoMix)
+        autoBalancer.baselineDb = voices.map(\.faderDb)
+        autoBalancer.maxAttenuationDb = autoDuckMaxAttenuationDb
         autoBalancer.resize(to: voices.count)
         masterComp.bypass = state.bypass
         masterComp.thresholdDb = state.thresholdDb
@@ -478,12 +480,11 @@ final class MixerEngine: @unchecked Sendable {
         if processors.count > voices.count {
             processors = Array(processors.prefix(voices.count))
         }
-        let autoActive = autoMixMode.isActive
         for i in 0..<voices.count {
             processors[i].mute = voices[i].mute
             processors[i].solo = voices[i].solo
-            // While auto is on, channel fader becomes the relative bias trim
-            processors[i].faderDb = autoActive ? voices[i].autoBiasDb : voices[i].faderDb
+            // Baseline always lives in faderDb; auto gain is purely additive while active.
+            processors[i].faderDb = voices[i].faderDb
             processors[i].pan = voices[i].pan
             processors[i].dspBypass = voices[i].dspBypass
             processors[i].eqGains = voices[i].eq.gains
@@ -679,6 +680,14 @@ final class MixerEngine: @unchecked Sendable {
                     self.lastAutoGainDb = autoGains.map { g in
                         20 * log10(max(g, 1e-6))
                     }
+                    if self.lastLevelerGRDb.count != voiceN {
+                        self.lastLevelerGRDb = Array(repeating: 0, count: voiceN)
+                    }
+                    for c in 0..<voiceN {
+                        if self.processors.indices.contains(c) {
+                            self.lastLevelerGRDb[c] = self.processors[c].levelerMeterGRDb
+                        }
+                    }
                     for c in 0..<voiceN {
                         var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
                         if liveRecord, self.recordMap[c] != nil {
@@ -790,6 +799,7 @@ final class MixerEngine: @unchecked Sendable {
             let emitL = self.meterMasterL
             let emitR = self.meterMasterR
             let emitAuto = self.lastAutoGainDb
+            let emitLevelerGR = self.lastLevelerGRDb
             let emitRTA = self.lastRTABins
             let emitCompInL = self.masterComp.meterInL
             let emitCompInR = self.masterComp.meterInR
@@ -827,7 +837,7 @@ final class MixerEngine: @unchecked Sendable {
 
             if shouldEmit {
                 self.onMeters?(
-                    emitPre, emitPost, emitL, emitR, emitAuto, emitRTA,
+                    emitPre, emitPost, emitL, emitR, emitAuto, emitRTA, emitLevelerGR,
                     emitCompInL, emitCompInR, emitCompOutL, emitCompOutR, emitCompGR
                 )
             }

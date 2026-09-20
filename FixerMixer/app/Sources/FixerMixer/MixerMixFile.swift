@@ -32,6 +32,8 @@ enum MixerMixFile {
         var autoBalanceTargetDb: Float
         /// `"off"` | `"mix"` | `"duck"`. Older mixes omit → derived from autoBalanceEnabled.
         var autoMixMode: String?
+        /// Auto Duck max pull-back (dB). Older mixes omit → 9.
+        var autoDuckMaxAttenuationDb: Float?
         var masterComp: Comp
         var inputDeviceUID: String?
         /// Left-to-right strip ids. Older mix files omit this.
@@ -105,6 +107,7 @@ enum MixerMixFile {
             autoBalanceEnabled: session.autoMixMode.isActive,
             autoBalanceTargetDb: session.autoBalanceTargetDb,
             autoMixMode: session.autoMixMode.rawValue,
+            autoDuckMaxAttenuationDb: session.autoDuckMaxAttenuationDb,
             masterComp: Comp(
                 bypass: session.masterComp.bypass,
                 thresholdDb: session.masterComp.thresholdDb,
@@ -128,7 +131,7 @@ enum MixerMixFile {
             solo: ch.solo,
             dspBypass: ch.dspBypass,
             faderDb: ch.faderDb,
-            autoBiasDb: ch.autoBiasDb,
+            autoBiasDb: 0,
             includeInAutoMix: ch.isStereo ? nil : ch.includeInAutoMix,
             pan: ch.pan,
             eqGains: ch.eq.gains,
@@ -159,8 +162,14 @@ enum MixerMixFile {
         ch.mute = snap.mute
         ch.solo = snap.solo ?? false
         ch.dspBypass = snap.dspBypass
-        ch.faderDb = snap.faderDb
-        ch.autoBiasDb = snap.autoBiasDb
+        // Baseline = faderDb. Older mixes that saved while auto was on stored the
+        // manual weighting in autoBiasDb — prefer that when it differs from faderDb.
+        if abs(snap.autoBiasDb) > 0.01, abs(snap.autoBiasDb - snap.faderDb) > 0.01 {
+            ch.faderDb = snap.autoBiasDb
+        } else {
+            ch.faderDb = snap.faderDb
+        }
+        ch.autoBiasDb = 0
         if !ch.isStereo {
             ch.includeInAutoMix = snap.includeInAutoMix ?? true
         }
@@ -217,6 +226,12 @@ enum MixerMixFile {
             session.autoMixMode = doc.autoBalanceEnabled ? .mix : .off
         }
         session.autoBalanceTargetDb = doc.autoBalanceTargetDb
+        session.autoDuckMaxAttenuationDb = doc.autoDuckMaxAttenuationDb ?? 9
+        if session.autoMixMode.isActive {
+            session.autoGainDb = Array(repeating: 0, count: session.voices.count)
+        } else {
+            session.autoGainDb = []
+        }
         session.masterComp.bypass = doc.masterComp.bypass
         session.masterComp.thresholdDb = doc.masterComp.thresholdDb
         session.masterComp.attackMs = doc.masterComp.attackMs
