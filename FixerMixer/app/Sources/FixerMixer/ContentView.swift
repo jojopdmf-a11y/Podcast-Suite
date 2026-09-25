@@ -16,6 +16,7 @@ struct ContentView: View {
     @State private var reorderStrips = false
     @State private var reorderDropID: Int?
     @State private var confirmRemoveStrip = false
+    @State private var showInputPicker = false
 
     /// Half/half seam control between adjacent mono strips (no gutter).
     private static let monoLinkSeamWidth: CGFloat = 36
@@ -34,47 +35,48 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 10) {
                 header
-                ScrollView(.vertical, showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        if session.hasSession {
-                            if showAllWaveforms {
-                                OverviewWaveformView(
-                                    lanes: session.waveformLanes,
-                                    playhead: session.playheadNormalized,
-                                    currentTime: formatTime(session.playheadFrame),
-                                    duration: formatTime(session.frameCount),
-                                    onSeek: { session.seekNormalized($0) },
-                                    onFocusLane: { focusChannel($0) },
-                                    onShowOne: { showAllWaveforms = false }
-                                )
-                            } else {
-                                TimelineWaveformView(
-                                    peaks: session.waveformPeaks,
-                                    playhead: session.playheadNormalized,
-                                    channelName: session.selectedChannelName,
-                                    currentTime: formatTime(session.playheadFrame),
-                                    duration: formatTime(session.frameCount),
-                                    muteSpans: session.selectedMuteSpansNormalized,
-                                    onSeek: { session.seekNormalized($0) },
-                                    onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
-                                    onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
-                                    onShowAllTracks: { showAllWaveforms = true }
-                                )
-                                .id(session.sourceFolder?.path ?? "empty")
-                            }
-                            mixerRow
+                if session.hasSession {
+                    // Hybrid scale: waveform collapses first; desk geometry (strips) stays fixed.
+                    Group {
+                        if showAllWaveforms {
+                            OverviewWaveformView(
+                                lanes: session.waveformLanes,
+                                playhead: session.playheadNormalized,
+                                currentTime: formatTime(session.playheadFrame),
+                                duration: formatTime(session.frameCount),
+                                onSeek: { session.seekNormalized($0) },
+                                onFocusLane: { focusChannel($0) },
+                                onShowOne: { showAllWaveforms = false }
+                            )
                         } else {
-                            dropZone
+                            TimelineWaveformView(
+                                peaks: session.waveformPeaks,
+                                playhead: session.playheadNormalized,
+                                channelName: session.selectedChannelName,
+                                currentTime: formatTime(session.playheadFrame),
+                                duration: formatTime(session.frameCount),
+                                muteSpans: session.selectedMuteSpansNormalized,
+                                onSeek: { session.seekNormalized($0) },
+                                onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
+                                onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
+                                onShowAllTracks: { showAllWaveforms = true }
+                            )
+                            .id(session.sourceFolder?.path ?? "empty")
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minHeight: 64, idealHeight: 150, maxHeight: .infinity)
+                    .layoutPriority(0)
+                    mixerRow
+                        .layoutPriority(1)
+                } else {
+                    dropZone
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 statusBar
             }
-            .padding(18)
+            .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
@@ -108,6 +110,54 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix)) { _ in
             pickMixFile()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerAddStrip)) { _ in
+            guard session.hasSession else { return }
+            session.addBlankStrip()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerRemoveStrip)) { _ in
+            guard session.hasSession, session.canRemoveStrip(session.selectedChannelID) else { return }
+            confirmRemoveStrip = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerToggleReorder)) { _ in
+            guard session.hasSession, !session.isRecording else { return }
+            reorderStrips.toggle()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFolder)) { _ in
+            pickFolder()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles)) { _ in
+            pickFiles(append: session.hasSession)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport)) { _ in
+            guard session.hasSession, session.frameCount > 0, !session.isBouncing else { return }
+            exportItems = session.makeExportItems()
+            exportFolder = session.suggestedExportFolder()
+            exportSampleRate = .native
+            exportFormat = .wav16
+            showExport = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput)) { _ in
+            guard session.hasSession else { return }
+            session.refreshInputDevices()
+            showInputPicker = true
+        }
+        .popover(isPresented: $showInputPicker, arrowEdge: .top) {
+            inputDeviceMenuContent
+                .padding(12)
+                .frame(minWidth: 280)
+        }
+        .confirmationDialog(
+            "Remove this empty strip?",
+            isPresented: $confirmRemoveStrip,
+            titleVisibility: .visible
+        ) {
+            Button("Remove Strip", role: .destructive) {
+                session.removeEmptyStrip(session.selectedChannelID)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Only empty speaker strips can be removed. This cannot be undone.")
         }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
@@ -174,39 +224,44 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text("PODPRODUCER")
-                    .font(.system(size: 26, weight: .bold, design: .rounded))
-                    .tracking(1.4)
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .tracking(1.0)
                     .foregroundStyle(MixerTheme.cyan)
-                    .shadow(color: MixerTheme.cyan.opacity(0.4), radius: 10)
-                Text("Stripper stems, any audio, or Record from your interface")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
                 Text(CougarCalcBrand.versionLabel)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.lime)
             }
             Spacer(minLength: 8)
-            headerGroup(label: "META") {
-                Button("ABOUT") { showAbout = true }
-                    .buttonStyle(MixerGhostButtonStyle())
-            }
-            headerGroup(label: "SESSION") {
-                Button("LOAD MIX…") { pickMixFile() }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Open a saved mix JSON (loads its _speakers folder when the file lives there)")
-            }
             if session.hasSession {
-                headerGroup(label: "INPUT + RECORD", accent: MixerTheme.danger.opacity(0.85)) {
-                    inputDevicePicker
+                HStack(spacing: 8) {
+                    Button("BACK TO TOP") {
+                        session.restartPlay()
+                    }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Jump to the start of the timeline")
+
+                    Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
+                        session.togglePlay()
+                    }
+                    .buttonStyle(MixerPrimaryButtonStyle(compact: true))
+                    .keyboardShortcut(.space, modifiers: [])
+                    .disabled(session.isRecording)
+                    .help(
+                        session.isRecording
+                            ? "Spacebar stops Record"
+                            : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
+                    )
+
                     Button("STANDBY") {
                         session.toggleRecordStandby()
                     }
                     .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
                     .disabled(session.isBouncing || session.isRecording)
                     .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
+
                     if session.isRecording {
                         Button("STOP REC") { session.toggleRecord() }
                             .buttonStyle(MixerRecordButtonStyle())
@@ -219,109 +274,15 @@ struct ContentView: View {
                             .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back. Standby is optional.")
                     }
                 }
-                headerGroup(label: "STRIPS") {
-                    Button("ADD STRIP") { session.addBlankStrip() }
+            } else {
+                HStack(spacing: 8) {
+                    Button("ABOUT") { showAbout = true }
                         .buttonStyle(MixerGhostButtonStyle())
-                        .help("Adds an empty speaker strip (up to 8). Pick IN on it to record. REMOVE if you do not need it.")
-                    Button("REMOVE STRIP") { confirmRemoveStrip = true }
+                    Button("LOAD MIX…") { pickMixFile() }
                         .buttonStyle(MixerGhostButtonStyle())
-                        .disabled(session.isRecording || session.isBouncing || !session.canRemoveStrip(session.selectedChannelID))
-                        .help("Removes the selected speaker strip when it is empty (ADD STRIP with no recording).")
-                        .confirmationDialog(
-                            "Remove this empty strip?",
-                            isPresented: $confirmRemoveStrip,
-                            titleVisibility: .visible
-                        ) {
-                            Button("Remove Strip", role: .destructive) {
-                                session.removeEmptyStrip(session.selectedChannelID)
-                            }
-                            Button("Cancel", role: .cancel) {}
-                        } message: {
-                            Text("Only empty speaker strips can be removed. This cannot be undone.")
-                        }
-                    if reorderStrips {
-                        Button("REORDER") { reorderStrips = false }
-                            .buttonStyle(MixerPrimaryButtonStyle())
-                            .disabled(session.isRecording)
-                            .help("Reorder is on. Drag a lime DRAG TO REORDER handle onto another strip. Click again when you are done.")
-                    } else {
-                        Button("REORDER") { reorderStrips = true }
-                            .buttonStyle(MixerGhostButtonStyle())
-                            .disabled(session.isRecording)
-                            .help("Turn on, then drag a strip onto another strip — same idea as dragging DSP chips.")
-                    }
-                }
-                headerGroup(label: "MIX") {
-                    Button("UPDATE MIX") { session.updateMix() }
-                        .buttonStyle(MixerGhostButtonStyle())
-                        .help(session.lastMixURL.map { "Overwrite \($0.lastPathComponent)" } ?? "Writes FixerMixer.mix.json in this folder")
-                    Button("SAVE MIX…") { session.saveMix() }
-                        .buttonStyle(MixerGhostButtonStyle())
-                        .help("Choose a folder and name for this mix. Audio stays in the WAV files. Mute paints are saved here.")
-                }
-                headerGroup(label: "TRANSPORT") {
-                    Button("BACK TO TOP") {
-                        session.restartPlay()
-                    }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Jump to the start of the timeline")
-                    Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
-                        session.togglePlay()
-                    }
-                    .buttonStyle(MixerPrimaryButtonStyle())
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(session.isRecording)
-                    .help(
-                        session.isRecording
-                            ? "Spacebar stops Record"
-                            : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
-                    )
-                    Button(session.isBouncing ? "EXPORTING…" : "EXPORT…") {
-                        exportItems = session.makeExportItems()
-                        exportFolder = session.suggestedExportFolder()
-                        exportSampleRate = .native
-                        exportFormat = .wav16
-                        showExport = true
-                    }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .disabled(session.isBouncing || session.frameCount == 0)
-                    .help("Choose speaker stems, stereo beds, and the master 2-mix. Pick sample rate and WAV/AIFF here — playback stays at the file rate.")
-                }
-                headerGroup(label: "IMPORT") {
-                    Button("LOAD OTHER FOLDER…") { pickFolder() }
-                        .buttonStyle(MixerGhostButtonStyle())
-                    Button("ADD TRACKS…") { pickFiles(append: true) }
-                        .buttonStyle(MixerGhostButtonStyle())
-                        .help("Drop or choose more audio files. Mono → speaker (up to 8); stereo → bed (up to 2).")
                 }
             }
         }
-    }
-
-    private func headerGroup<Content: View>(
-        label: String,
-        accent: Color = MixerTheme.lime.opacity(0.85),
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label)
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .tracking(0.6)
-                .foregroundStyle(accent)
-            HStack(spacing: 6) {
-                content()
-            }
-        }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(MixerTheme.panel.opacity(0.55))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(MixerTheme.cyan.opacity(0.18), lineWidth: 1)
-        )
     }
 
     private var dropZone: some View {
@@ -556,16 +517,19 @@ struct ContentView: View {
         showAllWaveforms = false
     }
 
-    private var inputDevicePicker: some View {
-        HStack(spacing: 6) {
-            Text("INPUT")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
+    private var inputDeviceMenuContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("INPUT DEVICE")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundStyle(MixerTheme.cyanDim)
             Picker(
                 "Input",
                 selection: Binding(
                     get: { session.selectedInputUID ?? "" },
-                    set: { session.selectedInputUID = $0.isEmpty ? nil : $0 }
+                    set: {
+                        session.selectedInputUID = $0.isEmpty ? nil : $0
+                        showInputPicker = false
+                    }
                 )
             ) {
                 Text(session.inputDevices.isEmpty ? "No interface" : "—").tag("")
@@ -579,9 +543,12 @@ struct ContentView: View {
             }
             .labelsHidden()
             .pickerStyle(.menu)
-            .frame(maxWidth: 240)
+            .frame(maxWidth: 320)
             .disabled(session.isRecording || session.isRecordStandby)
-                    .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
+            .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
+            Text("Also available from File → Input Device…")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(MixerTheme.textSecondary)
         }
     }
 
@@ -630,11 +597,10 @@ struct ContentView: View {
     }
 
     private var masterStrip: some View {
-        VStack(spacing: 10) {
-            // Own line so MASTER is never split next to SEL on the narrow strip.
+        VStack(spacing: 6) {
             Text("MASTER")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .tracking(0.6)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(0.5)
                 .foregroundStyle(session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.lime : MixerTheme.lime.opacity(0.85))
                 .lineLimit(1)
                 .minimumScaleFactor(0.85)
@@ -659,7 +625,7 @@ struct ContentView: View {
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(0.4)
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 5)
                         .foregroundStyle(session.masterComp.bypass ? MixerTheme.textSecondary : (session.selectedChannelID == ChannelStripState.masterID ? MixerTheme.bgBottom : MixerTheme.cyan))
                         .background(
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -680,14 +646,14 @@ struct ContentView: View {
             Button {
                 session.toggleAutoMix()
             } label: {
-                VStack(spacing: 2) {
+                VStack(spacing: 1) {
                     Text("AUTO")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
                     Text("MIX")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .foregroundStyle(session.autoMixMode == .mix ? MixerTheme.bgBottom : MixerTheme.cyan)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -706,14 +672,14 @@ struct ContentView: View {
             Button {
                 session.toggleAutoDuck()
             } label: {
-                VStack(spacing: 2) {
+                VStack(spacing: 1) {
                     Text("AUTO")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
                     Text("DUCK")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
                 .foregroundStyle(session.autoMixMode == .duck ? MixerTheme.bgBottom : MixerTheme.cyan)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -730,12 +696,12 @@ struct ContentView: View {
             .help("Auto Duck: hold featured talker at baseline; duck other included monos. Click again for OFF. Greys Auto Mix while on.")
 
             if session.autoMixMode == .duck {
-                VStack(spacing: 4) {
+                VStack(spacing: 2) {
                     Text("MAX PULL")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
                         .foregroundStyle(MixerTheme.cyanDim)
                     Text(String(format: "%.0f dB", session.autoDuckMaxAttenuationDb))
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .foregroundStyle(MixerTheme.lime)
                     Slider(value: Binding(
                         get: { Double(session.autoDuckMaxAttenuationDb) },
@@ -745,49 +711,46 @@ struct ContentView: View {
                         }
                     ), in: 0...18)
                     .tint(MixerTheme.cyan)
-                    .padding(.bottom, 4)
                 }
                 .help("Limits how far Auto Duck can attenuate a channel (0 = no duck).")
             }
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
-            HStack(spacing: 6) {
+            // Meters beside OUT fader so the fader never clips under fixed strip height.
+            HStack(alignment: .bottom, spacing: 6) {
                 LevelMeter(level: session.masterPeakL, label: "L")
                 LevelMeter(level: session.masterPeakR, label: "R")
+                VStack(spacing: 2) {
+                    Text(masterOutLabel)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(masterOutColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("dBFS")
+                        .font(.system(size: 7, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.cyanDim)
+                    VerticalFader(
+                        valueDb: Binding(
+                            get: { session.masterDb },
+                            set: {
+                                session.masterDb = $0
+                                session.syncParamsToEngine()
+                            }
+                        ),
+                        defaultValue: 0,
+                        range: -24...12,
+                        caption: "OUT"
+                    )
+                }
+                .layoutPriority(1)
             }
-            .frame(height: 128)
-
-            VStack(spacing: 2) {
-                Text(masterOutLabel)
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(masterOutColor)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
-                Text("dBFS")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(MixerTheme.cyanDim)
-            }
-            .padding(.vertical, 2)
+            .frame(height: 148)
             .help("Live peak on the master bus after the OUT fader")
-
-            VerticalFader(
-                valueDb: Binding(
-                    get: { session.masterDb },
-                    set: {
-                        session.masterDb = $0
-                        session.syncParamsToEngine()
-                    }
-                ),
-                defaultValue: 0,
-                range: -24...12,
-                caption: "OUT"
-            )
-            .layoutPriority(1)
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, 8)
+        .padding(.horizontal, 8)
+        .padding(.top, 8)
+        .padding(.bottom, 6)
         .frame(width: 110, height: ChannelStripView.stripHeight, alignment: .top)
         .mixerPanel(glow: true)
         .overlay(
@@ -813,11 +776,23 @@ struct ContentView: View {
 
     private var statusBar: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let progress = session.busyProgress {
+                HStack(spacing: 8) {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .tint(MixerTheme.cyan)
+                        .frame(maxWidth: 280)
+                    Text(session.busyProgressLabel.map { "\($0) · \(Int(progress * 100))%" } ?? String(format: "%.0f%%", progress * 100))
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.lime)
+                        .monospacedDigit()
+                }
+            }
             Text(session.status)
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(MixerTheme.textPrimary)
             if session.hasSession {
-                Text("SEL / DSP chip opens the selected-channel panel · Shift-drag waveform to silence · Option-drag clears · Monitor mics on your interface")
+                Text("File menu · Load/Save/Import/Export/Input · SEL opens DSP · Shift-drag waveform to silence · Option-drag clears")
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)

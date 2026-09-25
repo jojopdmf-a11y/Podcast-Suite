@@ -51,6 +51,8 @@ enum MixerMixFile {
         /// Participate in Auto Mix / Auto Duck. Older mixes omit → true.
         var includeInAutoMix: Bool?
         var pan: Float
+        /// Input trim before DSP (−18…+36). Omitted in older mixes → 0.
+        var inputGainDb: Float?
         var eqGains: [Float]
         var eqBypass: Bool
         /// 24 dB/oct HPF cutoff Hz. Omitted in older mixes → off.
@@ -61,6 +63,11 @@ enum MixerMixFile {
         var paraBypass: Bool
         /// `"pre"` | `"post"`. Omitted in older mixes → post (legacy order).
         var paraPlacement: String?
+        /// De-esser. Omitted in older mixes → bypassed defaults.
+        var deessFreqHz: Float?
+        var deessWidth: String?
+        var deessThresholdDb: Float?
+        var deessBypass: Bool?
         var deVerb: Float
         var deVerbBypass: Bool
         var wetter: Float
@@ -134,6 +141,7 @@ enum MixerMixFile {
             autoBiasDb: 0,
             includeInAutoMix: ch.isStereo ? nil : ch.includeInAutoMix,
             pan: ch.pan,
+            inputGainDb: ch.inputGainDb,
             eqGains: ch.eq.gains,
             eqBypass: ch.eq.bypass,
             eqHpfHz: ch.eq.hpfHz,
@@ -142,6 +150,10 @@ enum MixerMixFile {
             paraWidth: ch.para.width.rawValue,
             paraBypass: ch.para.bypass,
             paraPlacement: ch.para.placement.rawValue,
+            deessFreqHz: ch.deess.freqHz,
+            deessWidth: ch.deess.width.rawValue,
+            deessThresholdDb: ch.deess.thresholdDb,
+            deessBypass: ch.deess.bypass,
             deVerb: ch.voice.deVerb,
             deVerbBypass: ch.voice.deVerbBypass,
             wetter: ch.voice.wetter,
@@ -174,6 +186,8 @@ enum MixerMixFile {
             ch.includeInAutoMix = snap.includeInAutoMix ?? true
         }
         ch.pan = snap.pan
+        ch.inputGainDb = snap.inputGainDb ?? 0
+        ch.clampInputGain()
         var gains = snap.eqGains
         let n = GraphicEQBand.allCases.count
         if gains.count < n {
@@ -189,6 +203,15 @@ enum MixerMixFile {
         ch.para.bypass = snap.paraBypass
         ch.para.placement = ParaEQPlacement(rawValue: snap.paraPlacement ?? "") ?? .post
         ch.para.clamp()
+        if snap.deessFreqHz != nil || snap.deessWidth != nil || snap.deessThresholdDb != nil || snap.deessBypass != nil {
+            ch.deess.freqHz = snap.deessFreqHz ?? ch.deess.freqHz
+            ch.deess.width = ParaEQWidth(rawValue: snap.deessWidth ?? "") ?? ch.deess.width
+            ch.deess.thresholdDb = snap.deessThresholdDb ?? ch.deess.thresholdDb
+            ch.deess.bypass = snap.deessBypass ?? true
+            ch.deess.clamp()
+        } else {
+            ch.deess = ChannelDeEsser()
+        }
         ch.voice.deVerb = snap.deVerb
         ch.voice.deVerbBypass = snap.deVerbBypass
         ch.voice.wetter = snap.wetter

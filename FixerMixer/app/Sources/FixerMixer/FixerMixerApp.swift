@@ -5,6 +5,13 @@ extension Notification.Name {
     static let fixerMixerSaveMix = Notification.Name("fixerMixerSaveMix")
     static let fixerMixerUpdateMix = Notification.Name("fixerMixerUpdateMix")
     static let fixerMixerLoadMix = Notification.Name("fixerMixerLoadMix")
+    static let fixerMixerAddStrip = Notification.Name("fixerMixerAddStrip")
+    static let fixerMixerRemoveStrip = Notification.Name("fixerMixerRemoveStrip")
+    static let fixerMixerToggleReorder = Notification.Name("fixerMixerToggleReorder")
+    static let fixerMixerImportFolder = Notification.Name("fixerMixerImportFolder")
+    static let fixerMixerImportFiles = Notification.Name("fixerMixerImportFiles")
+    static let fixerMixerExport = Notification.Name("fixerMixerExport")
+    static let fixerMixerPickInput = Notification.Name("fixerMixerPickInput")
 }
 
 @main
@@ -30,6 +37,31 @@ struct FixerMixerApp: App {
                     NotificationCenter.default.post(name: .fixerMixerLoadMix, object: nil)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                Divider()
+                Button("Add Strip") {
+                    NotificationCenter.default.post(name: .fixerMixerAddStrip, object: nil)
+                }
+                Button("Remove Strip") {
+                    NotificationCenter.default.post(name: .fixerMixerRemoveStrip, object: nil)
+                }
+                Button("Reorder Strips") {
+                    NotificationCenter.default.post(name: .fixerMixerToggleReorder, object: nil)
+                }
+                Divider()
+                Button("Import Folder…") {
+                    NotificationCenter.default.post(name: .fixerMixerImportFolder, object: nil)
+                }
+                Button("Import Files…") {
+                    NotificationCenter.default.post(name: .fixerMixerImportFiles, object: nil)
+                }
+                Button("Export…") {
+                    NotificationCenter.default.post(name: .fixerMixerExport, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                Divider()
+                Button("Input Device…") {
+                    NotificationCenter.default.post(name: .fixerMixerPickInput, object: nil)
+                }
             }
             CommandGroup(replacing: .appInfo) {
                 Button("About PodProducer") {

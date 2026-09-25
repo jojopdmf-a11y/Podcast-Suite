@@ -237,6 +237,8 @@ struct ChannelProcessor {
     var faderDb: Float = 0
     var pan: Float = 0
     var dspBypass: Bool = false
+    /// Trim before DSP (−18…+36). Applied before EQ/FX; PRE meter reads post-gain.
+    var inputGainDb: Float = 0
     var eqGains: [Float] = Array(repeating: 0, count: 10)
     var eqBypass: Bool = false
     var eqHpfHz: Float = 0
@@ -245,6 +247,10 @@ struct ChannelProcessor {
     var paraWidth: ParaEQWidth = .narrow
     var paraBypass: Bool = false
     var paraPlacement: ParaEQPlacement = .post
+    var deessFreqHz: Float = 6_000
+    var deessWidth: ParaEQWidth = .narrow
+    var deessThresholdDb: Float = -24
+    var deessBypass: Bool = true
 
     var deVerbAmount: Float = 0
     var deVerbBypass: Bool = false
@@ -261,6 +267,7 @@ struct ChannelProcessor {
     private var hpfL = HighPass24DSP()
     private var hpfR = HighPass24DSP()
     private var para = ParaEQDSP()
+    private var deess = DeEsserDSP()
     private var deVerb = DeVerbDSP()
     private var wetter = WetterDSP()
     private var leveler = LevelerDSP()
@@ -268,6 +275,8 @@ struct ChannelProcessor {
 
     /// Live Leveler gain-reduction (dB ≥ 0) for the selected-channel GR meter.
     var levelerMeterGRDb: Float { leveler.meterGRDb }
+    /// Live De-ess gain-reduction (dB ≥ 0).
+    var deessMeterGRDb: Float { deess.meterGRDb }
 
     init(isStereo: Bool, hasVoiceFX: Bool) {
         self.isStereo = isStereo
@@ -289,6 +298,11 @@ struct ChannelProcessor {
             para.width = paraWidth
             para.bypass = paraBypass || dspBypass
             para.configure(sampleRate: sampleRate)
+            deess.freqHz = deessFreqHz
+            deess.width = deessWidth
+            deess.thresholdDb = deessThresholdDb
+            deess.bypass = deessBypass || dspBypass
+            deess.configure(sampleRate: sampleRate)
             deVerb.configure(sampleRate: sampleRate)
             wetter.room = wetterRoom
             wetter.configure(sampleRate: sampleRate)
@@ -308,12 +322,20 @@ struct ChannelProcessor {
         hpfL.reset()
         hpfR.reset()
         para.reset()
+        deess.reset()
         deVerb.reset()
         wetter.reset()
         leveler.reset()
     }
 
-    /// Graphic + HPF (+ optional para) for the `.eq` slot. Order: para PRE → HPF → graphic → para POST.
+    /// Linear input trim (unity when ≈ 0 dB).
+    func inputGained(_ x: Float) -> Float {
+        if abs(inputGainDb) < 0.01 { return x }
+        return x * pow(10.0, inputGainDb / 20.0)
+    }
+
+    /// Graphic + HPF (+ optional para) + de-ess for the `.eq` slot.
+    /// Order: para PRE → HPF → graphic → para POST → de-ess.
     private mutating func processEQSlot(_ x: Float, useLeft: Bool) -> Float {
         var y = x
         let paraPre = hasVoiceFX && !paraBypass && paraPlacement == .pre
@@ -329,10 +351,13 @@ struct ChannelProcessor {
             }
         }
         if paraPost { y = para.process(y) }
+        if hasVoiceFX && !deessBypass {
+            y = deess.process(y)
+        }
         return y
     }
 
-    /// FX only, in this channel’s `dspOrder`. Mute returns 0.
+    /// FX only, in this channel’s `dspOrder`. Mute returns 0. Caller applies input gain first.
     mutating func processEffects(_ x: Float) -> Float {
         if mute { return 0 }
         var y = x
@@ -355,7 +380,7 @@ struct ChannelProcessor {
         return y
     }
 
-    /// Auto-mix gain → fader → pan. `inputPeak` is usually the raw stem sample.
+    /// Auto-mix gain → fader → pan. `inputPeak` is post-input-gain, pre-DSP.
     mutating func finishMono(
         _ fx: Float,
         autoMixGain: Float,
@@ -379,23 +404,26 @@ struct ChannelProcessor {
 
     /// Process one mono sample → stereo L/R (no auto-mix).
     mutating func processMono(_ x: Float, prePeak: inout Float, postPeak: inout Float) -> (Float, Float) {
-        let fx = processEffects(x)
-        return finishMono(fx, autoMixGain: 1, inputPeak: x, prePeak: &prePeak, postPeak: &postPeak)
+        let gained = inputGained(x)
+        let fx = processEffects(gained)
+        return finishMono(fx, autoMixGain: 1, inputPeak: gained, prePeak: &prePeak, postPeak: &postPeak)
     }
 
     /// Process stereo frame → stereo out.
     mutating func processStereo(_ xl: Float, _ xr: Float, prePeak: inout Float, postPeak: inout Float) -> (Float, Float) {
-        prePeak = max(prePeak, max(abs(xl), abs(xr)))
+        let gl = inputGained(xl)
+        let gr = inputGained(xr)
+        prePeak = max(prePeak, max(abs(gl), abs(gr)))
         if mute {
             return (0, 0)
         }
-        var l = xl
-        var r = xr
+        var l = gl
+        var r = gr
         if !dspBypass {
-            // Stereo beds: HPF + graphic only (no para).
+            // Stereo beds: HPF + graphic only (no para / de-ess).
             if !eqBypass {
-                l = hpfL.process(xl)
-                r = hpfR.process(xr)
+                l = hpfL.process(gl)
+                r = hpfR.process(gr)
                 l = eqL.process(l)
                 r = eqR.process(r)
             }

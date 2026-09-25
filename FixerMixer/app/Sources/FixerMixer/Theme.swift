@@ -98,6 +98,7 @@ struct MixerStandbyButtonStyle: ButtonStyle {
 }
 
 /// Shared SEL control — selected = solid lime fill, black “SEL” + black dot (Julie’s style).
+/// Sized ~66% smaller than the original 11/28/54 chrome so channel names get the width.
 struct SelectChannelButton: View {
     var isSelected: Bool
     /// Master strip uses a full-width SEL; channel strips stay compact.
@@ -106,30 +107,34 @@ struct SelectChannelButton: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
+            HStack(spacing: 2) {
                 Text("SEL")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
-                    .tracking(0.4)
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .tracking(0.3)
                 Circle()
                     .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
-                    .frame(width: 5, height: 5)
+                    .frame(width: 3, height: 3)
             }
             .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
             .frame(maxWidth: expandsHorizontally ? .infinity : nil)
-            .frame(minWidth: expandsHorizontally ? nil : 54, minHeight: 28)
-            .padding(.horizontal, expandsHorizontally ? 0 : 8)
-            .padding(.vertical, 6)
+            .frame(minWidth: expandsHorizontally ? nil : 18, minHeight: 10)
+            .padding(.horizontal, expandsHorizontally ? 0 : 3)
+            .padding(.vertical, 2)
             .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .stroke(
                         isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45),
-                        lineWidth: isSelected ? 1.5 : 1
+                        lineWidth: isSelected ? 1.2 : 0.8
                     )
             )
+            // Invisible hit padding — keep ≥ ~22pt target without growing the chrome.
+            .padding(.horizontal, expandsHorizontally ? 0 : 2)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

@@ -145,6 +145,27 @@ struct ChannelParaEQ: Equatable {
     }
 }
 
+/// Speaker-only dynamic de-esser. Lives inside the EQ block (own bypass), not a reorderable chip.
+struct ChannelDeEsser: Equatable {
+    static let minHz: Float = 1_000
+    static let maxHz: Float = 12_000
+    static let minThresholdDb: Float = -60
+    static let maxThresholdDb: Float = 0
+
+    var freqHz: Float = 6_000
+    var width: ParaEQWidth = .narrow
+    var thresholdDb: Float = -24
+    /// Default bypassed so older projects and new strips stay quiet until engaged.
+    var bypass: Bool = true
+
+    var isActive: Bool { !bypass }
+
+    mutating func clamp() {
+        freqHz = min(Self.maxHz, max(Self.minHz, freqHz))
+        thresholdDb = min(Self.maxThresholdDb, max(Self.minThresholdDb, thresholdDb))
+    }
+}
+
 enum WetterRoom: String, CaseIterable, Identifiable, Hashable {
     case drumRoom
     case studio
@@ -238,8 +259,11 @@ struct ChannelStripState: Identifiable, Equatable {
     /// When true, this mono participates in Auto Mix / Auto Duck. Stereo beds ignore this.
     var includeInAutoMix: Bool = true
     var pan: Float = 0
+    /// Trim before DSP (−18…+36 dB). Linked monos share this with other DSP.
+    var inputGainDb: Float = 0
     var eq = ChannelEQ()
     var para = ChannelParaEQ()
+    var deess = ChannelDeEsser()
     var voice = VoiceFX()
     /// Signal flow order for this channel’s processors.
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
@@ -247,6 +271,8 @@ struct ChannelStripState: Identifiable, Equatable {
     var postPeak: Float = 0
     /// Live Leveler gain reduction (dB ≥ 0) for the detail-panel GR meter.
     var levelerGRDb: Float = 0
+    /// Live De-ess gain reduction (dB ≥ 0) for the EQ-block GR meter.
+    var deessGRDb: Float = 0
     /// Hardware input channel (0-based) this strip records. Nil = not armed.
     var inputChannel: Int? = nil
     /// Painted silence ranges. The show does not get shorter.
@@ -256,6 +282,8 @@ struct ChannelStripState: Identifiable, Equatable {
 
     static let musicID = 1000
     static let masterID = 2000
+    static let minInputGainDb: Float = -18
+    static let maxInputGainDb: Float = 36
 
     static func == (lhs: ChannelStripState, rhs: ChannelStripState) -> Bool {
         lhs.id == rhs.id
@@ -270,13 +298,19 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.autoBiasDb == rhs.autoBiasDb
             && lhs.includeInAutoMix == rhs.includeInAutoMix
             && lhs.pan == rhs.pan
+            && lhs.inputGainDb == rhs.inputGainDb
             && lhs.eq == rhs.eq
             && lhs.para == rhs.para
+            && lhs.deess == rhs.deess
             && lhs.voice == rhs.voice
             && lhs.dspOrder == rhs.dspOrder
             && lhs.inputChannel == rhs.inputChannel
             && lhs.muteSpans == rhs.muteSpans
             && lhs.linkedPeerID == rhs.linkedPeerID
+    }
+
+    mutating func clampInputGain() {
+        inputGainDb = min(Self.maxInputGainDb, max(Self.minInputGainDb, inputGainDb))
     }
 
     static func voice(slot: Int, speakerNumber: Int, name: String? = nil) -> ChannelStripState {
@@ -364,6 +398,9 @@ final class MixerSession: ObservableObject {
     /// Live input metering without writing takes (Record Standby).
     @Published var isRecordStandby = false
     @Published var isBouncing = false
+    /// Determinate 0…1 while import/export is busy. Nil when idle.
+    @Published var busyProgress: Double? = nil
+    @Published var busyProgressLabel: String? = nil
     @Published var inputDevices: [MixerInputDevice] = []
     @Published var selectedInputUID: String?
     @Published var sourceFolder: URL?
@@ -383,7 +420,7 @@ final class MixerSession: ObservableObject {
     private var syncingLinkedPair = false
 
     func bindEngine() {
-        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, compInL, compInR, compOutL, compOutR, compGR in
+        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, deessGR, compInL, compInR, compOutL, compOutR, compGR in
             Task { @MainActor in
                 guard let self else { return }
                 let n = self.voices.count
@@ -393,6 +430,9 @@ final class MixerSession: ObservableObject {
                 }
                 for i in 0..<min(n, levelerGR.count) {
                     self.voices[i].levelerGRDb = levelerGR[i]
+                }
+                for i in 0..<min(n, deessGR.count) {
+                    self.voices[i].deessGRDb = deessGR[i]
                 }
                 for i in self.stereos.indices {
                     let slot = n + i
@@ -649,8 +689,10 @@ final class MixerSession: ObservableObject {
         dest.autoBiasDb = src.autoBiasDb
         dest.includeInAutoMix = src.includeInAutoMix
         dest.mute = src.mute
+        dest.inputGainDb = src.inputGainDb
         dest.eq = src.eq
         dest.para = src.para
+        dest.deess = src.deess
         dest.voice = src.voice
         dest.dspOrder = src.dspOrder
     }
@@ -1110,12 +1152,23 @@ final class MixerSession: ObservableObject {
             }
             replaceChannelOrderFromCurrentStrips()
             sourceFolder = folder
+            busyProgress = 0
+            busyProgressLabel = "Importing"
+            status = "Importing…"
             try engine.load(
                 voiceURLs: voices.map(\.fileURL),
                 speakerNumbers: voices.map { $0.speakerNumber ?? ($0.id + 1) },
                 stereoURLs: stereos.compactMap(\.fileURL),
                 sampleRateHint: nil
-            )
+            ) { fraction, label in
+                Task { @MainActor in
+                    self.busyProgress = fraction
+                    self.busyProgressLabel = "Importing"
+                    self.status = "Importing… \(label)"
+                }
+            }
+            busyProgress = nil
+            busyProgressLabel = nil
             sampleRate = engine.sampleRate
             frameCount = engine.frameCount
             playheadFrame = 0
@@ -1148,6 +1201,8 @@ final class MixerSession: ObservableObject {
             }
             status = line
         } catch MixerError.noTracks {
+            busyProgress = nil
+            busyProgressLabel = nil
             let audio = (try? FileManager.default.contentsOfDirectory(
                 at: folder,
                 includingPropertiesForKeys: nil
@@ -1160,6 +1215,8 @@ final class MixerSession: ObservableObject {
             }
             importAudioFiles(audio.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }, append: false)
         } catch {
+            busyProgress = nil
+            busyProgressLabel = nil
             status = error.localizedDescription
         }
     }
@@ -1288,8 +1345,10 @@ final class MixerSession: ObservableObject {
             ch.autoBiasDb = kept.autoBiasDb
             ch.includeInAutoMix = kept.includeInAutoMix
             ch.pan = kept.pan
+            ch.inputGainDb = kept.inputGainDb
             ch.eq = kept.eq
             ch.para = kept.para
+            ch.deess = kept.deess
             ch.voice = kept.voice
             ch.dspOrder = kept.dspOrder
             ch.inputChannel = kept.inputChannel
@@ -1308,6 +1367,7 @@ final class MixerSession: ObservableObject {
             bed.dspBypass = kept.dspBypass
             bed.faderDb = kept.faderDb
             bed.pan = kept.pan
+            bed.inputGainDb = kept.inputGainDb
             bed.eq = kept.eq
             bed.para = kept.para
             bed.dspOrder = kept.dspOrder
@@ -1327,12 +1387,23 @@ final class MixerSession: ObservableObject {
             if !append || sourceFolder == nil {
                 sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
             }
+            busyProgress = 0
+            busyProgressLabel = "Importing"
+            status = "Importing…"
             try engine.load(
                 voiceURLs: voices.map(\.fileURL),
                 speakerNumbers: voices.map { $0.speakerNumber ?? ($0.id + 1) },
                 stereoURLs: stereos.compactMap(\.fileURL),
                 sampleRateHint: nil
-            )
+            ) { fraction, label in
+                Task { @MainActor in
+                    self.busyProgress = fraction
+                    self.busyProgressLabel = "Importing"
+                    self.status = "Importing… \(label)"
+                }
+            }
+            busyProgress = nil
+            busyProgressLabel = nil
             sampleRate = engine.sampleRate
             frameCount = engine.frameCount
             playheadFrame = 0
@@ -1358,6 +1429,8 @@ final class MixerSession: ObservableObject {
             }
             status = line
         } catch {
+            busyProgress = nil
+            busyProgressLabel = nil
             status = error.localizedDescription
         }
     }
@@ -1467,13 +1540,20 @@ final class MixerSession: ObservableObject {
     }
 
     private func writeMix(to dest: URL, verb: String) {
+        busyProgress = 0
+        busyProgressLabel = "Saving mix"
+        status = "Saving mix…"
         do {
+            busyProgress = 0.4
             try MixerMixFile.write(MixerMixFile.make(from: self), to: dest)
+            busyProgress = 1
             lastMixURL = dest
             status = "\(verb) mix → \(dest.lastPathComponent)"
         } catch {
             status = "Could not save mix: \(error.localizedDescription)"
         }
+        busyProgress = nil
+        busyProgressLabel = nil
     }
 
     /// Open a mix JSON. If it sits in a speakers folder, that folder loads first.
@@ -1607,18 +1687,30 @@ final class MixerSession: ObservableObject {
             isRecordStandby = false
         }
         status = "Exporting…"
+        busyProgress = 0
+        busyProgressLabel = "Exporting"
         syncParamsToEngine()
         Task.detached(priority: .userInitiated) { [engine] in
             do {
-                let result = try engine.bounce(to: folder, plan: plan)
+                let result = try engine.bounce(to: folder, plan: plan) { fraction in
+                    Task { @MainActor in
+                        self.busyProgress = fraction
+                        self.busyProgressLabel = "Exporting"
+                        self.status = String(format: "Exporting… %.0f%%", fraction * 100)
+                    }
+                }
                 await MainActor.run {
                     self.isBouncing = false
+                    self.busyProgress = nil
+                    self.busyProgressLabel = nil
                     self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") → \(result.folder.lastPathComponent)"
                     NSWorkspace.shared.activateFileViewerSelecting([result.folder])
                 }
             } catch {
                 await MainActor.run {
                     self.isBouncing = false
+                    self.busyProgress = nil
+                    self.busyProgressLabel = nil
                     self.status = error.localizedDescription
                 }
             }
