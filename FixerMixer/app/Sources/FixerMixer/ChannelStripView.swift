@@ -498,12 +498,13 @@ struct ChannelStripView: View {
     var body: some View {
         VStack(spacing: 8) {
             VStack(spacing: 3) {
-                HStack(alignment: .center, spacing: 6) {
+                HStack(alignment: .center, spacing: 4) {
                     channelNameLabel
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 2)
                     SelectChannelButton(isSelected: isSelected, action: onSelect)
                         .help("Select this channel for the waveform timeline")
                 }
+                inputGainRow
                 Text(channel.fileURL?.lastPathComponent ?? "— empty —")
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(MixerTheme.textSecondary)
@@ -614,7 +615,7 @@ struct ChannelStripView: View {
             }
 
             HStack(spacing: 6) {
-                LevelMeter(level: channel.prePeak, label: "PRE")
+                LevelMeter(level: channel.prePeak, label: "IN")
                 VStack(spacing: 2) {
                     // Fader always shows baseline weighting; auto ride is the readout below.
                     VerticalFader(valueDb: faderDb, autoDriven: false)
@@ -625,7 +626,7 @@ struct ChannelStripView: View {
                             .help("Applied auto-mix / auto-duck gain (dB). Fader = baseline weighting.")
                     }
                 }
-                LevelMeter(level: channel.postPeak, label: "POST")
+                LevelMeter(level: channel.postPeak, label: "OUT")
             }
             .frame(height: autoDriven && autoGainDb != nil ? 148 : 130)
             .help(autoDriven
@@ -775,6 +776,36 @@ struct ChannelStripView: View {
         }
     }
 
+    private var inputGainRow: some View {
+        HStack(spacing: 4) {
+            Text("GAIN")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+            Slider(
+                value: Binding(
+                    get: { Double(channel.inputGainDb) },
+                    set: {
+                        channel.inputGainDb = Float($0)
+                        channel.clampInputGain()
+                        onChange()
+                    }
+                ),
+                in: Double(ChannelStripState.minInputGainDb)...Double(ChannelStripState.maxInputGainDb)
+            )
+            .controlSize(.mini)
+            .tint(MixerTheme.cyan)
+            Text(abs(channel.inputGainDb) < 0.05 ? "0" : String(format: "%+.0f", channel.inputGainDb))
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(MixerTheme.lime)
+                .frame(width: 28, alignment: .trailing)
+        }
+        .help("Input trim before DSP (−18…+36 dB). IN meter reads after this gain.")
+        .onTapGesture(count: 2) {
+            channel.inputGainDb = 0
+            onChange()
+        }
+    }
+
     @ViewBuilder
     private var channelNameLabel: some View {
         if canRename && isRenaming {
@@ -799,10 +830,11 @@ struct ChannelStripView: View {
                 }
         } else {
             Text(channel.name)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .tracking(1)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .tracking(0.6)
                 .foregroundStyle(isSelected ? MixerTheme.lime : MixerTheme.cyan)
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .help(canRename ? "Double-click to rename (used for bounce filenames)" : channel.name)
                 .onTapGesture(count: 2) {
                     guard canRename else { return }
@@ -829,7 +861,7 @@ struct ChannelStripView: View {
     private func isSlotActive(_ slot: ChannelDSPSlot) -> Bool {
         switch slot {
         case .eq:
-            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive
+            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive || channel.deess.isActive
         case .deVerb:
             return channel.voice.deVerb > 0.02
         case .wetter:

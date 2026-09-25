@@ -33,8 +33,8 @@ final class MixerEngine: @unchecked Sendable {
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
 
-    /// pre, post, masterL, masterR, autoGainDb, rtaBins, levelerGRDb, compInL, compInR, compOutL, compOutR, compGRDb
-    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
+    /// pre, post, masterL, masterR, autoGainDb, rtaBins, levelerGRDb, deessGRDb, compInL, compInR, compOutL, compOutR, compGRDb
+    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
     var onPlayhead: ((Int) -> Void)?
     var onPlaybackEnded: (() -> Void)?
     var onSessionLength: ((Int) -> Void)?
@@ -47,6 +47,7 @@ final class MixerEngine: @unchecked Sendable {
     private var playheadEmitCounter: Int = 0
     private var lastAutoGainDb: [Float] = []
     private var lastLevelerGRDb: [Float] = []
+    private var lastDeessGRDb: [Float] = []
     private var lastRTABins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     /// Separate from the audio lock so channel-select waveform swaps never stall the render thread.
     private let waveformLock = NSLock()
@@ -176,7 +177,13 @@ final class MixerEngine: @unchecked Sendable {
         return out
     }
 
-    func load(voiceURLs: [URL?], speakerNumbers: [Int], stereoURLs: [URL], sampleRateHint: Double?) throws {
+    func load(
+        voiceURLs: [URL?],
+        speakerNumbers: [Int],
+        stereoURLs: [URL],
+        sampleRateHint: Double?,
+        progress: ((Double, String) -> Void)? = nil
+    ) throws {
         stop()
         lock.lock()
         defer { lock.unlock() }
@@ -188,12 +195,17 @@ final class MixerEngine: @unchecked Sendable {
         self.stemNames = []
         voiceBuffers.reserveCapacity(voiceURLs.count)
 
+        let totalSteps = max(1, voiceURLs.count + min(stereoURLs.count, StripperFolderLoader.maxStereo))
+        var step = 0
+
         for (i, url) in voiceURLs.enumerated() {
             let num = speakerNumbers.indices.contains(i) ? speakerNumbers[i] : (i + 1)
             self.speakerNumbers.append(num)
             self.stemNames.append("Speaker_\(num)")
             guard let url else {
                 voiceBuffers.append([])
+                step += 1
+                progress?(Double(step) / Double(totalSteps), "Loading speakers…")
                 continue
             }
             let buf = try MixerAudioIO.load(url: url, targetSampleRate: rate)
@@ -213,6 +225,8 @@ final class MixerEngine: @unchecked Sendable {
             }
             voiceBuffers.append(mono)
             frames = max(frames, mono.count)
+            step += 1
+            progress?(Double(step) / Double(totalSteps), url.lastPathComponent)
         }
 
         stereoBuffers = []
@@ -233,6 +247,8 @@ final class MixerEngine: @unchecked Sendable {
             proc.configure(sampleRate: rate ?? sampleRateHint ?? 44100)
             stereoProcessors.append(proc)
             stereoMuteSpans.append([])
+            step += 1
+            progress?(Double(step) / Double(totalSteps), url.lastPathComponent)
         }
 
         for i in voiceBuffers.indices {
@@ -495,6 +511,11 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].paraWidth = voices[i].para.width
             processors[i].paraBypass = voices[i].para.bypass
             processors[i].paraPlacement = voices[i].para.placement
+            processors[i].deessFreqHz = voices[i].deess.freqHz
+            processors[i].deessWidth = voices[i].deess.width
+            processors[i].deessThresholdDb = voices[i].deess.thresholdDb
+            processors[i].deessBypass = voices[i].deess.bypass
+            processors[i].inputGainDb = voices[i].inputGainDb
             processors[i].deVerbAmount = voices[i].voice.deVerb
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
@@ -526,6 +547,7 @@ final class MixerEngine: @unchecked Sendable {
             stereoProcessors[i].eqGains = stereos[i].eq.gains
             stereoProcessors[i].eqBypass = stereos[i].eq.bypass
             stereoProcessors[i].eqHpfHz = stereos[i].eq.hpfHz
+            stereoProcessors[i].inputGainDb = stereos[i].inputGainDb
             stereoProcessors[i].dspOrder = stereos[i].dspOrder.isEmpty ? ChannelDSPSlot.musicDefault : stereos[i].dspOrder
             stereoProcessors[i].configure(sampleRate: sampleRate)
             if stereoMuteSpans.indices.contains(i) {
@@ -666,7 +688,8 @@ final class MixerEngine: @unchecked Sendable {
                                 fxSamples[c] = 0
                                 levels[c] = 0
                             } else {
-                                let fx = self.processors[c].processEffects(sample)
+                                let gained = self.processors[c].inputGained(sample)
+                                let fx = self.processors[c].processEffects(gained)
                                 fxSamples[c] = fx
                                 levels[c] = abs(fx)
                             }
@@ -683,9 +706,13 @@ final class MixerEngine: @unchecked Sendable {
                     if self.lastLevelerGRDb.count != voiceN {
                         self.lastLevelerGRDb = Array(repeating: 0, count: voiceN)
                     }
+                    if self.lastDeessGRDb.count != voiceN {
+                        self.lastDeessGRDb = Array(repeating: 0, count: voiceN)
+                    }
                     for c in 0..<voiceN {
                         if self.processors.indices.contains(c) {
                             self.lastLevelerGRDb[c] = self.processors[c].levelerMeterGRDb
+                            self.lastDeessGRDb[c] = self.processors[c].deessMeterGRDb
                         }
                     }
                     for c in 0..<voiceN {
@@ -698,10 +725,11 @@ final class MixerEngine: @unchecked Sendable {
                         }
                         if self.processors.indices.contains(c) {
                             let g = autoGains.indices.contains(c) ? autoGains[c] : 1
+                            let gained = self.processors[c].inputGained(sample)
                             let (l, r) = self.processors[c].finishMono(
                                 fxSamples[c],
                                 autoMixGain: g,
-                                inputPeak: sample,
+                                inputPeak: gained,
                                 prePeak: &pre[c],
                                 postPeak: &post[c]
                             )
@@ -800,6 +828,7 @@ final class MixerEngine: @unchecked Sendable {
             let emitR = self.meterMasterR
             let emitAuto = self.lastAutoGainDb
             let emitLevelerGR = self.lastLevelerGRDb
+            let emitDeessGR = self.lastDeessGRDb
             let emitRTA = self.lastRTABins
             let emitCompInL = self.masterComp.meterInL
             let emitCompInR = self.masterComp.meterInR
@@ -837,7 +866,7 @@ final class MixerEngine: @unchecked Sendable {
 
             if shouldEmit {
                 self.onMeters?(
-                    emitPre, emitPost, emitL, emitR, emitAuto, emitRTA, emitLevelerGR,
+                    emitPre, emitPost, emitL, emitR, emitAuto, emitRTA, emitLevelerGR, emitDeessGR,
                     emitCompInL, emitCompInR, emitCompOutL, emitCompOutR, emitCompGR
                 )
             }
@@ -929,7 +958,11 @@ final class MixerEngine: @unchecked Sendable {
         }
     }
 
-    func bounce(to folder: URL, plan: BounceWritePlan) throws -> BounceResult {
+    func bounce(
+        to folder: URL,
+        plan: BounceWritePlan,
+        progress: ((Double) -> Void)? = nil
+    ) throws -> BounceResult {
         lock.lock()
         let total = frameCount
         let sr = sampleRate
@@ -974,6 +1007,7 @@ final class MixerEngine: @unchecked Sendable {
         var mixL = [Float](repeating: 0, count: total)
         var mixR = [Float](repeating: 0, count: total)
         let anySolo = procs.contains(where: \.solo) || stereoProcs.contains(where: \.solo)
+        let progressStep = max(1, total / 100)
 
         for head in 0..<total {
             var busL: Float = 0
@@ -989,7 +1023,8 @@ final class MixerEngine: @unchecked Sendable {
                 let spans = c < voiceMuteSpansCopy.count ? voiceMuteSpansCopy[c] : []
                 sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fade)
                 muted[c] = procs[c].mute || (anySolo && !procs[c].solo)
-                let fx = procs[c].processEffects(sample)
+                let gained = procs[c].inputGained(sample)
+                let fx = procs[c].processEffects(gained)
                 fxSamples[c] = fx
                 levels[c] = abs(fx)
             }
@@ -998,10 +1033,11 @@ final class MixerEngine: @unchecked Sendable {
                 let sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
                 pre = 0; post = 0
                 let g = autoGains.indices.contains(c) ? autoGains[c] : 1
+                let gained = procs[c].inputGained(sample)
                 let (l, r) = procs[c].finishMono(
                     fxSamples[c],
                     autoMixGain: g,
-                    inputPeak: sample,
+                    inputPeak: gained,
                     prePeak: &pre,
                     postPeak: &post
                 )
@@ -1048,6 +1084,10 @@ final class MixerEngine: @unchecked Sendable {
             busR = tanhf(cR * master)
             mixL[head] = busL
             mixR[head] = busR
+
+            if head % progressStep == 0 || head + 1 == total {
+                progress?(Double(head + 1) / Double(total))
+            }
         }
 
         var fileCount = 0
