@@ -44,6 +44,34 @@ on_fail() {
 }
 trap on_fail ERR
 
+explain_xcode_license() {
+  echo "Apple’s developer tools need a one-time Agree on this Mac."
+  echo "(This pops up after some Mac / Xcode updates. It is not a PodStudio bug.)"
+  echo ""
+  echo "Do this once:"
+  echo "  1. Spotlight → Terminal"
+  echo "  2. Paste this line and press Return:"
+  echo "       sudo xcodebuild -license accept"
+  echo "  3. Type your Mac login password. Nothing will show as you type — that is normal."
+  echo "     Press Return."
+  echo "  4. Double-click this Update icon again."
+  echo ""
+  echo "Or open the Xcode app (if you have it) and click Agree."
+}
+
+# git and swift both use Apple’s tools. If the license is not agreed, they dump
+# a long legal document into this window — catch that before we pull.
+if ! xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; then
+  echo "==> $DISPLAY_NAME"
+  echo "Repo: $ROOT"
+  echo ""
+  explain_xcode_license
+  echo ""
+  echo "Press Return to close."
+  read -r
+  exit 1
+fi
+
 echo "==> $DISPLAY_NAME"
 echo "Repo: $ROOT"
 echo ""
