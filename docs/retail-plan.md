@@ -10,7 +10,7 @@ Last updated: September 14, 2026
 
 | Topic | Choice |
 |---|---|
-| Apple Developer + notarize | Yes — Jeffrey getting the $99 account soon |
+| Apple Developer + notarize | **Account is active.** Team ID `767XNJ7K4U`. Notarized dmg still to do |
 | How customers get the apps | **Download from cougarcalc.com** (disk image or zip), not git |
 | Mac App Store | **No** |
 | Payments | **Paddle** → payout to **Novo** |
@@ -75,16 +75,18 @@ Refund → deactivate that key. Online re-check only when the Mac has a network;
 
 ---
 
-## Apple Developer (when the account is ready)
+## Apple Developer
 
-Jeffrey keeps the account password. We will need, later:
+Jeffrey keeps the Apple ID password. **Do not put that password (or a `.p8` key) in chat.**
 
-- Team ID (public)  
-- A **App Store Connect API key** or notary credentials in the *build environment* — not the Apple ID password in chat  
+| | |
+|---|---|
+| **Team ID** (public, locked) | `767XNJ7K4U` |
+| Still needed for notarize | App Store Connect **API key** in the *build environment*: Issuer ID, Key ID, and the `.p8` file — never the Apple password |
 
-Then: Developer ID sign → notarize → staple → wrap a **.dmg** → put the file on cougarcalc.com.
+Then: Developer ID sign → notarize → staple → wrap a **.dmg** → put the file on cougarcalc.com. Sign Stripper’s nested `uv` binary too.
 
-Until that exists, Update.command / git remains the desk workflow. Customers should not be sent that path.
+Until a notarized dmg exists, Update.command / git remains the desk workflow. Customers should not be sent that path.
 
 ---
 
@@ -108,6 +110,6 @@ Do not take money for Stripper until a notarized build does this first-open inst
 ## Next concrete slices (when Jeffrey says go)
 
 1. Port updated `privacy-policy.md` / `terms.md` to cougarcalc.com.  
-2. Apple Developer → notarized dmg (sign the nested `uv` binary too).  
+2. Apple Developer → notarized dmg (Team ID is in; still need the notary API key in the build Mac; sign nested `uv` too).  
 3. Implement **demo marks** + license paste in each app (Buy URL per SKU).  
 4. Paddle catalog: 4 products → Novo; then fulfillment email.
