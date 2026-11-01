@@ -1,0 +1,35 @@
+name: Mac compile
+
+# This Linux coding box cannot build the SwiftUI apps. GitHub’s Mac runners can.
+# A broken Lil Leveler / Mixer / Stripper compile should fail here, not on
+# Update *.command after merge.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  compile:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Lil Leveler
+        working-directory: LilLeveler/app
+        run: swift build -c release --product LilLeveler
+
+      - name: Fixer Mixer
+        working-directory: FixerMixer/app
+        run: swift build -c release --product FixerMixer
+
+      - name: Podcast Stripper
+        working-directory: Podcast Stripper/app
+        run: swift build -c release --product PodcastStripper
