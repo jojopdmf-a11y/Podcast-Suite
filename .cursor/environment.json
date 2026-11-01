@@ -1,0 +1,4 @@
+{
+  "name": "PodStudio — PodStripper engine",
+  "install": "bash .cursor/install.sh"
+}

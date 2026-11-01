@@ -25,7 +25,7 @@ struct ContentView: View {
             }
         }
         // Keep this view in the title-bar safe area. Ignoring safe area here
-        // slides LIL LEVELER under the traffic lights and clips the status line.
+        // slides PODLEVELER under the traffic lights and clips the status line.
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
         .background {
             ZStack {
@@ -51,7 +51,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("LIL LEVELER")
+                Text("PODLEVELER")
                     .font(.system(size: 22, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyan)
@@ -96,7 +96,7 @@ struct ContentView: View {
 
             VStack(spacing: 12) {
                 AboutSupportPanel(
-                    appName: "Lil Leveler",
+                    appName: "PodLeveler",
                     tagline: "Final mix → platform loudness",
                     accent: LevelerTheme.cyan
                 )
@@ -212,7 +212,7 @@ struct ContentView: View {
                             .buttonStyle(.plain)
                             .disabled(session.isBusy)
                             .help(p.isMaximizer
-                                  ? "L1-style maximizer. Lower THRESHOLD to raise the track into a hard −0.1 dB limiter. Not a podcast target."
+                                  ? "L1-style maximizer. Play, then drag THRESHOLD — you hear it live. Not a podcast target."
                                   : "Level the file to this platform’s loudness and true-peak numbers.")
 
                             if UserLoudnessPreset.isUserID(p.id) {
@@ -269,7 +269,7 @@ struct ContentView: View {
         .levelerPanel(glow: true)
     }
 
-    /// L1-style: one threshold slider + a fast attenuation meter. Ceiling is fixed.
+    /// L1-style: one threshold slider + a readable GR meter. Ceiling is fixed.
     private var musicMaximizerControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
@@ -284,7 +284,7 @@ struct ContentView: View {
             Slider(
                 value: Binding(
                     get: { Double(session.musicThresholdDb) },
-                    set: { session.musicThresholdDb = Float($0) }
+                    set: { session.setMusicThreshold(Float($0)) }
                 ),
                 in: Double(LevelerSession.musicThresholdMin)...Double(LevelerSession.musicThresholdMax)
             ) { editing in
@@ -292,7 +292,12 @@ struct ContentView: View {
             }
             .tint(LevelerTheme.lime)
             .disabled(session.isBusy)
-            .help("Lower the threshold to raise the whole track into the limiter. Ceiling stays −0.1 dB.")
+            .help("Live: drag while playing to hear makeup into the −0.1 dB limiter. FILE LOUDNESS cards catch up when you let go.")
+
+            Text("Live while you drag. FILE LOUDNESS updates when you let go.")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(LevelerTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             HStack(alignment: .bottom, spacing: 8) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -310,6 +315,7 @@ struct ContentView: View {
                     }
                     GainReductionMeter(liveDb: session.liveGR, peakDb: session.peakGR)
                         .frame(height: 14)
+                        .help("How hard the limiter is working. Jumps up with peaks, then falls slowly so you can see it.")
                 }
             }
 
@@ -350,7 +356,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
                 .keyboardShortcut(.space, modifiers: [])
-                .disabled(session.sourceURL == nil || session.isBusy)
+                .disabled(!session.hasFile || session.isBusy)
                 .help("Spacebar toggles play/pause")
 
                 Text(LevelerSession.formatTime(seconds: session.playheadSeconds))
@@ -396,12 +402,12 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 150)
-                .disabled(!session.hasResult)
-                .help("PRE is the file you dropped. POST is after leveling. Time stays put when you flip.")
+                .disabled(!session.canListenPost)
+                .help("PRE is the file you dropped. POST is the live maximizer (MUSIC LOUD) or the leveled file. Time stays put when you flip.")
 
                 Button("RE-LEVEL") { session.process() }
                     .buttonStyle(LevelerGhostButtonStyle())
-                    .disabled(session.sourceURL == nil || session.isBusy)
+                    .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
 
                 Spacer()
 
@@ -409,8 +415,8 @@ struct ContentView: View {
                     session.exportLeveled()
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
-                .disabled(!session.hasResult || session.isBusy)
-                .help("Choose a folder and file name for the leveled WAV")
+                .disabled((session.preset.isMaximizer ? !session.hasFile : !session.hasResult) || session.isBusy)
+                .help("Choose a folder and file name. MUSIC LOUD exports the current THRESHOLD.")
             }
         }
         .padding(12)
@@ -480,7 +486,7 @@ struct ContentView: View {
     }
 }
 
-/// Fast L1-style attenuation meter. Fill is live GR; pip is peak hold.
+/// GR meter. Fill follows live reduction with a slow fall; pip is peak hold.
 private struct GainReductionMeter: View {
     var liveDb: Float
     var peakDb: Float

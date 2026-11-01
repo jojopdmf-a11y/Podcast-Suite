@@ -10,6 +10,8 @@ final class LevelerSession: ObservableObject {
     @Published var sourceName: String = ""
     @Published var status: String = "Drop a final mix to begin"
     @Published var isBusy = false
+    /// MUSIC LOUD FILE LOUDNESS rewrite — does not freeze Play or THRESHOLD.
+    @Published var isMeasuring = false
     @Published var preset: PlatformPreset = .universal
     @Published var customLUFS: Float = -16
     @Published var customTP: Float = -1
@@ -49,6 +51,8 @@ final class LevelerSession: ObservableObject {
     private let playback = LevelerPlaybackEngine()
     private var loadGeneration: UInt64 = 0
     private var processGeneration: UInt64 = 0
+    /// If THRESHOLD is released while FILE LOUDNESS is still rewriting, run once more.
+    private var measureAgain = false
 
     var activeTargetLUFS: Float {
         preset.isCustom ? customLUFS : preset.targetLUFS
@@ -75,6 +79,17 @@ final class LevelerSession: ObservableObject {
     var musicMakeupDb: Float {
         Self.musicCeilingDb - musicThresholdDb
     }
+
+    var hasFile: Bool { sourceStore != nil }
+
+    /// POST is live for MUSIC LOUD; other presets need a finished leveled file.
+    var canListenPost: Bool {
+        guard hasFile else { return false }
+        if preset.isMaximizer { return true }
+        return hasResult
+    }
+
+    var liveMaximizerActive: Bool { preset.isMaximizer && hasFile }
 
     var listedPresets: [PlatformPreset] {
         PlatformPreset.factory + userPresets.map(\.asPlatformPreset) + [.custom]
@@ -116,6 +131,17 @@ final class LevelerSession: ObservableObject {
         if !p.isCustom, let match = userPresets.first(where: { $0.id == p.id }) {
             customLUFS = match.targetLUFS
             customTP = match.truePeakDbTP
+        }
+        if p.isMaximizer, hasFile {
+            playAfter = true
+            playback.setPlayPost(true)
+            syncLiveMaximizer()
+        } else {
+            syncLiveMaximizer()
+            if !hasResult {
+                playAfter = false
+                playback.setPlayPost(false)
+            }
         }
         process()
     }
@@ -166,6 +192,8 @@ final class LevelerSession: ObservableObject {
         isBusy = true
         status = "Loading…"
         hasResult = false
+        isMeasuring = false
+        measureAgain = false
         before = .empty
         after = .empty
         appliedGainDb = 0
@@ -209,6 +237,12 @@ final class LevelerSession: ObservableObject {
                     self.peakGR = 0
                     self.filePeakGR = 0
                     self.playback.load(pre: store, post: nil)
+                    if self.preset.isMaximizer {
+                        self.isBusy = false
+                        self.playAfter = true
+                        self.syncLiveMaximizer()
+                        self.playback.setPlayPost(true)
+                    }
                     self.status = String(
                         format: "Loaded · %@ · %d ch · %.0f Hz · integrated %.1f LUFS",
                         Self.formatTime(seconds: report.durationSec),
@@ -228,24 +262,40 @@ final class LevelerSession: ObservableObject {
         }
     }
 
+    func setMusicThreshold(_ db: Float) {
+        musicThresholdDb = min(Self.musicThresholdMax, max(Self.musicThresholdMin, db))
+        syncLiveMaximizer()
+    }
+
     func process() {
         guard let sourceStore else {
             status = "Load a file first."
             return
         }
+        let maximizer = preset.isMaximizer
+        if maximizer, isMeasuring {
+            measureAgain = true
+            return
+        }
+        measureAgain = false
         processGeneration += 1
         let gen = processGeneration
-        isBusy = true
-        let maximizer = preset.isMaximizer
         let target = activeTargetLUFS
         let tp = activeTruePeak
         let store = sourceStore
-        status = maximizer
-            ? "Maximizing…"
-            : "Leveling to \(String(format: "%.1f", target)) LUFS…"
         let threshold = musicThresholdDb
         let ceiling = Self.musicCeilingDb
-        playback.setMaximizerMakeup(db: musicMakeupDb, enabled: maximizer)
+        syncLiveMaximizer()
+        if maximizer {
+            isMeasuring = true
+            if !isPlaying {
+                status = "Updating FILE LOUDNESS…"
+            }
+        } else {
+            isMeasuring = false
+            isBusy = true
+            status = "Leveling to \(String(format: "%.1f", target)) LUFS…"
+        }
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -259,7 +309,8 @@ final class LevelerSession: ObservableObject {
                     ) { fraction in
                         Task { @MainActor in
                             guard self.processGeneration == gen else { return }
-                            self.status = String(format: "Maximizing… %.0f%%", fraction * 100)
+                            if self.isPlaying { return }
+                            self.status = String(format: "Updating FILE LOUDNESS… %.0f%%", fraction * 100)
                         }
                     }
                     (out, report, gain) = (result.0, result.1, result.2)
@@ -287,19 +338,29 @@ final class LevelerSession: ObservableObject {
                     self.appliedGainDb = gain
                     self.hasResult = true
                     self.playback.setPost(out)
-                    self.playback.setMaximizerMakeup(db: self.musicMakeupDb, enabled: maximizer)
+                    self.syncLiveMaximizer()
                     if maximizer {
-                        self.liveGR = 0
                         self.filePeakGR = renderGR
-                        self.peakGR = renderGR
+                        self.peakGR = max(self.peakGR, renderGR)
+                        self.isMeasuring = false
+                        if self.measureAgain {
+                            self.process()
+                            return
+                        }
+                    } else {
+                        self.isBusy = false
                     }
-                    self.isBusy = false
                     self.status = self.isPlaying ? self.playingStatus() : self.readyStatus()
                 }
             } catch {
                 await MainActor.run {
                     guard self.processGeneration == gen else { return }
-                    self.isBusy = false
+                    if maximizer {
+                        self.isMeasuring = false
+                        self.measureAgain = false
+                    } else {
+                        self.isBusy = false
+                    }
                     self.status = error.localizedDescription
                 }
             }
@@ -307,7 +368,17 @@ final class LevelerSession: ObservableObject {
     }
 
     func exportLeveled() {
-        guard let leveledStore, let sourceURL else {
+        guard let sourceURL else {
+            status = "Nothing to export yet."
+            return
+        }
+        let maximizer = preset.isMaximizer
+        if maximizer {
+            guard sourceStore != nil else {
+                status = "Nothing to export yet."
+                return
+            }
+        } else if leveledStore == nil {
             status = "Nothing to export yet."
             return
         }
@@ -331,15 +402,43 @@ final class LevelerSession: ObservableObject {
         }
         isBusy = true
         status = "Exporting…"
-        let store = leveledStore
+        let bounceSource = sourceStore
+        let baked = leveledStore
         let destURL = dest
         let gen = loadGeneration
+        let threshold = musicThresholdDb
+        let ceiling = Self.musicCeilingDb
         Task.detached(priority: .userInitiated) {
             do {
-                try WAVIO.write(url: destURL, store: store) { fraction in
-                    Task { @MainActor in
-                        guard self.loadGeneration == gen else { return }
-                        self.status = String(format: "Exporting… %.0f%%", fraction * 100)
+                if maximizer {
+                    guard let bounceSource else {
+                        throw LevelerError.processFailed("Nothing to export yet.")
+                    }
+                    let result = try LoudnessEngine.maximize(
+                        bounceSource,
+                        thresholdDb: threshold,
+                        ceilingDb: ceiling
+                    ) { fraction in
+                        Task { @MainActor in
+                            guard self.loadGeneration == gen else { return }
+                            self.status = String(format: "Exporting… %.0f%%", fraction * 100)
+                        }
+                    }
+                    try WAVIO.write(url: destURL, store: result.0) { fraction in
+                        Task { @MainActor in
+                            guard self.loadGeneration == gen else { return }
+                            self.status = String(format: "Writing WAV… %.0f%%", fraction * 100)
+                        }
+                    }
+                } else {
+                    guard let baked else {
+                        throw LevelerError.processFailed("Nothing to export yet.")
+                    }
+                    try WAVIO.write(url: destURL, store: baked) { fraction in
+                        Task { @MainActor in
+                            guard self.loadGeneration == gen else { return }
+                            self.status = String(format: "Exporting… %.0f%%", fraction * 100)
+                        }
                     }
                 }
                 await MainActor.run {
@@ -378,7 +477,7 @@ final class LevelerSession: ObservableObject {
     }
 
     func setListenPost(_ listenPost: Bool) {
-        let next = listenPost && hasResult
+        let next = listenPost && canListenPost
         playAfter = next
         playback.setPlayPost(next)
         if isPlaying {
@@ -437,7 +536,17 @@ final class LevelerSession: ObservableObject {
     }
 
     private func playingStatus() -> String {
-        playAfter ? "Playing POST (leveled)…" : "Playing PRE (source)…"
+        if playAfter {
+            return preset.isMaximizer ? "Playing POST (maximizer)…" : "Playing POST (leveled)…"
+        }
+        return "Playing PRE (source)…"
+    }
+
+    private func syncLiveMaximizer() {
+        playback.setLiveMaximizer(
+            enabled: preset.isMaximizer && sourceStore != nil,
+            makeupDb: musicMakeupDb
+        )
     }
 
     private func readyStatus() -> String {
@@ -458,6 +567,12 @@ final class LevelerSession: ObservableObject {
             )
         }
         if sourceURL != nil {
+            if preset.isMaximizer {
+                return String(
+                    format: "Ready · MUSIC LOUD · thresh %.1f dB · drag THRESHOLD to listen",
+                    musicThresholdDb
+                )
+            }
             return "Ready"
         }
         return "Drop a final mix to begin"

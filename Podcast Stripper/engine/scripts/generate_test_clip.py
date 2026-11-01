@@ -68,13 +68,24 @@ def generate(output: Path, sample_rate: int = 16000) -> tuple[Path, Path]:
             try:
                 _say_to_wav(host_text, "Samantha", host, sample_rate)
                 _say_to_wav(guest_text, "Alex", guest, sample_rate)
-                host_audio, _ = load_wav(host)
-                guest_audio, _ = load_wav(guest)
-                host_seconds = host_audio.shape[0] / sample_rate
+                host_audio, host_rate = load_wav(host)
+                guest_audio, guest_rate = load_wav(guest)
+                # Prefer the rate afconvert actually wrote if it differs.
+                effective_rate = int(host_rate) if host_rate else sample_rate
+                if guest_rate and int(guest_rate) != effective_rate:
+                    raise RuntimeError(
+                        f"TTS sample rates differ ({host_rate} vs {guest_rate})"
+                    )
+                host_seconds = host_audio.shape[0] / effective_rate
                 guest_start = host_seconds + gap
-                guest_seconds = guest_audio.shape[0] / sample_rate
+                guest_seconds = guest_audio.shape[0] / effective_rate
                 mix = np.concatenate(
-                    [host_audio, _silence(gap, sample_rate), guest_audio, _silence(0.4, sample_rate)],
+                    [
+                        host_audio,
+                        _silence(gap, effective_rate),
+                        guest_audio,
+                        _silence(0.4, effective_rate),
+                    ],
                     axis=0,
                 )
                 segments = [
@@ -85,11 +96,12 @@ def generate(output: Path, sample_rate: int = 16000) -> tuple[Path, Path]:
                         "speaker": "SPEAKER_01",
                     },
                 ]
-                save_wav(output, mix, sample_rate)
+                save_wav(output, mix, effective_rate)
                 sidecar = output.with_name(output.stem + "_segments.json")
                 sidecar.write_text(json.dumps({"segments": segments}, indent=2) + "\n", encoding="utf-8")
                 return output, sidecar
-            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+            except Exception:
+                # Any TTS / decode / shape issue → deterministic sine fallback.
                 pass
 
     mix = np.concatenate(
@@ -117,8 +129,14 @@ def main() -> int:
         "--output",
         default=str(Path(__file__).resolve().parents[2] / "fixtures" / "two_speakers.wav"),
     )
+    parser.add_argument(
+        "--sample-rate",
+        type=int,
+        default=16000,
+        help="Sample rate for the synthetic clip (default: 16000)",
+    )
     args = parser.parse_args()
-    wav, sidecar = generate(Path(args.output))
+    wav, sidecar = generate(Path(args.output), sample_rate=args.sample_rate)
     print(wav)
     print(sidecar)
     return 0

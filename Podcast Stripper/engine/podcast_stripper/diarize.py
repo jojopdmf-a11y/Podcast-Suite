@@ -341,7 +341,7 @@ def _friendly_failure(exc: Exception) -> str:
     if "libtorchcodec" in text or "Could not load libtorchcodec" in text:
         return (
             "Speaker detection could not read the audio (missing FFmpeg libraries). "
-            "Update Podcast Stripper and try again."
+            "Update PodStripper and try again."
         )
     compact = text.split("The following exceptions were raised", 1)[0].strip()
     if len(compact) > 280:

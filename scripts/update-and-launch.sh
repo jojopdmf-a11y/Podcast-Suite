@@ -9,22 +9,25 @@ cd "$ROOT"
 
 case "$APP_KEY" in
   fixer)
-    DISPLAY_NAME="Fixer Mixer"
+    DISPLAY_NAME="PodProducer"
+    LEGACY_NAME="Fixer Mixer"
     PROCESS_NAME="FixerMixer"
     BUILD_SCRIPT="$ROOT/FixerMixer/app/scripts/build_app.sh"
-    APP_PATH="$ROOT/FixerMixer/dist/Fixer Mixer.app"
+    APP_PATH="$ROOT/FixerMixer/dist/PodProducer.app"
     ;;
   leveler)
-    DISPLAY_NAME="Lil Leveler"
+    DISPLAY_NAME="PodLeveler"
+    LEGACY_NAME="Lil Leveler"
     PROCESS_NAME="LilLeveler"
     BUILD_SCRIPT="$ROOT/LilLeveler/app/scripts/build_app.sh"
-    APP_PATH="$ROOT/LilLeveler/dist/Lil Leveler.app"
+    APP_PATH="$ROOT/LilLeveler/dist/PodLeveler.app"
     ;;
   stripper)
-    DISPLAY_NAME="Podcast Stripper"
+    DISPLAY_NAME="PodStripper"
+    LEGACY_NAME="Podcast Stripper"
     PROCESS_NAME="PodcastStripper"
     BUILD_SCRIPT="$ROOT/Podcast Stripper/app/scripts/build_app.sh"
-    APP_PATH="$ROOT/Podcast Stripper/dist/Podcast Stripper.app"
+    APP_PATH="$ROOT/Podcast Stripper/dist/PodStripper.app"
     ;;
   *)
     echo "Usage: $0 fixer|leveler|stripper"
@@ -59,6 +62,7 @@ echo ""
 
 echo "==> Quitting any running $DISPLAY_NAME…"
 osascript -e "tell application \"$DISPLAY_NAME\" to quit" >/dev/null 2>&1 || true
+osascript -e "tell application \"$LEGACY_NAME\" to quit" >/dev/null 2>&1 || true
 for _ in {1..10}; do
   pgrep -x "$PROCESS_NAME" >/dev/null 2>&1 || break
   sleep 0.3

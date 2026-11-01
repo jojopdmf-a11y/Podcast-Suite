@@ -1,14 +1,14 @@
-# Lil Leveler
+# PodLeveler
 
 Mac loudness finisher for podcast finals: drop a mix → pick a platform target → export a file that hits that integrated LUFS + true-peak ceiling.
 
-Companion to **Podcast Stripper** and **Fixer Mixer**. Same dark cyan neon look.
+Companion to **PodStripper** and **PodProducer**. Same dark cyan neon look.
 
 ## Test an update
 
-In the Podcast Suite folder, double-click **`Update Lil Leveler.command`**. That pulls GitHub, rebuilds, and launches the app.
+In the PodStudio folder, double-click **`Update PodLeveler.command`**. That pulls GitHub, rebuilds, and launches the app.
 
-Needs **macOS 14 Sonoma or newer**. Leveler is the lightest of the three apps. See the suite README for Mac recommendations.
+Needs **macOS 14 Sonoma or newer**. PodLeveler is the lightest of the three apps. See the suite README for Mac recommendations.
 
 ## Build
 
@@ -17,12 +17,12 @@ chmod +x app/scripts/build_app.sh
 ./app/scripts/build_app.sh
 ```
 
-Opens `dist/Lil Leveler.app`.
+Opens `dist/PodLeveler.app`.
 
 ## Use
 
-1. Bounce a final mix from Fixer Mixer (or any stereo/mono master)
-2. Drop it onto Lil Leveler (WAV, AIFF, MP3, M4A, CAF, FLAC, …)
+1. Bounce a final mix from PodProducer (or any stereo/mono master)
+2. Drop it onto PodLeveler (WAV, AIFF, MP3, M4A, CAF, FLAC, …)
 3. Pick a platform preset, or **CUSTOM** then **SAVE PRESET** to keep your own LUFS / true-peak target
 4. Watch the PRE / POST Dorrough meters while you play, then read the **FILE LOUDNESS** cards (integrated, short-term, momentary, true peak, sample peak)
 5. Hit **PLAY**, drag the time slider, flip **A/B** between PRE (original) and POST (leveled)
@@ -50,4 +50,4 @@ Today the suite is **native macOS SwiftUI** (fast DSP, shared look). To ship Win
 2. Thin UI shells per OS (SwiftUI Mac first; later Tauri/Flutter/WinUI)
 3. Or a single **Tauri + Rust** app if you want one binary family sooner
 
-Lil Leveler’s DSP is intentionally small so it’s the easiest candidate to extract first.
+PodLeveler’s DSP is intentionally small so it’s the easiest candidate to extract first.

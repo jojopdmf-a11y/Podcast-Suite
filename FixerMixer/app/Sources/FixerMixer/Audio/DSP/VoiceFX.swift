@@ -6,6 +6,8 @@ struct LevelerDSP {
     var drive: Float = 0
     var targetDb: Float = -6
     var bypass: Bool = false
+    /// Live compressor gain reduction in dB (≥ 0). UI GR meter.
+    private(set) var meterGRDb: Float = 0
     private var env: Float = 0
     private var gain: Float = 1
     private var compGR: Float = 1
@@ -16,10 +18,14 @@ struct LevelerDSP {
         env = 0
         gain = 1
         compGR = 1
+        meterGRDb = 0
     }
 
     mutating func process(_ x: Float, sampleRate: Double) -> Float {
-        if bypass || drive < 0.001 { return x }
+        if bypass || drive < 0.001 {
+            meterGRDb *= 0.9
+            return x
+        }
 
         let absx = abs(x)
         let atk = exp(-1.0 / (attack * Float(sampleRate)))
@@ -64,6 +70,7 @@ struct LevelerDSP {
             compGR = grRel * compGR + (1 - grRel) * Float(targetGR)
         }
         y *= compGR
+        meterGRDb = max(0, -20 * log10(max(compGR, 1e-6)))
 
         // Soft limiter ceiling just above target — Drive leans harder into it
         let ceilingDb = targetDb + (1.0 - drive * 0.5) // ~+1 dB at low drive, +0.5 at full

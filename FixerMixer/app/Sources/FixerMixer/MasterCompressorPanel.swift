@@ -923,25 +923,25 @@ struct MasterCompressorPanel: View {
                 HardwareKnob(
                     value: $state.thresholdDb, range: -40...10, label: "THRESH",
                     valueText: { String(format: "%+.0f", $0) },
-                    style: .metal, diameter: 44, defaultValue: -12
+                    style: .metal, diameter: 44, defaultValue: 0
                 )
                 HardwareKnob(
                     value: $state.attackMs, range: 0.03...30, label: "ATTACK",
                     valueText: { String(format: $0 < 1 ? "%.2gms" : "%.0fms", $0) },
                     style: .metal, diameter: 44,
-                    stops: MasterCompressorState.attackStops, defaultValue: 1
+                    stops: MasterCompressorState.attackStops, defaultValue: 3
                 )
                 HardwareKnob(
                     value: $state.ratio, range: 1.5...100, label: "RATIO",
                     valueText: { $0 >= 40 ? "∞" : String(format: "%.1g:1", $0) },
                     style: .metal, diameter: 44,
-                    stops: MasterCompressorState.ratioStops, defaultValue: 4
+                    stops: MasterCompressorState.ratioStops, defaultValue: 3
                 )
                 HardwareKnob(
                     value: $state.releaseSec, range: 0.05...2, label: "RELEASE",
                     valueText: { String(format: $0 < 1 ? "%.2gs" : "%.0fs", $0) },
                     style: .metal, diameter: 44,
-                    stops: MasterCompressorState.releaseStops, defaultValue: 0.5
+                    stops: MasterCompressorState.releaseStops, defaultValue: 0.25
                 )
 
                 // Divider before output stage

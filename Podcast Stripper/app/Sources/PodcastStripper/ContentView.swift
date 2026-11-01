@@ -7,6 +7,8 @@ struct ContentView: View {
     @State private var inputFile: URL?
     @State private var outputFolder: URL?
     @State private var speakerCount: SpeakerCountChoice = .two
+    @State private var exportSampleRate: ExportSampleRateChoice = .native
+    @State private var exportAudioFormat: ExportAudioFormatChoice = .wav16
     @State private var showSettings = false
     @State private var showMacNeeds = false
     @State private var isDropTargeted = false
@@ -57,7 +59,7 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("PODCAST STRIPPER")
+                Text("PODSTRIPPER")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                     .tracking(1.5)
                     .foregroundStyle(StripperTheme.cyan)
@@ -153,7 +155,7 @@ struct ContentView: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyanDim)
-                    .frame(width: 88, alignment: .leading)
+                    .frame(width: 102, alignment: .leading)
                 Picker("Speakers", selection: $speakerCount) {
                     ForEach(SpeakerCountChoice.allCases) { choice in
                         Text(choice == .auto ? "AUTO" : "\(choice.rawValue)").tag(choice)
@@ -165,11 +167,45 @@ struct ContentView: View {
             }
 
             HStack(alignment: .center, spacing: 14) {
+                Text("SAMPLE RATE")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                Picker("Sample rate", selection: $exportSampleRate) {
+                    ForEach(ExportSampleRateChoice.allCases) { choice in
+                        Text(choice.rawValue.uppercased()).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+                .help("Tracks are split at the file’s native rate. Convert only when writing the files.")
+            }
+
+            HStack(alignment: .center, spacing: 14) {
+                Text("FORMAT")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                Picker("Format", selection: $exportAudioFormat) {
+                    ForEach(ExportAudioFormatChoice.allCases) { choice in
+                        Text(choice.rawValue.uppercased()).tag(choice)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+                .help("WAV 16-bit is the Mixer-friendly default. WAV 24-bit or AIFF 24-bit if your editor wants that.")
+            }
+
+            HStack(alignment: .center, spacing: 14) {
                 Text("SAVE TO")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyanDim)
-                    .frame(width: 88, alignment: .leading)
+                    .frame(width: 102, alignment: .leading)
                 Text(outputFolder?.path ?? "Same folder as the podcast · new _speakers folder")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(StripperTheme.textSecondary)
@@ -183,13 +219,13 @@ struct ContentView: View {
                 Button {
                     startSplit()
                 } label: {
-                    Text(runner.isRunning ? "WORKING…" : "SPLIT INTO TRACKS")
+                    Text(splitButtonTitle)
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .tracking(1.1)
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(StripperPrimaryButtonStyle())
-                .disabled(inputFile == nil || runner.isRunning)
+                .disabled(inputFile == nil || runner.isRunning || runner.isPreparingEngine)
                 .keyboardShortcut(.defaultAction)
 
                 if runner.isRunning {
@@ -240,6 +276,10 @@ struct ContentView: View {
                 Text(processingHint)
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
+            } else if runner.isPreparingEngine {
+                Text("First open can take a few minutes and about 2 GB. Stay on Wi-Fi. Homebrew is not required.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
             } else if runner.result != nil, runner.elapsedSeconds > 0 {
                 Text("Finished in \(runner.elapsedLabel).")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
@@ -255,10 +295,19 @@ struct ContentView: View {
     }
 
     private var progressValue: Double {
+        if runner.isPreparingEngine && !runner.isRunning {
+            return 0.12
+        }
         if runner.isRunning {
             return min(1, max(0.02, runner.percent / 100))
         }
         return runner.result == nil ? 0 : 1
+    }
+
+    private var splitButtonTitle: String {
+        if runner.isRunning { return "WORKING…" }
+        if runner.isPreparingEngine { return "INSTALLING ENGINE…" }
+        return "SPLIT INTO TRACKS"
     }
 
     private var processingHint: String {
@@ -334,7 +383,7 @@ struct ContentView: View {
 
     private var footerBrand: some View {
         HStack {
-            Text("THE STRIPPER")
+            Text("PODSTRIPPER")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(2)
                 .foregroundStyle(StripperTheme.cyanDim)
@@ -404,11 +453,17 @@ struct ContentView: View {
     }
 
     private func startSplit() {
-        guard let inputFile else { return }
+        guard let inputFile, !runner.isRunning, !runner.isPreparingEngine else { return }
         let dest = outputFolder ?? defaultOutput(for: inputFile)
         outputFolder = dest
         UserDefaults.standard.set(dest.path, forKey: "lastOutputFolder")
-        runner.split(input: inputFile, outputDir: dest, speakerCount: speakerCount)
+        runner.split(
+            input: inputFile,
+            outputDir: dest,
+            speakerCount: speakerCount,
+            sampleRate: exportSampleRate,
+            audioFormat: exportAudioFormat
+        )
     }
 
     private func defaultOutput(for input: URL) -> URL {
@@ -584,10 +639,17 @@ struct SettingsView: View {
                         .buttonStyle(StripperPrimaryButtonStyle(compact: true))
                         .keyboardShortcut(.defaultAction)
                 }
+                HStack(spacing: 14) {
+                    Link("Privacy", destination: URL(string: "https://cougarcalc.com/privacy")!)
+                        .foregroundStyle(StripperTheme.cyan)
+                    Link("Terms", destination: URL(string: "https://cougarcalc.com/terms")!)
+                        .foregroundStyle(StripperTheme.cyan)
+                }
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
             }
             .padding(24)
         }
-        .frame(width: 540, height: 400)
+        .frame(width: 540, height: 430)
         .preferredColorScheme(.dark)
         .onAppear {
             // Attributes-only check; usually avoids the password prompt that load() triggers.

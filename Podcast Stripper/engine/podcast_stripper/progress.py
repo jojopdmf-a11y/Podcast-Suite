@@ -49,9 +49,11 @@ def done(payload: dict[str, Any], *, json_progress: bool) -> None:
 
 
 def error(message: str, code: str, *, json_progress: bool) -> None:
-    emit({"event": "error", "message": message, "code": code}, json_progress=json_progress)
-    if not json_progress:
-        print(f"Error: {message}", file=sys.stderr, flush=True)
+    # Human mode: print once with an Error: prefix (emit alone would omit the prefix).
+    if json_progress:
+        emit({"event": "error", "message": message, "code": code}, json_progress=True)
+        return
+    print(f"Error: {message}", file=sys.stderr, flush=True)
 
 
 def format_elapsed(seconds: float) -> str:

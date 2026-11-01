@@ -132,16 +132,15 @@ struct VerticalFader: View {
                     }
             )
             .onTapGesture(count: 2) {
-                guard !autoDriven else { return }
                 valueDb = defaultValue
             }
 
-            Text(caption ?? (autoDriven ? "AUTO" : "FADER"))
+            Text(caption ?? "FADER")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(autoDriven ? MixerTheme.lime.opacity(0.8) : MixerTheme.cyanDim)
+                .foregroundStyle(MixerTheme.cyanDim)
                 .padding(.bottom, 1)
         }
-        .help(autoDriven ? "Auto Balance" : "Double-click to zero")
+        .help("Double-click to zero")
     }
 
     private var zeroTickOffset: CGFloat {
@@ -221,6 +220,83 @@ private struct FaderCap: View {
     }
 }
 
+/// Pan −1…+1 with ±50 readout; fill grows from center outward toward the thumb.
+private struct CenterOutPanSlider: View {
+    @Binding var pan: Float
+
+    private var panReadout: Int {
+        Int((pan * 50).rounded())
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text("PAN")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                Spacer(minLength: 0)
+                Text(panReadout == 0 ? "0" : String(format: "%+d", panReadout))
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.lime)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let trackH: CGFloat = 4
+                let thumbW: CGFloat = 10
+                let travel = max(w - thumbW, 1)
+                let norm = CGFloat((pan + 1) / 2) // 0…1
+                let thumbX = thumbW / 2 + norm * travel
+                let centerX = w / 2
+                let fillLeft = min(centerX, thumbX)
+                let fillWidth = abs(thumbX - centerX)
+
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.45))
+                        .frame(height: trackH)
+                        .frame(maxWidth: .infinity)
+                        .position(x: w / 2, y: h / 2)
+
+                    Capsule()
+                        .fill(MixerTheme.lime.opacity(0.85))
+                        .frame(width: max(fillWidth, 0), height: trackH)
+                        .position(x: fillLeft + fillWidth / 2, y: h / 2)
+
+                    Rectangle()
+                        .fill(MixerTheme.cyan.opacity(0.7))
+                        .frame(width: 1.5, height: trackH + 6)
+                        .position(x: centerX, y: h / 2)
+
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.95), Color(white: 0.7)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.8))
+                        .frame(width: thumbW, height: thumbW)
+                        .position(x: thumbX, y: h / 2)
+                }
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { g in
+                            let x = min(w - thumbW / 2, max(thumbW / 2, g.location.x))
+                            let n = (x - thumbW / 2) / travel
+                            pan = Float(min(1, max(-1, n * 2 - 1)))
+                        }
+                )
+                .onTapGesture(count: 2) { pan = 0 }
+            }
+            .frame(height: 16)
+        }
+        .help("Pan L/R (−50…+50). Double-click to center.")
+    }
+}
+
 struct GraphicEQView: View {
     @Binding var eq: ChannelEQ
 
@@ -278,6 +354,39 @@ struct BypassToggle: View {
         }
         .buttonStyle(.plain)
         .help(bypass ? "Bypassed — click to engage" : "Engaged — click to bypass")
+    }
+}
+
+private struct StripReorderDrag: ViewModifier {
+    var enabled: Bool
+    var channelID: Int
+    var onDrop: (Int) -> Bool
+    var onTargeted: (Bool) -> Void
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .draggable("ch:\(channelID)") {
+                    Text("MOVE")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(MixerTheme.lime)
+                        .foregroundStyle(MixerTheme.bgBottom)
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .dropDestination(for: String.self) { items, _ in
+                    guard let raw = items.first, raw.hasPrefix("ch:"),
+                          let moved = Int(raw.dropFirst(3)),
+                          moved != channelID else { return false }
+                    return onDrop(moved)
+                } isTargeted: { targeted in
+                    onTargeted(targeted)
+                }
+        } else {
+            content
+        }
     }
 }
 
@@ -356,51 +465,67 @@ struct ChannelStripView: View {
     @Binding var channel: ChannelStripState
     var faderDb: Binding<Float>
     var autoDriven: Bool
+    /// Live applied auto-mix / auto-duck gain in dB (nil when off).
+    var autoGainDb: Float? = nil
+    /// Show per-mono AUTO include checkbox.
+    var showAutoInclude: Bool = false
     var isSelected: Bool
+    var hardwareInputChannels: Int = 0
+    var isRecording: Bool = false
+    var canRemove: Bool = false
     var onSelect: () -> Void
     var onChange: () -> Void
+    var onRemove: (() -> Void)? = nil
+    var stripReorderable: Bool = false
+    var isReorderDropTarget: Bool = false
+    var onReorderDrop: ((Int) -> Void)? = nil
+    var onReorderTargeted: ((Bool) -> Void)? = nil
 
+    /// 15% narrower than the original 156pt desk.
+    static let stripWidth: CGFloat = 133
     /// Keeps music strip the same height as full speaker strips.
-    static let stripHeight: CGFloat = 484
+    static let stripHeight: CGFloat = 548
 
     @State private var dropTargetSlot: ChannelDSPSlot?
     @State private var isRenaming = false
+    @State private var confirmRemove = false
     @FocusState private var nameFieldFocused: Bool
 
     private var fxDimmed: Bool { channel.dspBypass }
-    private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 }
+    private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 && !stripReorderable }
     private var canRename: Bool { !channel.isStereo }
 
     var body: some View {
         VStack(spacing: 8) {
             VStack(spacing: 3) {
-                HStack(alignment: .center, spacing: 6) {
+                HStack(alignment: .center, spacing: 4) {
                     channelNameLabel
-                    Spacer(minLength: 0)
-                    Button(action: onSelect) {
-                        Text(isSelected ? "SEL●" : "SEL")
-                            .font(.system(size: 7, weight: .bold, design: .rounded))
-                            .tracking(0.3)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 3)
-                            .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .stroke(isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .help("Select this channel for the waveform timeline")
+                    Spacer(minLength: 2)
+                    SelectChannelButton(isSelected: isSelected, action: onSelect)
+                        .help("Select this channel for the waveform timeline")
                 }
+                inputGainRow
                 Text(channel.fileURL?.lastPathComponent ?? "— empty —")
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                if !channel.isStereo {
+                    inputRow
+                }
+                if stripReorderable {
+                    Text("DRAG TO REORDER")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .tracking(0.4)
+                        .foregroundStyle(MixerTheme.bgBottom)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(MixerTheme.lime)
+                        )
+                        .help("Drag this strip onto another strip to change order")
+                }
             }
 
             if !channel.isStereo {
@@ -473,58 +598,212 @@ struct ChannelStripView: View {
 
             Spacer(minLength: 0)
 
-            HStack(spacing: 6) {
-                LevelMeter(level: channel.prePeak, label: "PRE")
-                VerticalFader(valueDb: faderDb, autoDriven: autoDriven)
-                LevelMeter(level: channel.postPeak, label: "POST")
+            if showAutoInclude, !channel.isStereo {
+                Toggle(isOn: Binding(
+                    get: { channel.includeInAutoMix },
+                    set: {
+                        channel.includeInAutoMix = $0
+                        onChange()
+                    }
+                )) {
+                    Text("AUTO")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(channel.includeInAutoMix ? MixerTheme.lime : MixerTheme.cyanDim)
+                }
+                .toggleStyle(.checkbox)
+                .help("Include this mono in Auto Mix / Auto Duck. Unchecked = bypass (unity).")
             }
-            .frame(height: 130)
+
+            HStack(spacing: 6) {
+                LevelMeter(level: channel.prePeak, label: "IN")
+                VStack(spacing: 2) {
+                    // Fader always shows baseline weighting; auto ride is the readout below.
+                    VerticalFader(valueDb: faderDb, autoDriven: false)
+                    if autoDriven, let g = autoGainDb {
+                        Text(String(format: "%+.1f", g))
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(MixerTheme.lime.opacity(0.9))
+                            .help("Applied auto-mix / auto-duck gain (dB). Fader = baseline weighting.")
+                    }
+                }
+                LevelMeter(level: channel.postPeak, label: "OUT")
+            }
+            .frame(height: autoDriven && autoGainDb != nil ? 148 : 130)
             .help(autoDriven
-                  ? "Auto Balance rides this fader. Drag to favor/cut this speaker relative to auto."
+                  ? "Fader sets baseline weighting while Auto Mix / Auto Duck is on. Live ride is the readout under the fader."
                   : "Channel level")
 
-            Button {
-                channel.mute.toggle()
-                onChange()
-            } label: {
-                Text(channel.mute ? "MUTED" : "MUTE")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+            HStack(spacing: 6) {
+                Button {
+                    channel.mute.toggle()
+                    onChange()
+                } label: {
+                    Text(channel.mute ? "MUTED" : "MUTE")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(channel.mute ? MixerTheme.bgBottom : MixerTheme.cyan)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(channel.mute ? MixerTheme.danger : MixerTheme.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Mutes the whole strip. Linked monos share mute. To punch a cough, select this strip and Shift-drag on the waveform.")
+
+                Button {
+                    channel.solo.toggle()
+                    onChange()
+                } label: {
+                    Text(channel.solo ? "SOLO●" : "SOLO")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
+                        .foregroundStyle(channel.solo ? MixerTheme.bgBottom : MixerTheme.cyan)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(channel.solo ? MixerTheme.meterYellow : MixerTheme.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Hear this strip alone. Turn SOLO on more than one to hear those together. MUTE still silences a strip.")
+            }
+
+            CenterOutPanSlider(pan: Binding(
+                get: { channel.pan },
+                set: {
+                    channel.pan = $0
+                    onChange()
+                }
+            ))
+
+            if canRemove {
+                Button("REMOVE") { confirmRemove = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.danger)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(channel.mute ? MixerTheme.bgBottom : MixerTheme.cyan)
+                    .padding(.vertical, 4)
                     .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(channel.mute ? MixerTheme.danger : MixerTheme.panelRaised)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(MixerTheme.panelRaised)
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .stroke(MixerTheme.danger.opacity(0.55), lineWidth: 1)
                     )
-            }
-            .buttonStyle(.plain)
-
-            VStack(spacing: 2) {
-                Text("PAN")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .foregroundStyle(MixerTheme.cyanDim)
-                Slider(value: Binding(
-                    get: { Double(channel.pan) },
-                    set: { channel.pan = Float($0) }
-                ), in: -1...1)
-                .tint(MixerTheme.lime)
-                .frame(width: 100)
-                .onTapGesture(count: 2) { channel.pan = 0 }
+                    .help("This strip has no audio. Remove it if you added it by mistake.")
+                    .disabled(isRecording)
+                    .confirmationDialog(
+                        "Remove \(channel.name)?",
+                        isPresented: $confirmRemove,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Remove Strip", role: .destructive) { onRemove?() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Only empty speaker strips can be removed. This cannot be undone.")
+                    }
             }
         }
-        .padding(10)
-        .frame(width: 156, height: Self.stripHeight, alignment: .top)
+        .padding(8)
+        .frame(width: Self.stripWidth, height: Self.stripHeight, alignment: .top)
         .mixerPanel(glow: isSelected || channel.fileURL != nil)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(isSelected ? MixerTheme.lime : .clear, lineWidth: 2)
-                .shadow(color: isSelected ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
+                .stroke(
+                    isReorderDropTarget ? MixerTheme.lime : (isSelected ? MixerTheme.lime : .clear),
+                    lineWidth: isReorderDropTarget ? 3 : 2
+                )
+                .shadow(color: (isReorderDropTarget || isSelected) ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
+        )
+        .modifier(
+            StripReorderDrag(
+                enabled: stripReorderable,
+                channelID: channel.id,
+                onDrop: { moved in
+                    onReorderDrop?(moved)
+                    return true
+                },
+                onTargeted: { targeted in
+                    onReorderTargeted?(targeted)
+                }
+            )
         )
         .onChange(of: channel) { _, _ in onChange() }
+    }
+
+    private var inputRow: some View {
+        HStack(spacing: 4) {
+            Text("IN")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+            Picker(
+                "Input",
+                selection: Binding(
+                    get: { channel.inputChannel.map { $0 + 1 } ?? 0 },
+                    set: { channel.inputChannel = $0 == 0 ? nil : $0 - 1 }
+                )
+            ) {
+                Text("—").tag(0)
+                if hardwareInputChannels > 0 {
+                    ForEach(1...hardwareInputChannels, id: \.self) { n in
+                        Text("\(n)").tag(n)
+                    }
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: .infinity)
+            .disabled(isRecording || hardwareInputChannels <= 0)
+            .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
+            if isRecording, channel.inputChannel != nil {
+                Text("REC")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.bgBottom)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(MixerTheme.danger))
+            }
+        }
+    }
+
+    private var inputGainRow: some View {
+        HStack(spacing: 4) {
+            Text("GAIN")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+            Slider(
+                value: Binding(
+                    get: { Double(channel.inputGainDb) },
+                    set: {
+                        channel.inputGainDb = Float($0)
+                        channel.clampInputGain()
+                        onChange()
+                    }
+                ),
+                in: Double(ChannelStripState.minInputGainDb)...Double(ChannelStripState.maxInputGainDb)
+            )
+            .controlSize(.mini)
+            .tint(MixerTheme.cyan)
+            Text(abs(channel.inputGainDb) < 0.05 ? "0" : String(format: "%+.0f", channel.inputGainDb))
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(MixerTheme.lime)
+                .frame(width: 28, alignment: .trailing)
+        }
+        .help("Input trim before DSP (−18…+36 dB). IN meter reads after this gain.")
+        .onTapGesture(count: 2) {
+            channel.inputGainDb = 0
+            onChange()
+        }
     }
 
     @ViewBuilder
@@ -551,10 +830,11 @@ struct ChannelStripView: View {
                 }
         } else {
             Text(channel.name)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-                .tracking(1)
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .tracking(0.6)
                 .foregroundStyle(isSelected ? MixerTheme.lime : MixerTheme.cyan)
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
                 .help(canRename ? "Double-click to rename (used for bounce filenames)" : channel.name)
                 .onTapGesture(count: 2) {
                     guard canRename else { return }
@@ -581,7 +861,7 @@ struct ChannelStripView: View {
     private func isSlotActive(_ slot: ChannelDSPSlot) -> Bool {
         switch slot {
         case .eq:
-            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive
+            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive || channel.deess.isActive
         case .deVerb:
             return channel.voice.deVerb > 0.02
         case .wetter:
@@ -611,10 +891,21 @@ struct TimelineWaveformView: View {
     var channelName: String
     var currentTime: String
     var duration: String
+    var muteSpans: [(Double, Double)] = []
     var onSeek: (Double) -> Void
+    var onPaintMute: (Double, Double) -> Void = { _, _ in }
+    var onClearMute: (Double, Double) -> Void = { _, _ in }
+    var onShowAllTracks: (() -> Void)? = nil
 
     @State private var zoom: Double = 1
     @State private var start: Double = 0
+    @State private var dragKind: WaveDragKind?
+    @State private var dragStart: Double?
+    @State private var dragCurrent: Double?
+
+    private enum WaveDragKind {
+        case seek, mute, clear
+    }
 
     private var window: Double { 1 / max(1, zoom) }
 
@@ -653,6 +944,11 @@ struct TimelineWaveformView: View {
                     .buttonStyle(MixerGhostButtonStyle())
                     .disabled(zoom <= 1.01)
                     .help("Show the whole file")
+                if let onShowAllTracks {
+                    Button("ALL TRACKS") { onShowAllTracks() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                        .help("Stack every strip’s waveform in one box. Extra lanes scroll; Mixer stays on screen. Click a lane to zoom in.")
+                }
             }
 
             GeometryReader { geo in
@@ -681,6 +977,18 @@ struct TimelineWaveformView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
 
+                    ForEach(Array(muteSpans.enumerated()), id: \.offset) { _, span in
+                        muteOverlay(span: span, width: w, color: MixerTheme.danger.opacity(0.32))
+                    }
+
+                    if let kind = dragKind, kind != .seek, let a = dragStart, let b = dragCurrent {
+                        muteOverlay(
+                            span: (min(a, b), max(a, b)),
+                            width: w,
+                            color: kind == .mute ? MixerTheme.danger.opacity(0.45) : MixerTheme.lime.opacity(0.35)
+                        )
+                    }
+
                     if localPlayhead >= 0, localPlayhead <= 1 {
                         Rectangle()
                             .fill(MixerTheme.lime)
@@ -694,19 +1002,50 @@ struct TimelineWaveformView: View {
                         .gesture(
                             DragGesture(minimumDistance: 0)
                                 .onChanged { value in
-                                    let tVis = max(0, min(1, value.location.x / max(w, 1)))
-                                    onSeek(start + tVis * window)
+                                    let t = xToNormalized(value.location.x, width: w)
+                                    if dragKind == nil {
+                                        let flags = NSEvent.modifierFlags
+                                        if flags.contains(.shift) {
+                                            dragKind = .mute
+                                        } else if flags.contains(.option) {
+                                            dragKind = .clear
+                                        } else {
+                                            dragKind = .seek
+                                        }
+                                        dragStart = t
+                                    }
+                                    dragCurrent = t
+                                    if dragKind == .seek {
+                                        onSeek(t)
+                                    }
+                                }
+                                .onEnded { value in
+                                    let t = xToNormalized(value.location.x, width: w)
+                                    let a = dragStart ?? t
+                                    let b = t
+                                    let kind = dragKind
+                                    dragKind = nil
+                                    dragStart = nil
+                                    dragCurrent = nil
+                                    let minNorm = (3.0 / max(Double(w), 1)) * window
+                                    if kind == .mute, abs(b - a) >= minNorm {
+                                        onPaintMute(a, b)
+                                    } else if kind == .clear, abs(b - a) >= minNorm {
+                                        onClearMute(a, b)
+                                    } else {
+                                        onSeek(b)
+                                    }
                                 }
                         )
                         .overlay {
                             WaveformPointerZoom { event in
-                                handlePointerZoom(event, width: w)
+                                handlePointerScroll(event, width: w)
                             }
                         }
                 }
             }
             .frame(height: 88)
-            .help("Scroll or pinch to zoom · − / + / RESET also work")
+            .help("Click to seek · SEL a strip first · Shift-drag to silence that span (show stays this long) · Option-drag to clear · pinch or scroll up/down to zoom · swipe left/right to move when zoomed · RESET shows the whole file")
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
@@ -717,6 +1056,27 @@ struct TimelineWaveformView: View {
         }
         .padding(12)
         .mixerPanel()
+    }
+
+    @ViewBuilder
+    private func muteOverlay(span: (Double, Double), width w: CGFloat, color: Color) -> some View {
+        let left = (span.0 - start) / window
+        let right = (span.1 - start) / window
+        let lo = max(0.0, min(1.0, left))
+        let hi = max(0.0, min(1.0, right))
+        if hi > lo {
+            Rectangle()
+                .fill(color)
+                .frame(width: max(1, CGFloat(hi - lo) * w))
+                .frame(maxHeight: .infinity)
+                .offset(x: CGFloat(lo) * w)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func xToNormalized(_ x: CGFloat, width w: CGFloat) -> Double {
+        let tVis = max(0, min(1, x / max(w, 1)))
+        return start + tVis * window
     }
 
     private func nudgeZoom(_ factor: Double) {
@@ -733,6 +1093,29 @@ struct TimelineWaveformView: View {
         let frac = max(0, min(1, fractionInWindow))
         start = min(max(0, anchor - frac * nextWindow), max(0, 1 - nextWindow))
         zoom = z
+    }
+
+    /// Returns true when the gesture was used (zoom or pan) so the parent mixer scroll does not also move.
+    private func handlePointerScroll(_ event: NSEvent, width: CGFloat) -> Bool {
+        if event.type == .scrollWheel,
+           abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
+            return panVisible(deltaX: event.scrollingDeltaX, width: width, precise: event.hasPreciseScrollingDeltas)
+        }
+        handlePointerZoom(event, width: width)
+        return true
+    }
+
+    private func panVisible(deltaX: CGFloat, width: CGFloat, precise: Bool) -> Bool {
+        guard zoom > 1.001, width > 1 else { return false }
+        var dx = deltaX
+        if !precise {
+            dx *= 8
+        }
+        // scrollingDeltaX already follows the Mac “natural scroll” preference:
+        // swipe right moves the wave with your fingers (earlier audio).
+        let next = start - (Double(dx) / Double(width)) * window
+        start = min(max(0, next), max(0, 1 - window))
+        return true
     }
 
     private func handlePointerZoom(_ event: NSEvent, width: CGFloat) {
@@ -764,11 +1147,176 @@ struct TimelineWaveformView: View {
     }
 }
 
-/// Scroll-wheel / trackpad pinch zoom without stealing click-drag seek.
+/// Stacked waveforms for every loaded strip. Visual overview — click a lane to zoom in on that channel.
+struct OverviewWaveformView: View {
+    var lanes: [MixerWaveformLane]
+    var playhead: Double
+    var currentTime: String
+    var duration: String
+    var onSeek: (Double) -> Void
+    var onFocusLane: (Int) -> Void
+    var onShowOne: () -> Void
+
+    @State private var draggingLane: Int?
+    @State private var didSeek = false
+
+    private let nameWidth: CGFloat = 78
+    private let laneHeight: CGFloat = 44
+    private let laneGap: CGFloat = 4
+    /// Extra lanes scroll inside this box so Mixer stays on screen.
+    private let maxStackHeight: CGFloat = 220
+
+    private var stackHeight: CGFloat {
+        let n = max(1, lanes.count)
+        return CGFloat(n) * laneHeight + CGFloat(max(0, n - 1)) * laneGap
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("WAVEFORM · ALL TRACKS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(MixerTheme.cyanDim)
+                Spacer()
+                Text("\(currentTime)  /  \(duration)")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.cyan)
+                Button("ONE TRACK") { onShowOne() }
+                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Back to one channel’s waveform")
+            }
+            Text("Click a lane to zoom in · drag to seek · extra tracks scroll in this box")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(MixerTheme.textSecondary)
+
+            ScrollView(.vertical, showsIndicators: stackHeight > maxStackHeight) {
+                VStack(spacing: laneGap) {
+                    ForEach(lanes) { lane in
+                        laneRow(lane)
+                    }
+                }
+            }
+            .frame(height: min(stackHeight, maxStackHeight))
+        }
+        .padding(12)
+        .mixerPanel()
+    }
+
+    private func laneRow(_ lane: MixerWaveformLane) -> some View {
+        HStack(spacing: 8) {
+            Text(lane.name)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyan)
+                .lineLimit(1)
+                .frame(width: nameWidth, alignment: .leading)
+                .help("Click to zoom in on \(lane.name)")
+                .onTapGesture { onFocusLane(lane.id) }
+
+            GeometryReader { geo in
+                let w = geo.size.width
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(MixerTheme.panelRaised)
+                    WaveformPeaksCanvas(peaks: lane.peaks)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    ForEach(Array(lane.muteSpans.enumerated()), id: \.offset) { _, span in
+                        overviewMute(span: span, width: w)
+                    }
+                    if playhead >= 0, playhead <= 1 {
+                        Rectangle()
+                            .fill(MixerTheme.lime)
+                            .frame(width: 2)
+                            .shadow(color: MixerTheme.lime.opacity(0.7), radius: 3)
+                            .offset(x: CGFloat(playhead) * max(w - 2, 1))
+                    }
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { value in
+                                    if draggingLane == nil {
+                                        draggingLane = lane.id
+                                        didSeek = false
+                                    }
+                                    guard draggingLane == lane.id else { return }
+                                    if abs(value.translation.width) >= 4 {
+                                        didSeek = true
+                                        onSeek(xToNormalized(value.location.x, width: w))
+                                    }
+                                }
+                                .onEnded { value in
+                                    guard draggingLane == lane.id else { return }
+                                    let seeked = didSeek
+                                    draggingLane = nil
+                                    didSeek = false
+                                    if seeked {
+                                        onSeek(xToNormalized(value.location.x, width: w))
+                                    } else {
+                                        onFocusLane(lane.id)
+                                    }
+                                }
+                        )
+                }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(MixerTheme.cyan.opacity(0.35), lineWidth: 1)
+                )
+            }
+            .frame(height: laneHeight)
+        }
+        .frame(height: laneHeight)
+    }
+
+    @ViewBuilder
+    private func overviewMute(span: (Double, Double), width w: CGFloat) -> some View {
+        let lo = max(0.0, min(1.0, span.0))
+        let hi = max(0.0, min(1.0, span.1))
+        if hi > lo {
+            Rectangle()
+                .fill(MixerTheme.danger.opacity(0.32))
+                .frame(width: max(1, CGFloat(hi - lo) * w))
+                .frame(maxHeight: .infinity)
+                .offset(x: CGFloat(lo) * w)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private func xToNormalized(_ x: CGFloat, width w: CGFloat) -> Double {
+        max(0, min(1, x / max(w, 1)))
+    }
+}
+
+private struct WaveformPeaksCanvas: View {
+    var peaks: [Float]
+
+    var body: some View {
+        Canvas { context, size in
+            let display = peaks
+            let count = max(display.count, 1)
+            let mid = size.height / 2
+            for (i, peak) in display.enumerated() {
+                let x = size.width * CGFloat(i) / CGFloat(count)
+                let amp = CGFloat(peak) * (size.height * 0.42)
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: mid - amp))
+                path.addLine(to: CGPoint(x: x, y: mid + amp))
+                context.stroke(
+                    path,
+                    with: .color(MixerTheme.cyan.opacity(0.75)),
+                    lineWidth: max(1, size.width / CGFloat(count))
+                )
+            }
+        }
+    }
+}
+
+/// Trackpad pinch / scroll zoom and sideways pan, without stealing click-drag seek.
 private struct WaveformPointerZoom: NSViewRepresentable {
     static var lastLocalX: CGFloat?
 
-    var onEvent: (NSEvent) -> Void
+    /// Return true to consume the event (zoom or pan). False leaves it for the rest of Mixer.
+    var onEvent: (NSEvent) -> Bool
 
     func makeNSView(context: Context) -> MonitorView {
         let v = MonitorView()
@@ -781,7 +1329,7 @@ private struct WaveformPointerZoom: NSViewRepresentable {
     }
 
     final class MonitorView: NSView {
-        var onEvent: ((NSEvent) -> Void)?
+        var onEvent: ((NSEvent) -> Bool)?
         private var monitor: Any?
 
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -801,13 +1349,11 @@ private struct WaveformPointerZoom: NSViewRepresentable {
                 guard let self, self.window != nil else { return event }
                 let loc = self.convert(event.locationInWindow, from: nil)
                 guard self.bounds.contains(loc) else { return event }
-                if event.type == .scrollWheel,
-                   abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) {
-                    return event
-                }
                 WaveformPointerZoom.lastLocalX = loc.x
-                self.onEvent?(event)
-                return nil
+                if self.onEvent?(event) == true {
+                    return nil
+                }
+                return event
             }
         }
 

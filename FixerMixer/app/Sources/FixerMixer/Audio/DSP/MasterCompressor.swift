@@ -4,14 +4,14 @@ import Foundation
 /// Linked L/R detection. No thrust / type / shape / unlink.
 struct MasterCompressorDSP {
     var bypass: Bool = false
-    var thresholdDb: Float = -12
-    var attackMs: Float = 1
-    var ratio: Float = 4 // use >= 40 for ∞
-    var releaseSec: Float = 0.5
+    var thresholdDb: Float = 0
+    var attackMs: Float = 3
+    var ratio: Float = 3 // use >= 40 for ∞
+    var releaseSec: Float = 0.25
     /// 0 hard, 1 medium, 2 soft
     var knee: Int = 1
     var outputDb: Float = 0
-    var autoMakeup: Bool = true
+    var autoMakeup: Bool = false
 
     private var env: Float = 0
     private var grLin: Float = 1
@@ -123,16 +123,16 @@ struct MasterCompressorDSP {
 
 struct MasterCompressorState: Equatable {
     var bypass: Bool = false
-    var thresholdDb: Float = -12
-    var attackMs: Float = 1
-    var ratio: Float = 4
-    var releaseSec: Float = 0.5
+    var thresholdDb: Float = 0
+    var attackMs: Float = 3
+    var ratio: Float = 3
+    var releaseSec: Float = 0.25
     /// 0 hard, 1 medium, 2 soft
     var knee: Int = 1
     var outputDb: Float = 0
-    var autoMakeup: Bool = true
+    var autoMakeup: Bool = false
 
     static let attackStops: [Float] = [0.03, 0.1, 0.3, 1, 3, 10, 30]
     static let ratioStops: [Float] = [1.5, 2, 3, 4, 6, 10, 100]
-    static let releaseStops: [Float] = [0.05, 0.1, 0.2, 0.5, 1, 2]
+    static let releaseStops: [Float] = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2]
 }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shared suite look with Podcast Stripper / Fixer Mixer (dark panel + cyan neon).
+/// Shared suite look with PodStripper / PodProducer (dark panel + cyan neon).
 enum LevelerTheme {
     static let bgTop = Color(red: 0.06, green: 0.09, blue: 0.12)
     static let bgBottom = Color(red: 0.03, green: 0.04, blue: 0.06)

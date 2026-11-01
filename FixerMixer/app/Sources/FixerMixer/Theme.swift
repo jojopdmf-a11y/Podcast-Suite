@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Shared suite look with Podcast Stripper (dark panel + cyan neon).
+/// Shared suite look with PodStripper (dark panel + cyan neon).
 enum MixerTheme {
     static let bgTop = Color(red: 0.06, green: 0.09, blue: 0.12)
     static let bgBottom = Color(red: 0.03, green: 0.04, blue: 0.06)
@@ -63,5 +63,79 @@ struct MixerGhostButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
             )
+    }
+}
+
+struct MixerRecordButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(MixerTheme.bgBottom)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(configuration.isPressed ? MixerTheme.meterRed : MixerTheme.danger)
+            )
+    }
+}
+
+struct MixerStandbyButtonStyle: ButtonStyle {
+    var engaged: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .foregroundStyle(engaged ? MixerTheme.bgBottom : MixerTheme.lime)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(engaged ? MixerTheme.lime : MixerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(MixerTheme.lime.opacity(engaged ? 0.95 : 0.55), lineWidth: engaged ? 1.4 : 1)
+            )
+    }
+}
+
+/// Shared SEL control — selected = solid lime fill, black “SEL” + black dot (Julie’s style).
+/// Sized ~66% smaller than the original 11/28/54 chrome so channel names get the width.
+struct SelectChannelButton: View {
+    var isSelected: Bool
+    /// Master strip uses a full-width SEL; channel strips stay compact.
+    var expandsHorizontally: Bool = false
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 2) {
+                Text("SEL")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .tracking(0.3)
+                Circle()
+                    .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
+                    .frame(width: 3, height: 3)
+            }
+            .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
+            .frame(maxWidth: expandsHorizontally ? .infinity : nil)
+            .frame(minWidth: expandsHorizontally ? nil : 18, minHeight: 10)
+            .padding(.horizontal, expandsHorizontally ? 0 : 3)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(
+                        isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45),
+                        lineWidth: isSelected ? 1.2 : 0.8
+                    )
+            )
+            // Invisible hit padding — keep ≥ ~22pt target without growing the chrome.
+            .padding(.horizontal, expandsHorizontally ? 0 : 2)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

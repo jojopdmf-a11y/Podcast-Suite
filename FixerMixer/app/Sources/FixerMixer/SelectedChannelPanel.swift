@@ -80,6 +80,7 @@ struct SelectedChannelPanel: View {
                         .foregroundStyle(APILook.labelDim)
                 }
             }
+            inputGainControl
 
             ScrollView(.vertical, showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -123,7 +124,10 @@ struct SelectedChannelPanel: View {
         case .eq:
             VStack(alignment: .leading, spacing: 12) {
                 dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.eq.bypass) {
-                    API560EQView(eq: $channel.eq)
+                    VStack(alignment: .leading, spacing: 10) {
+                        API560EQView(eq: $channel.eq)
+                        HPFControl(hpfHz: $channel.eq.hpfHz)
+                    }
                 }
                 if !channel.isStereo {
                     dspBlock(
@@ -132,6 +136,13 @@ struct SelectedChannelPanel: View {
                         bypass: $channel.para.bypass
                     ) {
                         ParaEQView(para: $channel.para)
+                    }
+                    dspBlock(
+                        title: "DE-ESS",
+                        subtitle: "Dynamic sibilance · Freq · Width · Threshold · GR only",
+                        bypass: $channel.deess.bypass
+                    ) {
+                        DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb)
                     }
                 }
             }
@@ -153,8 +164,9 @@ struct SelectedChannelPanel: View {
         case .leveler:
             dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.levelerBypass) {
                 VStack(spacing: 8) {
-                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...(-6), asPercent: false, defaultValue: -6)
+                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...0, asPercent: false, defaultValue: -6)
                     MixerLabeledSlider(title: "DRIVE", value: $channel.voice.levelerDrive, range: 0...1, asPercent: true, defaultValue: 0)
+                    LevelerGRMeter(grDb: channel.levelerGRDb)
                 }
             }
         }
@@ -229,6 +241,184 @@ struct SelectedChannelPanel: View {
         .buttonStyle(.plain)
         .help(mode.help)
     }
+
+    private var inputGainControl: some View {
+        HStack(spacing: 8) {
+            Text("INPUT GAIN")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+            Slider(
+                value: Binding(
+                    get: { Double(channel.inputGainDb) },
+                    set: {
+                        channel.inputGainDb = Float($0)
+                        channel.clampInputGain()
+                    }
+                ),
+                in: Double(ChannelStripState.minInputGainDb)...Double(ChannelStripState.maxInputGainDb)
+            )
+            .tint(APILook.accentBlue)
+            Text(abs(channel.inputGainDb) < 0.05 ? "0.0 dB" : String(format: "%+.1f dB", channel.inputGainDb))
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(APILook.accentBlue)
+                .frame(width: 64, alignment: .trailing)
+        }
+        .help("Trim before DSP (−18…+36 dB). IN meter on the strip reads after this gain. Double-click slider to reset.")
+        .onTapGesture(count: 2) {
+            channel.inputGainDb = 0
+        }
+    }
+}
+
+struct DeEsserView: View {
+    @Binding var deess: ChannelDeEsser
+    var grDb: Float
+
+    private var logFreq: Binding<Float> {
+        Binding(
+            get: { log2(max(ChannelDeEsser.minHz, deess.freqHz)) },
+            set: {
+                deess.freqHz = min(ChannelDeEsser.maxHz, max(ChannelDeEsser.minHz, exp2($0)))
+                deess.clamp()
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                HardwareKnob(
+                    value: logFreq,
+                    range: log2(ChannelDeEsser.minHz)...log2(ChannelDeEsser.maxHz),
+                    label: "FREQ",
+                    valueText: { Self.freqLabel(hz: exp2($0)) },
+                    diameter: 48,
+                    defaultValue: log2(Float(6_000)),
+                    dragSensitivity: 0.32
+                )
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("WIDTH")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(APILook.labelDim)
+                    HStack(spacing: 4) {
+                        ForEach(ParaEQWidth.allCases) { mode in
+                            widthButton(mode)
+                        }
+                    }
+                    Text(widthCaption)
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(APILook.accentBlue)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            MixerLabeledSlider(
+                title: "THRESHOLD",
+                value: Binding(
+                    get: { deess.thresholdDb },
+                    set: {
+                        deess.thresholdDb = $0
+                        deess.clamp()
+                    }
+                ),
+                range: ChannelDeEsser.minThresholdDb...ChannelDeEsser.maxThresholdDb,
+                asPercent: false,
+                defaultValue: -24
+            )
+            DeEssGRMeter(grDb: grDb)
+            Text("Width blends split-band cut toward wideband. No presets.")
+                .font(.system(size: 8, weight: .medium, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+        }
+    }
+
+    private var widthCaption: String {
+        switch deess.width {
+        case .notch: return "narrow split · surgical"
+        case .narrow: return "split leaning · voice ess"
+        case .wide: return "wideband leaning · broader"
+        }
+    }
+
+    private func widthButton(_ mode: ParaEQWidth) -> some View {
+        let on = deess.width == mode
+        return Button {
+            deess.width = mode
+        } label: {
+            VStack(spacing: 4) {
+                LEDDot(on: on, color: APILook.ledGreen)
+                Text(mode.title)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.3)
+                    .foregroundStyle(APILook.label)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: on
+                                ? [Color(white: 0.22), Color(white: 0.14)]
+                                : [Color(white: 0.18), Color(white: 0.10)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(on ? APILook.accentBlue.opacity(0.7) : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Detection / reduction bandwidth — carries split vs wideband")
+    }
+
+    private static func freqLabel(hz: Float) -> String {
+        if hz >= 1000 {
+            return String(format: hz >= 10_000 ? "%.1fk" : "%.2fk", hz / 1000)
+        }
+        return String(format: "%.0f Hz", hz)
+    }
+}
+
+/// Compact GR bar for De-ess (0…12 dB display).
+private struct DeEssGRMeter: View {
+    var grDb: Float
+    private let maxDisplay: Float = 12
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("GR")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                Spacer()
+                Text(String(format: "%.1f dB", max(0, grDb)))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
+                ZStack(alignment: .trailing) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.4))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [APILook.ledYellow.opacity(0.85), APILook.ledRed.opacity(0.9)],
+                                startPoint: .trailing,
+                                endPoint: .leading
+                            )
+                        )
+                        .frame(width: max(2, w * fill))
+                }
+            }
+            .frame(height: 8)
+        }
+        .help("De-ess gain reduction")
+    }
 }
 
 struct RTAView: View {
@@ -299,6 +489,15 @@ struct ParaEQView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text("vs GRAPHIC")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                ForEach(ParaEQPlacement.allCases) { mode in
+                    placementButton(mode)
+                }
+                Spacer(minLength: 0)
+            }
             HStack(alignment: .top, spacing: 10) {
                 HardwareKnob(
                     value: logFreq,
@@ -355,6 +554,30 @@ struct ParaEQView: View {
         return String(format: "%.2f oct · Q %.1f", bw, q)
     }
 
+    private func placementButton(_ mode: ParaEQPlacement) -> some View {
+        let on = para.placement == mode
+        return Button {
+            para.placement = mode
+        } label: {
+            Text(mode.title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .foregroundStyle(on ? APILook.charcoal : APILook.label)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(mode.help)
+    }
+
     private func widthButton(_ mode: ParaEQWidth) -> some View {
         let on = para.width == mode
         return Button {
@@ -395,6 +618,93 @@ struct ParaEQView: View {
             return String(format: hz >= 10_000 ? "%.1fk" : "%.2fk", hz / 1000)
         }
         return String(format: "%.0f Hz", hz)
+    }
+}
+
+/// 24 dB/oct high-pass under the graphic. Does not move graphic faders. Left = Off.
+struct HPFControl: View {
+    @Binding var hpfHz: Float
+
+    private var sliderValue: Binding<Double> {
+        Binding(
+            get: {
+                if hpfHz < HighPass24DSP.minHz { return 0 }
+                return Double(hpfHz)
+            },
+            set: { raw in
+                if raw < Double(HighPass24DSP.minHz) * 0.5 {
+                    hpfHz = 0
+                } else {
+                    hpfHz = Float(raw)
+                    // clamp via ChannelEQ helper path
+                    if hpfHz > 0 {
+                        hpfHz = min(HighPass24DSP.maxHz, max(HighPass24DSP.minHz, hpfHz))
+                    }
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("HPF 24 dB/oct")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                Spacer()
+                Text(hpfHz < HighPass24DSP.minHz ? "OFF" : String(format: "%.0f Hz", hpfHz))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(hpfHz < HighPass24DSP.minHz ? APILook.labelDim : APILook.accentBlue)
+            }
+            Slider(
+                value: sliderValue,
+                in: 0...Double(HighPass24DSP.maxHz)
+            )
+            .tint(APILook.accentBlue)
+            .onTapGesture(count: 2) {
+                hpfHz = 0
+            }
+        }
+        .help("Double-click to turn HPF off")
+    }
+}
+
+/// Compact gain-reduction bar for the Leveler detail panel (0…12 dB display).
+private struct LevelerGRMeter: View {
+    var grDb: Float
+    private let maxDisplay: Float = 12
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("GR")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                Spacer()
+                Text(String(format: "%.1f dB", max(0, grDb)))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
+            }
+            GeometryReader { geo in
+                let w = geo.size.width
+                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
+                ZStack(alignment: .trailing) {
+                    Capsule()
+                        .fill(Color.black.opacity(0.4))
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [APILook.ledYellow.opacity(0.85), APILook.ledRed.opacity(0.9)],
+                                startPoint: .trailing,
+                                endPoint: .leading
+                            )
+                        )
+                        .frame(width: max(2, w * fill))
+                }
+            }
+            .frame(height: 8)
+        }
+        .help("Leveler gain reduction")
     }
 }
 

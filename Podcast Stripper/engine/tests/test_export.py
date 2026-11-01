@@ -206,10 +206,13 @@ def test_cli_from_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     from podcast_stripper import cli as cli_mod
 
+    diarize_calls: list[Path] = []
+
     def fake_export_convert(input_path: Path, output_wav: Path) -> None:
         output_wav.write_bytes(source.read_bytes())
 
     def fake_diarize_convert(input_path: Path, output_wav: Path) -> None:
+        diarize_calls.append(output_wav)
         output_wav.write_bytes(source.read_bytes())
 
     monkeypatch.setattr(cli_mod, "convert_for_export", fake_export_convert)
@@ -223,10 +226,12 @@ def test_cli_from_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             str(output_dir),
             "--from-segments",
             str(segments),
+            "--skip-separate",
             "--json-progress",
         ]
     )
     assert code == 0
+    assert diarize_calls == []
     assert (output_dir / "speakers.json").is_file()
     assert (output_dir / "Speaker_1.wav").is_file()
     assert (output_dir / "Speaker_2.wav").is_file()
@@ -339,4 +344,38 @@ def test_export_overlap_mixdown_stays_near_original(tmp_path: Path):
     rms_orig = float(np.sqrt(np.mean(original.astype(np.float64)[mid] ** 2)))
     assert rms_sum / rms_orig < 1.2
     assert rms_sum / rms_orig > 0.7
+
+
+def test_parse_export_sample_rate_native_and_known_rates():
+    from podcast_stripper.convert import parse_export_audio_format, parse_export_sample_rate
+
+    assert parse_export_sample_rate("native") is None
+    assert parse_export_sample_rate(0) is None
+    assert parse_export_sample_rate("48000") == 48000
+    assert parse_export_audio_format("wav24") == "wav24"
+    try:
+        parse_export_sample_rate("32000")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_encode_export_file_passes_rate_and_codec(tmp_path: Path, monkeypatch):
+    from podcast_stripper import convert as convert_mod
+
+    captured: list[list[str]] = []
+
+    def fake_run(args, *, timeout=None):
+        captured.append(list(args))
+
+    monkeypatch.setattr(convert_mod, "run_ffmpeg", fake_run)
+    src = tmp_path / "in.wav"
+    src.write_bytes(b"RIFF")
+    dest = tmp_path / "out.wav"
+    convert_mod.encode_export_file(src, dest, sample_rate=48000, audio_format="aiff24")
+    assert captured
+    args = captured[0]
+    assert "-ar" in args and "48000" in args
+    assert "pcm_s24be" in args
+    assert str(dest.with_suffix(".aiff")) in args
 

@@ -52,7 +52,7 @@ struct DorroughMeterDeck: View {
                 holdR: session.postHoldR,
                 overs: session.postOvers,
                 mode: session.meterMode,
-                active: session.hasResult
+                active: session.hasResult || session.liveMaximizerActive
             )
             meterControls
         }
