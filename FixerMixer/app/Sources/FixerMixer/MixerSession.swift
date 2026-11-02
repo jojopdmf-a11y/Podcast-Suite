@@ -894,7 +894,11 @@ final class MixerSession: ObservableObject {
                 lastMixURL = mixURL
                 engine.deleteRecordingFiles()
                 let dropouts = engine.recordDropoutCount
-                if dropouts > 0 {
+                if !engine.recordKeptFiles.isEmpty {
+                    status = "Recorded to \(folder.lastPathComponent) · could not load \(engine.recordKeptFiles.joined(separator: ", ")) — kept in the folder; drag it in to use it."
+                } else if engine.recordWriteFailures > 0 {
+                    status = "Recorded to \(folder.lastPathComponent) · disk write failed during the take (disk full?) — audio may be missing; see record-log.json and your interface backup."
+                } else if dropouts > 0 {
                     status = "Recorded to \(folder.lastPathComponent) · \(dropouts) dropout(s) logged in record-log.json — check take vs interface backup. Tape is dry (no EQ on record)."
                 } else {
                     status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
@@ -913,7 +917,7 @@ final class MixerSession: ObservableObject {
         if keepStandby {
             // Return to metering-only after tape stops.
             continueStandbyIfMicAllowed(true)
-            if isRecordStandby, engine.recordDropoutCount == 0 {
+            if isRecordStandby, engine.recordDropoutCount == 0, engine.recordKeptFiles.isEmpty, engine.recordWriteFailures == 0 {
                 status = "Standby · live meters on. Last take saved when possible."
             }
         } else {

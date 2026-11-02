@@ -78,6 +78,10 @@ final class MixerEngine: @unchecked Sendable {
     private var recordingFiles: [URL] = []
     private var renameRecording: [Int: URL] = [:]
     private(set) var recordDropoutCount: Int = 0
+    /// Disk-write failures during the last take (disk full / I/O error).
+    private(set) var recordWriteFailures: Int = 0
+    /// `.recording.wav` files from the last take that could not be merged. They are never deleted.
+    private(set) var recordKeptFiles: [String] = []
     var onRecordDropouts: ((Int) -> Void)?
     private var tapScratch: UnsafeMutablePointer<Float>?
     private var tapScratchFrames = 0
@@ -716,6 +720,8 @@ final class MixerEngine: @unchecked Sendable {
         renderLockMisses.store(0)
         transferredMisses.store(0)
         recordDropoutCount = 0
+        recordWriteFailures = 0
+        recordKeptFiles = []
         lengthEmitCounter = 0
         var punch = max(0, playhead)
         var baseFrames = frameCount
@@ -1103,7 +1109,15 @@ final class MixerEngine: @unchecked Sendable {
                 totals = session.finishedTotals()
             }
             recordDropoutCount = totals.dropouts
-            mergeRecording(session)
+            recordWriteFailures = totals.writeFailures
+            let failed = mergeRecording(session)
+            if !failed.isEmpty {
+                // Keep the raw takes: no rename, no delete.
+                let keep = Set(failed.map { session.folder.appendingPathComponent($0.file) })
+                recordingFiles.removeAll { keep.contains($0) }
+                for item in failed { renameRecording[item.voiceIndex] = nil }
+                recordKeptFiles = failed.map(\.file)
+            }
         }
         recordSession = nil
         waveformLock.lock()
@@ -1702,7 +1716,12 @@ final class MixerEngine: @unchecked Sendable {
             recordFramesCommitted.store(session.framesCommitted)
             return
         }
-        guard let scratch = tapScratch, ch == tapScratchChannels, tapScratchFrames > 0 else { return }
+        guard let scratch = tapScratch, tapScratchFrames > 0 else { return }
+        if ch != tapScratchChannels {
+            // Input channel count changed mid-take: can't map strips safely. Log it (once) and skip the buffer.
+            if writing, let session { session.noteChannelCountChange(channels: ch) }
+            return
+        }
         let valid = when.isSampleTimeValid
         var offset = 0
         while offset < frames {
@@ -1844,7 +1863,10 @@ final class MixerEngine: @unchecked Sendable {
         for i in 0..<n { dst[i] = 0 }
     }
 
-    private func mergeRecording(_ session: RecordSession) {
+    /// Returns the armed takes that could not be loaded (their `.recording.wav` must be kept).
+    @discardableResult
+    private func mergeRecording(_ session: RecordSession) -> [RecordArmedChannel] {
+        var failed: [RecordArmedChannel] = []
         let punch = max(0, session.punchStartFrame)
         lock.lock()
         var voices = voiceBuffers
@@ -1852,7 +1874,10 @@ final class MixerEngine: @unchecked Sendable {
         var longest = 0
         for item in session.armed {
             let url = session.folder.appendingPathComponent(item.file)
-            guard let take = try? WAVIO.load(url: url) else { continue }
+            guard let take = try? WAVIO.load(url: url) else {
+                failed.append(item)
+                continue
+            }
             let samples = Self.monoTake(take)
             let old = item.voiceIndex < voices.count ? voices[item.voiceIndex] : []
             let merged = Self.spliceTake(old: old, punch: punch, take: samples)
@@ -1873,6 +1898,7 @@ final class MixerEngine: @unchecked Sendable {
             frameCount = max(frameCount, longest)
         }
         lock.unlock()
+        return failed
     }
 
     private static func monoTake(_ buffer: WAVIO.Buffer) -> [Float] {

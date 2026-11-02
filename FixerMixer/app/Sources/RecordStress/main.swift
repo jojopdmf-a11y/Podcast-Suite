@@ -284,6 +284,135 @@ private func runLabeled(name: String, frames: Int, skipAt: Int?, stalls: Bool) t
     return totals
 }
 
+// MARK: - Real-time paced producer (never waits, like the real input tap)
+
+private func produceRealtime(session: RecordSession, totalFrames: Int) {
+    let block = 1024
+    var buffer = [Float](repeating: 0, count: block * channelCount)
+    let start = DispatchTime.now().uptimeNanoseconds
+    var source = 0
+    while source < totalFrames {
+        let n = min(block, totalFrames - source)
+        // Pace to wall clock: block k is due at k * block / 48 kHz.
+        let due = start + UInt64(Double(source) / sampleRate * 1_000_000_000)
+        let now = DispatchTime.now().uptimeNanoseconds
+        if due > now { usleep(useconds_t((due - now) / 1000)) }
+        for f in 0..<n {
+            for ch in 0..<channelCount {
+                buffer[f * channelCount + ch] = patternFloat(channel: ch, frame: source + f)
+            }
+        }
+        buffer.withUnsafeBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return }
+            session.ingest(interleaved: base, frames: n, sampleTime: Int64(source), sampleTimeValid: true)
+        }
+        source += n
+    }
+}
+
+private func intValue(_ any: Any?) -> Int? {
+    (any as? NSNumber)?.intValue ?? (any as? Int)
+}
+
+/// 30 s, 8 ch, paced in real time. Writer stalls 2.5 s (must be absorbed: no overflow) and later
+/// longer than the whole ring (must give exactly one ringOverflow with zeros at exactly that spot).
+private func runRealtime() throws -> (overflowFrames: Int, overflowAt: Int, ringSeconds: Double) {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RecordStress-realtime-\(getpid())", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let total = 30 * 48_000
+    let ringFrames = SPSCFloatRing(sampleRate: sampleRate, channels: 1).capacityFrames
+    let ringSeconds = Double(ringFrames) / sampleRate
+    // The ring is the next power of two >= 4 s (262,144 frames = 5.46 s at 48 kHz), so the
+    // overflow stall must be longer than that.
+    let longStall = ringSeconds + 1.5
+    let plan = StallPlan(marks: [(UInt64(4 * 48_000), 2.5), (UInt64(12 * 48_000), longStall)])
+    let session = try makeSession(folder: folder, stalls: plan)
+    // Stall 1 alone: by 9 s of input the writer must have caught up with no overflow.
+    produceRealtime(session: session, totalFrames: total)
+    let totals = try session.finish()
+
+    let logURL = folder.appendingPathComponent("record-log.json")
+    let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: logURL)) as? [String: Any]
+    guard let take = (obj?["takes"] as? [[String: Any]])?.last else { throw TestError("realtime: no take in log") }
+    let events = take["events"] as? [[String: Any]] ?? []
+    let overflows = events.filter { ($0["type"] as? String) == "ringOverflow" }
+    if overflows.count != 1 {
+        throw TestError("realtime: expected exactly 1 ringOverflow, got \(overflows.count)")
+    }
+    let at = intValue(overflows[0]["frame"]) ?? -1
+    let len = intValue(overflows[0]["lengthFrames"]) ?? -1
+    // Must come from the long stall (writer stalls at 12 s of disk), never from the 2.5 s one.
+    if at < 12 * 48_000 || at > total || len <= 0 {
+        throw TestError("realtime: overflow at \(at) len \(len) is not where the long stall is")
+    }
+    if totals.overflowFrames != len || totals.overflowEvents != 1 || totals.skips != 0 || totals.dropouts != 1 {
+        throw TestError("realtime: totals overflowFrames=\(totals.overflowFrames) events=\(totals.overflowEvents) skips=\(totals.skips) dropouts=\(totals.dropouts) (event len \(len))")
+    }
+    if intValue(take["framesWritten"]) != total {
+        throw TestError("realtime: framesWritten \(intValue(take["framesWritten"]) ?? -1) != \(total)")
+    }
+    for ch in 0..<channelCount {
+        let url = folder.appendingPathComponent("Speaker_\(ch + 1).recording.wav")
+        let (info, handle) = try readWavInfo(url)
+        defer { try? handle.close() }
+        let frames = Int(info.dataSize) / 2
+        if frames != total || info.fileSize != 44 + Int(info.dataSize) {
+            throw TestError("realtime: \(url.lastPathComponent) frames \(frames) != \(total)")
+        }
+        guard let data = try handle.readToEnd(), data.count == frames * 2 else {
+            throw TestError("realtime: short read \(url.lastPathComponent)")
+        }
+        var bad = 0
+        data.withUnsafeBytes { raw in
+            for f in 0..<frames {
+                let sample = Int16(bitPattern: UInt16(raw[f * 2]) | (UInt16(raw[f * 2 + 1]) << 8))
+                let expect: Int16 = (f >= at && f < at + len) ? 0 : expectedInt16(channel: ch, frame: f)
+                if sample != expect {
+                    bad += 1
+                    if bad <= 3 { print("FAIL realtime \(url.lastPathComponent) frame \(f) got \(sample) expect \(expect)") }
+                }
+            }
+        }
+        if bad != 0 { throw TestError("realtime: \(url.lastPathComponent) \(bad) mismatched samples") }
+    }
+    print("realtime: frames=\(total) stall2.5s overflow=0 stall\(String(format: "%.2f", longStall))s ringOverflow=1 at \(at) len=\(len) (ring \(String(format: "%.2f", ringSeconds))s) zerosPlaced=ok")
+    return (len, at, ringSeconds)
+}
+
+/// Clock jumps: backward > 1 s must re-anchor (keep recording), forward > 10 s must re-anchor without silence.
+private func runClockJumps() throws {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent("RecordStress-clock-\(getpid())", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let session = try makeSession(folder: folder, stalls: nil)
+    let block = 4800
+    var buffer = [Float](repeating: 0.25, count: block * channelCount)
+    var written = 0
+    func feed(_ times: [Int64]) {
+        for t in times {
+            buffer.withUnsafeBufferPointer { ptr in
+                session.ingest(interleaved: ptr.baseAddress!, frames: block, sampleTime: t, sampleTimeValid: true)
+            }
+            written += block
+        }
+    }
+    feed((0..<20).map { Int64($0 * block) })            // 2 s
+    feed((0..<10).map { Int64($0 * block) })            // clock reset to 0 (backward 2 s)
+    feed((0..<10).map { Int64(48_000 * 60 + $0 * block) }) // forward ~59 s
+    let totals = try session.finish()
+    let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: folder.appendingPathComponent("record-log.json"))) as? [String: Any]
+    let take = (obj?["takes"] as? [[String: Any]])?.last ?? [:]
+    let resets = (take["events"] as? [[String: Any]] ?? []).filter { ($0["type"] as? String) == "clockReset" }
+    let fw = intValue(take["framesWritten"]) ?? -1
+    if resets.count != 2 || fw != written || totals.clockResets != 2 || totals.skips != 0 || totals.dropouts != 0 {
+        throw TestError("clock: resets=\(resets.count) framesWritten=\(fw) expected=\(written) skips=\(totals.skips)")
+    }
+    print("clock: backward+forward jumps re-anchored (2 clockReset), framesWritten=\(fw), no silence inserted")
+}
+
 private func runCrashChild(folder: URL) throws {
     let session = try makeSession(folder: folder, stalls: nil)
     print("READY")
@@ -380,6 +509,8 @@ do {
     _ = try runLabeled(name: "preflight", frames: 48_000, skipAt: 12_000, stalls: false)
     _ = try runLabeled(name: "stress", frames: 132_480_000, skipAt: 5_000_000, stalls: true)
     try runCrashTest()
+    try runClockJumps()
+    _ = try runRealtime()
     let elapsed = Date().timeIntervalSince(started)
     print(String(format: "PASS %.1fs", elapsed))
     exit(0)

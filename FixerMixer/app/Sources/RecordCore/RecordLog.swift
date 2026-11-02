@@ -8,6 +8,8 @@ public enum RecordEventType: UInt8, Sendable {
     case formatChange = 5
     case configChange = 6
     case deviceOverload = 7
+    case clockReset = 8
+    case writeFailed = 9
 
     public var jsonName: String {
         switch self {
@@ -18,6 +20,8 @@ public enum RecordEventType: UInt8, Sendable {
         case .formatChange: return "formatChange"
         case .configChange: return "configChange"
         case .deviceOverload: return "deviceOverload"
+        case .clockReset: return "clockReset"
+        case .writeFailed: return "writeFailed"
         }
     }
 }
@@ -80,8 +84,12 @@ public struct RecordTotals: Sendable {
     public var skipFrames: Int = 0
     public var overflowFrames: Int = 0
     public var overflowEvents: Int = 0
+    /// Render callback could not take the engine lock. Affects playback only, never the take on disk.
     public var renderLockMisses: Int = 0
-    public var dropouts: Int { skips + overflowEvents + renderLockMisses }
+    public var clockResets: Int = 0
+    public var writeFailures: Int = 0
+    /// Discontinuities in the take itself (shown red in the UI).
+    public var dropouts: Int { skips + overflowEvents }
     public init() {}
 }
 
@@ -155,6 +163,8 @@ final class RecordLog: @unchecked Sendable {
             case .ringOverflow:
                 totals.overflowEvents += 1
                 totals.overflowFrames += Int(event.length)
+            case .clockReset:
+                totals.clockResets += 1
             default:
                 break
             }
@@ -162,6 +172,7 @@ final class RecordLog: @unchecked Sendable {
     }
 
     func appendDirect(type: RecordEventType, frame: UInt64, length: UInt64, detail: UInt8 = 0) {
+        if type == .writeFailed { totals.writeFailures += 1 }
         events.append(RecordedEvent(type: type, detail: detail, frame: frame, length: length))
     }
 
@@ -177,6 +188,11 @@ final class RecordLog: @unchecked Sendable {
             switch event.detail {
             case 1: detail = "resample"
             case 2: detail = "invalid sample time"
+            case 3: detail = "input clock jumped backward; re-anchored"
+            case 4: detail = "input clock jumped forward more than 10 s; re-anchored without filling"
+            case 5: detail = "input channel count changed; buffer not recorded"
+            case 6: detail = "disk write failed (disk full?)"
+            case 7: detail = "input clock moved after a configuration change; re-anchored"
             default: detail = ""
             }
             eventJSON.append([
@@ -212,6 +228,9 @@ final class RecordLog: @unchecked Sendable {
                 "skips": totals.skips,
                 "skipFrames": totals.skipFrames,
                 "overflowFrames": totals.overflowFrames,
+                "overflowEvents": totals.overflowEvents,
+                "clockResets": totals.clockResets,
+                "writeFailures": totals.writeFailures,
                 "renderLockMisses": totals.renderLockMisses,
             ],
         ]

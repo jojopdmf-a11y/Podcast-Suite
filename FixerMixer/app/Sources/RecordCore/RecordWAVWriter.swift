@@ -15,6 +15,8 @@ public final class RecordWAVWriter: @unchecked Sendable {
     private var lastSync: TimeInterval = 0
     private var closed = false
     public private(set) var overflowed4GB = false
+    /// Set once a write to disk falls short (disk full, I/O error). Audio after that point may be missing.
+    public private(set) var writeFailed = false
 
     public init(url: URL, sampleRate: Double) throws {
         self.url = url
@@ -48,7 +50,7 @@ public final class RecordWAVWriter: @unchecked Sendable {
             if roomSamples == 0 {
                 let before = scratchCount
                 flushScratch()
-                if scratchCount >= before { break }
+                if scratchCount >= before { writeFailed = true; break }
                 continue
             }
             let n = min(frames - i, roomSamples)
@@ -76,7 +78,7 @@ public final class RecordWAVWriter: @unchecked Sendable {
             if roomSamples == 0 {
                 let before = scratchCount
                 flushScratch()
-                if scratchCount >= before { break }
+                if scratchCount >= before { writeFailed = true; break }
                 continue
             }
             let n = min(left, roomSamples)
@@ -118,6 +120,7 @@ public final class RecordWAVWriter: @unchecked Sendable {
         fileEnd += UInt64(wrote)
         if wrote < scratchCount {
             // Keep unwritten tail. Should not happen on a normal disk.
+            writeFailed = true
             let keep = scratchCount - wrote
             scratch.withUnsafeMutableBytes { raw in
                 guard let base = raw.baseAddress else { return }

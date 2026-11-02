@@ -117,6 +117,11 @@ public final class RecordSession: @unchecked Sendable {
         runtime.noteConfigChange()
     }
 
+    /// Tap thread: the input buffer's channel count no longer matches the take. Logged once per take.
+    public func noteChannelCountChange(channels: Int) {
+        runtime.noteChannelCountChange(channels: channels)
+    }
+
     public func addRenderLockMiss() {
         runtime.renderMisses.fetchAdd(1)
     }
@@ -150,6 +155,8 @@ public final class RecordSession: @unchecked Sendable {
             if let finishError { throw finishError }
             return cachedTotals
         }
+        // The tap is removed before finish(), so the producer side is idle here.
+        runtime.flushOverflowRun()
         runtime.stopFlag.store(1)
         runtime.wake.signal()
         runtime.done.wait()
@@ -256,6 +263,15 @@ private final class RecordRuntime: @unchecked Sendable {
     private var loggedOverload: UInt64 = 0
     private var lastNotify: UInt64 = 0
     private var peakByVoice: [Int: RecordPeakCache] = [:]
+    // Producer (tap) side only.
+    private var anchoredConfig: UInt64 = 0
+    private var overflowRun: UInt64 = 0
+    private var overflowRunAfter: UInt64 = 0
+    private var overflowRunFrame: UInt64 = 0
+    private let channelOnce = PPAtomicU64(0)
+    private let overflowRunsStarted = PPAtomicU64(0)
+    // Writer side only.
+    private var writeFailReported: [Bool]
     private(set) var totals = RecordTotals()
     private(set) var writeError: Error?
 
@@ -281,6 +297,7 @@ private final class RecordRuntime: @unchecked Sendable {
         self.log = log
         self.onDropouts = onDropouts
         self.onStall = onStall
+        writeFailReported = [Bool](repeating: false, count: writers.count)
         committed = PPAtomicU64(0)
         stopFlag = PPAtomicU64(0)
         renderMisses = PPAtomicU64(0)
@@ -343,6 +360,28 @@ private final class RecordRuntime: @unchecked Sendable {
             clockValid = false
             return RecordIngestPlan(dropInputFrames: 0, zeroSessionFrames: 0, ignore: false)
         }
+        let configs = configCount.load()
+        if configs != anchoredConfig {
+            anchoredConfig = configs
+            if sampleTime != expected {
+                log.push(type: .clockReset, frame: timeline, length: UInt64(sessionFrames(fromInput: abs(sampleTime - expected))), detail: 7)
+                expected = sampleTime + Int64(inputFrames)
+                return RecordIngestPlan(dropInputFrames: 0, zeroSessionFrames: 0, ignore: false)
+            }
+        }
+        let oneSecond = Int64(max(1, inputSampleRate.rounded()))
+        if expected - sampleTime > oneSecond {
+            // Clock went backward (device restart / clock hiccup). Keep recording from here.
+            log.push(type: .clockReset, frame: timeline, length: UInt64(sessionFrames(fromInput: expected - sampleTime)), detail: 3)
+            expected = sampleTime + Int64(inputFrames)
+            return RecordIngestPlan(dropInputFrames: 0, zeroSessionFrames: 0, ignore: false)
+        }
+        if sampleTime - expected > 10 * oneSecond {
+            // Implausible forward jump: don't write minutes of silence.
+            log.push(type: .clockReset, frame: timeline, length: UInt64(sessionFrames(fromInput: sampleTime - expected)), detail: 4)
+            expected = sampleTime + Int64(inputFrames)
+            return RecordIngestPlan(dropInputFrames: 0, zeroSessionFrames: 0, ignore: false)
+        }
         if sampleTime > expected {
             let zeros = sessionFrames(fromInput: sampleTime - expected)
             log.push(type: .inputSkip, frame: timeline, length: UInt64(max(0, zeros)))
@@ -370,14 +409,7 @@ private final class RecordRuntime: @unchecked Sendable {
         var left = frames
         while left > 0 {
             let chunk = min(left, zeroFrames)
-            let got = ring.write(zeroScratch, frames: chunk)
-            timeline += UInt64(got)
-            if got < chunk {
-                let missing = left - got
-                noteOverflow(missing: missing)
-                timeline += UInt64(missing)
-                break
-            }
+            push(zeroScratch, frames: chunk)
             left -= chunk
         }
         publishTimeline()
@@ -385,14 +417,51 @@ private final class RecordRuntime: @unchecked Sendable {
 
     func writeAudio(_ src: UnsafePointer<Float>, frames: Int) {
         guard frames > 0 else { return }
+        push(src, frames: frames)
+        publishTimeline()
+    }
+
+    /// Producer side. While the ring is full, missing frames accumulate into ONE overflow run
+    /// (one gap, one ringOverflow event) that is closed once a whole block fits again.
+    private func push(_ src: UnsafePointer<Float>, frames: Int) {
+        if overflowRun > 0 {
+            if ring.availableToWrite >= frames {
+                flushOverflowRun()
+            } else {
+                overflowRun += UInt64(frames)
+                timeline += UInt64(frames)
+                return
+            }
+        }
         let got = ring.write(src, frames: frames)
         timeline += UInt64(got)
         if got < frames {
             let missing = frames - got
-            noteOverflow(missing: missing)
+            overflowRunAfter = ring.writeCursor
+            overflowRunFrame = timeline
+            overflowRun = UInt64(missing)
+            overflowRunsStarted.fetchAdd(1)
             timeline += UInt64(missing)
         }
-        publishTimeline()
+    }
+
+    /// Producer side (or main thread after the tap is removed).
+    func flushOverflowRun() {
+        guard overflowRun > 0 else { return }
+        let missing = overflowRun
+        overflowRun = 0
+        if !gaps.push(after: overflowRunAfter, count: missing) {
+            // Queue full: the writer appends any shortfall at finalize.
+        }
+        pendingZeros.fetchAdd(missing)
+        log.push(type: .ringOverflow, frame: overflowRunFrame, length: missing)
+        wake.signal()
+    }
+
+    func noteChannelCountChange(channels: Int) {
+        if channelOnce.fetchAdd(1) == 0 {
+            log.push(type: .formatChange, frame: timeline, length: UInt64(max(0, channels)), detail: 5)
+        }
     }
 
     func noteFormatChangeResample() {
@@ -439,6 +508,7 @@ private final class RecordRuntime: @unchecked Sendable {
         for writer in writers {
             writer.finalize()
         }
+        checkWriteFailures()
         for peak in peaks {
             peak.finish()
         }
@@ -491,6 +561,14 @@ private final class RecordRuntime: @unchecked Sendable {
             peaks[index].add(samples: monoScratch, frames: frames)
         }
         noteDisk(UInt64(frames))
+        checkWriteFailures()
+    }
+
+    private func checkWriteFailures() {
+        for index in writers.indices where !writeFailReported[index] && writers[index].writeFailed {
+            writeFailReported[index] = true
+            log.appendDirect(type: .writeFailed, frame: diskFrames, length: UInt64(index), detail: 6)
+        }
     }
 
     private func writeGap(_ frames: Int) {
@@ -501,6 +579,7 @@ private final class RecordRuntime: @unchecked Sendable {
         }
         insertedZeros += UInt64(frames)
         noteDisk(UInt64(frames))
+        checkWriteFailures()
     }
 
     private func noteDisk(_ frames: UInt64) {
@@ -534,24 +613,14 @@ private final class RecordRuntime: @unchecked Sendable {
         let now = DispatchTime.now().uptimeNanoseconds
         if !force && lastNotify != 0 && now &- lastNotify < 250_000_000 { return }
         lastNotify = now
-        let misses = Int(renderMisses.load())
-        let n = log.totals.skips + log.totals.overflowEvents + misses
+        // Red counter: only discontinuities in the take (skips + overflow runs). Render lock misses are logged, not counted.
+        let n = log.totals.skips + max(log.totals.overflowEvents, Int(overflowRunsStarted.load()))
         onDropouts?(n)
     }
 
     private func publishTimeline() {
         committed.store(timeline)
         wake.signal()
-    }
-
-    private func noteOverflow(missing: Int) {
-        guard missing > 0 else { return }
-        let after = ring.writeCursor
-        if !gaps.push(after: after, count: UInt64(missing)) {
-            // Counted below; the writer appends any shortfall at finalize.
-        }
-        pendingZeros.fetchAdd(UInt64(missing))
-        log.push(type: .ringOverflow, frame: timeline, length: UInt64(missing))
     }
 
     private func noteInvalidClock() {
