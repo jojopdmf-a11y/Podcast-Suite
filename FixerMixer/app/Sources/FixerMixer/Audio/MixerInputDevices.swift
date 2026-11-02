@@ -1,6 +1,12 @@
 import CoreAudio
 import Foundation
 
+struct MixerOutputDevice: Hashable {
+    var uid: String
+    var name: String
+    var nominalSampleRate: Double?
+}
+
 struct MixerInputDevice: Identifiable, Hashable {
     var id: AudioDeviceID
     var uid: String
@@ -42,6 +48,25 @@ enum MixerInputDevices {
             )
         }
         return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Default output device (playback clock). Separate from the input list, which skips output-only boxes.
+    static func defaultOutputDevice() -> MixerOutputDevice? {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID()
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID) == noErr,
+              deviceID != 0
+        else { return nil }
+        return MixerOutputDevice(
+            uid: stringProperty(deviceID, kAudioDevicePropertyDeviceUID) ?? "\(deviceID)",
+            name: stringProperty(deviceID, kAudioDevicePropertyDeviceNameCFString) ?? "Output",
+            nominalSampleRate: nominalSampleRate(deviceID)
+        )
     }
 
     static func defaultInputUID() -> String? {

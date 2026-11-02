@@ -395,6 +395,8 @@ final class MixerSession: ObservableObject {
     @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
     @Published var isPlaying = false
     @Published var isRecording = false
+    /// Discontinuities counted while recording (skips, ring overflows, render lock misses).
+    @Published var recordDropouts: Int = 0
     /// Live input metering without writing takes (Record Standby).
     @Published var isRecordStandby = false
     @Published var isBouncing = false
@@ -474,6 +476,11 @@ final class MixerSession: ObservableObject {
                 self.refreshWaveform()
             }
         }
+        engine.onRecordDropouts = { [weak self] count in
+            Task { @MainActor in
+                self?.recordDropouts = count
+            }
+        }
     }
 
     var selectedInputChannelCount: Int {
@@ -529,6 +536,15 @@ final class MixerSession: ObservableObject {
         syncRTASource()
         syncParamsToEngine()
         status = "Empty mixer · \(Int(sampleRate.rounded())) Hz from your interface. Drop audio or ADD STRIP. Pick IN on a speaker, then Record. Monitor through your interface."
+    }
+
+    private func unfinishedRecordingStatus(in folder: URL) -> String? {
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let names = files.map(\.lastPathComponent).filter {
+            $0.hasPrefix("Speaker_") && $0.hasSuffix(".recording.wav")
+        }.sorted()
+        guard let name = names.first else { return nil }
+        return "Found an unfinished recording (\(name)) — it's playable; drag it in to use it."
     }
 
     private func ensureSessionFolder() {
@@ -832,12 +848,19 @@ final class MixerSession: ObservableObject {
             return
         }
         syncParamsToEngine()
+        ensureSessionFolder()
+        guard let folder = sourceFolder else {
+            status = "No session folder"
+            return
+        }
+        recordDropouts = 0
         do {
             try engine.start(
                 fromBeginning: false,
                 recording: true,
                 inputMetering: true,
-                inputDeviceUID: selectedInputUID
+                inputDeviceUID: selectedInputUID,
+                recordFolder: folder
             )
             isPlaying = true
             isRecording = true
@@ -869,19 +892,20 @@ final class MixerSession: ObservableObject {
                 let mixURL = MixerMixFile.sidecarURL(in: folder)
                 try MixerMixFile.write(MixerMixFile.make(from: self), to: mixURL)
                 lastMixURL = mixURL
-                let underruns = engine.recordUnderrunFrames
-                if underruns > 0 {
-                    status = "Recorded to \(folder.lastPathComponent) · \(underruns) underrun frame(s) — check take vs interface backup. Tape is dry (no EQ on record)."
+                engine.deleteRecordingFiles()
+                let dropouts = engine.recordDropoutCount
+                if dropouts > 0 {
+                    status = "Recorded to \(folder.lastPathComponent) · \(dropouts) dropout(s) logged in record-log.json — check take vs interface backup. Tape is dry (no EQ on record)."
                 } else {
                     status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
                 }
             } catch {
-                status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription)"
+                status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription) Kept the .recording.wav files."
             }
         } else {
-            let underruns = engine.recordUnderrunFrames
-            if underruns > 0 {
-                status = "Recorded in this window · \(underruns) underrun frame(s). Export to keep it."
+            let dropouts = engine.recordDropoutCount
+            if dropouts > 0 {
+                status = "Recorded in this window · \(dropouts) dropout(s) logged in record-log.json. Export to keep it."
             } else {
                 status = "Recorded in this window. Export to keep it. Shift-drag the waveform to mute a cough."
             }
@@ -889,7 +913,7 @@ final class MixerSession: ObservableObject {
         if keepStandby {
             // Return to metering-only after tape stops.
             continueStandbyIfMicAllowed(true)
-            if isRecordStandby {
+            if isRecordStandby, engine.recordDropoutCount == 0 {
                 status = "Standby · live meters on. Last take saved when possible."
             }
         } else {
@@ -1200,6 +1224,9 @@ final class MixerSession: ObservableObject {
                 lastMixURL = nil
             }
             status = line
+            if let note = unfinishedRecordingStatus(in: folder) {
+                status = note
+            }
         } catch MixerError.noTracks {
             busyProgress = nil
             busyProgressLabel = nil
@@ -1428,6 +1455,9 @@ final class MixerSession: ObservableObject {
                 line += " · stopped at \(StripperFolderLoader.maxSpeakers) speaker strips"
             }
             status = line
+            if let folder = sourceFolder, let note = unfinishedRecordingStatus(in: folder) {
+                status = note
+            }
         } catch {
             busyProgress = nil
             busyProgressLabel = nil
