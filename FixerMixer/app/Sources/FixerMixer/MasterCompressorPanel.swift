@@ -116,11 +116,17 @@ struct HardwareKnob: View {
         style == .outputRed ? .white : Color(red: 0.95, green: 0.92, blue: 0.75)
     }
 
+    /// Panel knobs are radius 12 (diameter 24). Hide the tick ring so the face stays that size.
+    private var compact: Bool { diameter <= 32 }
+    private var skirtExtra: CGFloat { compact ? 4 : 10 }
+
     var body: some View {
-        VStack(spacing: 5) {
+        VStack(spacing: compact ? 1 : 5) {
             Text(valueText(displayValue))
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .font(.system(size: compact ? 7 : 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(style == .outputRed ? APILook.ledRed.opacity(0.9) : APILook.accentBlue)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
 
             ZStack {
                 // Skirt / collar
@@ -132,20 +138,22 @@ struct HardwareKnob: View {
                             endPoint: .bottom
                         )
                     )
-                    .frame(width: diameter + 10, height: diameter + 10)
+                    .frame(width: diameter + skirtExtra, height: diameter + skirtExtra)
                     .overlay(
                         Circle()
                             .stroke(Color(white: 0.4).opacity(0.45), lineWidth: 1)
                     )
-                    .shadow(color: .black.opacity(0.5), radius: 3, y: 2)
+                    .shadow(color: .black.opacity(0.5), radius: compact ? 1 : 3, y: compact ? 1 : 2)
 
-                // Tick ring on skirt
-                ForEach(0..<11, id: \.self) { i in
-                    Capsule()
-                        .fill(i % 5 == 0 ? Color(white: 0.7) : Color(white: 0.4))
-                        .frame(width: i % 5 == 0 ? 1.6 : 1.1, height: i % 5 == 0 ? 5 : 3.5)
-                        .offset(y: -(diameter * 0.5 + 2))
-                        .rotationEffect(.degrees(-140 + Double(i) / 10.0 * 280))
+                if !compact {
+                    // Tick ring on skirt
+                    ForEach(0..<11, id: \.self) { i in
+                        Capsule()
+                            .fill(i % 5 == 0 ? Color(white: 0.7) : Color(white: 0.4))
+                            .frame(width: i % 5 == 0 ? 1.6 : 1.1, height: i % 5 == 0 ? 5 : 3.5)
+                            .offset(y: -(diameter * 0.5 + 2))
+                            .rotationEffect(.degrees(-140 + Double(i) / 10.0 * 280))
+                    }
                 }
 
                 // Knob body — brushed / anodized look
@@ -216,7 +224,7 @@ struct HardwareKnob: View {
                     .offset(y: -diameter * 0.16)
                     .rotationEffect(.degrees(-140 + normalized * 280))
             }
-            .frame(width: diameter + 12, height: diameter + 12)
+            .frame(width: diameter + skirtExtra + 2, height: diameter + skirtExtra + 2)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
@@ -249,9 +257,11 @@ struct HardwareKnob: View {
             }
 
             Text(label)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.5)
+                .font(.system(size: compact ? 7 : 9, weight: .bold, design: .rounded))
+                .tracking(compact ? 0.2 : 0.5)
                 .foregroundStyle(APILook.label)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
         }
         .help("Double-click to reset · Option-drag for fine")
     }
@@ -527,41 +537,69 @@ struct LEDDot: View {
     }
 }
 
+/// Shared by the graphic fader so the cap, the drag, and the scale labels use one range.
+enum GraphicFaderMetrics {
+    static let trackH: CGFloat = 64
+    static let capH: CGFloat = 10
+    static let readoutH: CGFloat = 11
+
+    /// Cap center. +16 is at the top, −16 at the bottom. Inset by half a cap so the cap stays on the track.
+    static func yCenter(db: Float) -> CGFloat {
+        let n = CGFloat(Graphic2520.normalized(fromGainDb: db))
+        return capH / 2 + (1 - n) * (trackH - capH)
+    }
+
+    static func gain(at locationY: CGFloat) -> Float {
+        let y = min(max(locationY, capH / 2), trackH - capH / 2)
+        let yNorm = (y - capH / 2) / max(1, trackH - capH)
+        return Graphic2520.gainDb(fromNormalized: Float(1 - yNorm))
+    }
+}
+
 /// 10-band graphic with 560-style proportional Q (EQ 2520 in the UI).
 struct API560EQView: View {
     @Binding var eq: ChannelEQ
 
+    private let scaleMarks: [(String, Float)] = [
+        ("+16", 16), ("+8", 8), ("0", 0), ("−8", -8), ("−16", -16)
+    ]
+
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(alignment: .bottom, spacing: 4) {
-                VStack(alignment: .trailing, spacing: 0) {
-                    ForEach(["+12", "+4", "0", "−4", "−12"], id: \.self) { t in
-                        Text(t)
+        HStack(alignment: .top, spacing: 2) {
+            VStack(spacing: 2) {
+                Color.clear.frame(height: GraphicFaderMetrics.readoutH)
+                ZStack(alignment: .top) {
+                    ForEach(scaleMarks, id: \.0) { mark in
+                        Text(mark.0)
                             .font(.system(size: 7, weight: .bold, design: .monospaced))
-                            .foregroundStyle(t == "0" ? APILook.accentBlue : APILook.labelDim)
-                            .frame(height: 22)
+                            .foregroundStyle(mark.1 == 0 ? APILook.accentBlue : APILook.labelDim)
+                            .position(
+                                x: 12,
+                                y: GraphicFaderMetrics.yCenter(db: mark.1)
+                            )
                     }
                 }
-                .frame(width: 28, height: 120)
-
-                ForEach(GraphicEQBand.allCases) { band in
-                    API560BandFader(value: Binding(
-                        get: { eq[band] },
-                        set: { eq[band] = $0 }
-                    ), label: band.shortLabel)
-                }
+                .frame(width: 24, height: GraphicFaderMetrics.trackH)
+                Color.clear.frame(height: 12)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(APILook.charcoal)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(APILook.border, lineWidth: 1)
-            )
+
+            ForEach(GraphicEQBand.allCases) { band in
+                API560BandFader(value: Binding(
+                    get: { eq[band] },
+                    set: { eq[band] = $0 }
+                ), label: band.shortLabel)
+            }
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(APILook.charcoal)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(APILook.border, lineWidth: 1)
+        )
     }
 }
 
@@ -569,44 +607,32 @@ private struct API560BandFader: View {
     @Binding var value: Float
     var label: String
 
-    private let trackH: CGFloat = 120
-
-    private var yNorm: CGFloat {
-        CGFloat(1 - Graphic2520.normalized(fromGainDb: value))
-    }
+    private var capCenter: CGFloat { GraphicFaderMetrics.yCenter(db: value) }
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text(abs(value) < 0.05 ? "0" : String(format: "%+.0f", value))
+        VStack(spacing: 2) {
+            Text(String(format: "%+.1f", value))
                 .font(.system(size: 7, weight: .bold, design: .monospaced))
                 .foregroundStyle(abs(value) < 0.05 ? APILook.labelDim : APILook.accentBlue)
-                .frame(height: 10)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .frame(height: GraphicFaderMetrics.readoutH)
 
             GeometryReader { geo in
                 let w = geo.size.width
+                let trackH = GraphicFaderMetrics.trackH
                 ZStack(alignment: .top) {
-                    // Slot
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.black.opacity(0.65))
-                        .frame(width: 8)
-                        .frame(maxWidth: .infinity)
+                        .frame(width: 6, height: trackH)
 
-                    // Zero line
-                    Rectangle()
-                        .fill(APILook.accentBlue.opacity(0.55))
-                        .frame(height: 1)
-                        .offset(y: trackH * 0.5)
-                    // ±4 dB — edges of the finer center region
-                    Rectangle()
-                        .fill(APILook.accentBlue.opacity(0.22))
-                        .frame(height: 1)
-                        .offset(y: trackH * 0.25)
-                    Rectangle()
-                        .fill(APILook.accentBlue.opacity(0.22))
-                        .frame(height: 1)
-                        .offset(y: trackH * 0.75)
+                    ForEach([Float(8), Float(0), Float(-8)], id: \.self) { db in
+                        Rectangle()
+                            .fill(APILook.accentBlue.opacity(db == 0 ? 0.55 : 0.22))
+                            .frame(width: w, height: 1)
+                            .position(x: w / 2, y: GraphicFaderMetrics.yCenter(db: db))
+                    }
 
-                    // Cap
                     RoundedRectangle(cornerRadius: 2)
                         .fill(
                             LinearGradient(
@@ -615,29 +641,28 @@ private struct API560BandFader: View {
                                 endPoint: .bottom
                             )
                         )
-                        .frame(width: max(14, w - 2), height: 14)
+                        .frame(width: max(12, w - 2), height: GraphicFaderMetrics.capH)
                         .shadow(color: .black.opacity(0.5), radius: 1, y: 1)
-                        .offset(y: max(0, min(trackH - 14, yNorm * (trackH - 14))))
+                        .position(x: w / 2, y: capCenter)
                 }
                 .contentShape(Rectangle())
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { g in
-                            let y = max(0, min(trackH, g.location.y))
-                            let n = Float(y / trackH)
-                            value = Graphic2520.gainDb(fromNormalized: 1 - n)
+                            value = GraphicFaderMetrics.gain(at: g.location.y)
                         }
                 )
                 .onTapGesture(count: 2) { value = 0 }
             }
-            .frame(height: trackH)
+            .frame(height: GraphicFaderMetrics.trackH)
 
             Text(label)
                 .font(.system(size: 7, weight: .bold, design: .rounded))
                 .foregroundStyle(APILook.label)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
-        .help("Double-click to zero · extra travel in ±4 dB")
+        .help("Double-click to zero · ±16 dB in 0.5 dB steps")
     }
 }
 
