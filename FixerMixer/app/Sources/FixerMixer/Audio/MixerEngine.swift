@@ -1,9 +1,11 @@
 import AVFoundation
 import CoreAudio
 import Foundation
+import os
+import RecordCore
 
 final class MixerEngine: @unchecked Sendable {
-    private let lock = NSLock()
+    private let lock = UnfairLock()
     private var voiceBuffers: [[Float]] = []
     private var speakerNumbers: [Int] = []
     /// Per-voice bounce stem base names (user-facing channel names, sanitized at write).
@@ -62,24 +64,44 @@ final class MixerEngine: @unchecked Sendable {
     /// Voice index → hardware input channel (0-based). Empty = not recording that strip.
     private var recordMap: [Int: Int] = [:]
     private var inputDeviceUID: String?
-    private let recLock = NSLock()
-    /// Interleaved float ring for dry tape ingest (written on tap, consumed without full DSP).
-    private var recRing: [Float] = []
-    private var recRingCapacityFrames = 0
-    private var recRingWriteFrame = 0
-    private var recRingReadFrame = 0
-    private var recRingAvailableFrames = 0
-    private var recPendingChannels = 1
-    /// Last good sample per hardware channel — held on underrun instead of blind zeros.
-    private var recHoldSamples: [Float] = []
-    /// Count of frames filled from hold/silence because the ring was short.
-    private(set) var recordUnderrunFrames: UInt64 = 0
-    private var recordUnderrunEvents: UInt64 = 0
-    /// Peak per voice from the input tap (armed strips). Used for PRE meters in standby/record.
-    private var liveInputPeaks: [Float] = []
-    private var recConverter: AVAudioConverter?
-    private var recSourceFormat: AVAudioFormat?
-    private var recDestFormat: AVAudioFormat?
+    /// Armed at record/standby start. Render reads this; the tap reads `tapArmed`.
+    private var armedFlags: [Bool] = []
+    private var tapArmed: [(voice: Int, hw: Int)] = []
+    private let recordingFlag = PPAtomicU64(0)
+    private let inputTapActive = PPAtomicU64(0)
+    private let recordPunchStartAtomic = PPAtomicU64(0)
+    private let recordFramesCommitted = PPAtomicU64(0)
+    private let renderLockMisses = PPAtomicU64(0)
+    private let transferredMisses = PPAtomicU64(0)
+    private var recordSession: RecordSession?
+    private var livePeaks = RecordLivePeaks(count: 1)
+    private var recordingFiles: [URL] = []
+    private var renameRecording: [Int: URL] = [:]
+    private(set) var recordDropoutCount: Int = 0
+    /// Disk-write failures during the last take (disk full / I/O error).
+    private(set) var recordWriteFailures: Int = 0
+    /// `.recording.wav` files from the last take that could not be merged. They are never deleted.
+    private(set) var recordKeptFiles: [String] = []
+    var onRecordDropouts: ((Int) -> Void)?
+    private var tapScratch: UnsafeMutablePointer<Float>?
+    private var tapScratchFrames = 0
+    private var tapScratchChannels = 0
+    private var tapScratchCapacity = 0
+    private var tapSessionRate: Double = 48_000
+    private var tapInputRate: Double = 48_000
+    private var configObserver: NSObjectProtocol?
+    private var overloadDevice: AudioDeviceID = 0
+    private var overloadBlock: AudioObjectPropertyListenerBlock?
+    private var liveWaveform: RecordSession?
+    private var liveWaveformPunch: Int = 0
+    private var liveWaveformBaseFrames: Int = 0
+    /// Block scratch. Resized on the main thread in `start` / when the voice count changes.
+    private var scratchPre: [Float] = []
+    private var scratchPost: [Float] = []
+    private var scratchFX: [Float] = []
+    private var scratchLevels: [Float] = []
+    private var scratchMuted: [Bool] = []
+    private var scratchAutoGains: [Float] = []
     private var recSilentMixer: AVAudioMixerNode?
     /// True only after a record tap is on inputNode. Touching inputNode at any other time makes macOS ask for the mic.
     private var didInstallInputTap = false
@@ -87,8 +109,7 @@ final class MixerEngine: @unchecked Sendable {
 
     /// Preferred Core Audio tap size for multi-channel record headroom.
     private static let recordTapFrames: AVAudioFrameCount = 4096
-    /// Ring capacity in frames (covers several tap blocks at 8-ch).
-    private static let recordRingCapacityFrames = 16_384
+    private static let tapScratchFrameCapacity = 16_384
 
     private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
 
@@ -105,6 +126,7 @@ final class MixerEngine: @unchecked Sendable {
     }
 
     /// Peak envelope for UI waveform (0…1). Precomputed at load so channel select never stalls audio.
+    /// While recording, armed strips combine the frozen cache with the writer-thread peak cache.
     func waveformPeaks(channelIndex: Int?, music: Bool, masterMix: Bool = false, stereoIndex: Int? = nil, binCount: Int = 800) -> [Float] {
         _ = binCount
         waveformLock.lock()
@@ -118,7 +140,58 @@ final class MixerEngine: @unchecked Sendable {
         guard let channelIndex, cachedVoicePeaks.indices.contains(channelIndex) else {
             return []
         }
+        if let live = liveWaveform, live.isArmed(voiceIndex: channelIndex) {
+            return liveVoicePeaks(channelIndex: channelIndex, session: live)
+        }
         return cachedVoicePeaks[channelIndex]
+    }
+
+    private func liveVoicePeaks(channelIndex: Int, session: RecordSession) -> [Float] {
+        let bins = waveformBinCount
+        let old = cachedVoicePeaks[channelIndex]
+        let punch = liveWaveformPunch
+        let base = liveWaveformBaseFrames
+        let committed = Int(session.framesCommitted)
+        let length = max(1, max(base, punch + committed))
+        var out = [Float](repeating: 0, count: bins)
+        let takeEnd = punch + committed
+        for i in 0..<bins {
+            let start = i * length / bins
+            let end = max(start + 1, (i + 1) * length / bins)
+            var peak: Float = 0
+            if base > 0, !old.isEmpty {
+                if start < punch {
+                    peak = max(peak, oldRangePeak(old, frames: base, start: start, end: min(end, punch)))
+                }
+                if end > takeEnd {
+                    peak = max(peak, oldRangePeak(old, frames: base, start: max(start, takeEnd), end: end))
+                }
+            }
+            if committed > 0, end > punch, start < takeEnd {
+                let a = max(0, start - punch)
+                let b = min(committed, end - punch)
+                peak = max(peak, session.livePeak(voiceIndex: channelIndex, from: a, to: b))
+            }
+            out[i] = peak
+        }
+        let maxPeak = out.max() ?? 1
+        if maxPeak > 1e-6 {
+            for i in 0..<bins { out[i] /= maxPeak }
+        }
+        return out
+    }
+
+    private func oldRangePeak(_ old: [Float], frames: Int, start: Int, end: Int) -> Float {
+        let a = max(0, min(frames, start))
+        let b = max(0, min(frames, end))
+        if b <= a || old.isEmpty || frames <= 0 { return 0 }
+        let b0 = min(old.count - 1, a * old.count / frames)
+        let b1 = min(old.count - 1, (b - 1) * old.count / frames)
+        var peak: Float = 0
+        if b1 >= b0 {
+            for i in b0...b1 { peak = max(peak, old[i]) }
+        }
+        return peak
     }
 
     func currentFrame() -> Int {
@@ -186,7 +259,8 @@ final class MixerEngine: @unchecked Sendable {
     ) throws {
         stop()
         lock.lock()
-        defer { lock.unlock() }
+        var holdsLock = true
+        defer { if holdsLock { lock.unlock() } }
 
         var rate: Double?
         var frames = 0
@@ -285,7 +359,13 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.reset()
         masterComp.reset()
         voiceMuteSpans = Array(repeating: [], count: voiceCount)
-        rebuildWaveformCache()
+        let snapVoices = voiceBuffers
+        let snapStereos = stereoBuffers
+        let snapChannels = stereoChannelCounts
+        let snapFrames = frameCount
+        lock.unlock()
+        holdsLock = false
+        publishWaveformCache(voices: snapVoices, stereos: snapStereos, stereoChannels: snapChannels, frames: snapFrames)
     }
 
     private static func interleavedStereo(_ buf: WAVIO.Buffer) -> (samples: [Float], channels: Int) {
@@ -314,7 +394,6 @@ final class MixerEngine: @unchecked Sendable {
     func prepareBlankSession(voiceCount: Int, sampleRate: Double) {
         stop()
         lock.lock()
-        defer { lock.unlock() }
         let n = max(0, min(voiceCount, StripperFolderLoader.maxSpeakers))
         if n == 0 {
             voiceBuffers = []
@@ -344,13 +423,13 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.reset()
         masterComp.reset()
         voiceMuteSpans = Array(repeating: [], count: n)
+        lock.unlock()
         rebuildWaveformCache()
     }
 
 
     func appendSilentVoice(speakerNumber: Int) {
         lock.lock()
-        defer { lock.unlock() }
         let silent = [Float](repeating: 0, count: frameCount)
         voiceBuffers.append(silent)
         speakerNumbers.append(speakerNumber)
@@ -361,6 +440,7 @@ final class MixerEngine: @unchecked Sendable {
         processors.append(p)
         voiceMuteSpans.append([])
         autoBalancer.resize(to: voiceCount)
+        lock.unlock()
         rebuildWaveformCache()
     }
 
@@ -393,8 +473,10 @@ final class MixerEngine: @unchecked Sendable {
 
     func removeVoice(at index: Int) {
         lock.lock()
-        defer { lock.unlock() }
-        guard voiceBuffers.indices.contains(index) else { return }
+        guard voiceBuffers.indices.contains(index) else {
+            lock.unlock()
+            return
+        }
         voiceBuffers.remove(at: index)
         if speakerNumbers.indices.contains(index) { speakerNumbers.remove(at: index) }
         if stemNames.indices.contains(index) { stemNames.remove(at: index) }
@@ -410,38 +492,53 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.reset()
         meterPre = Array(repeating: 0, count: meterSlotCount)
         meterPost = Array(repeating: 0, count: meterSlotCount)
+        lock.unlock()
         rebuildWaveformCache()
     }
 
     func rebuildPeaks() {
-        lock.lock()
         rebuildWaveformCache()
-        lock.unlock()
     }
 
+    /// Snapshot under the audio lock, then build the cache outside it.
     private func rebuildWaveformCache() {
+        lock.lock()
+        let voices = voiceBuffers
+        let stereos = stereoBuffers
+        let stereoChs = stereoChannelCounts
+        let frames = frameCount
+        lock.unlock()
+        publishWaveformCache(voices: voices, stereos: stereos, stereoChannels: stereoChs, frames: frames)
+    }
+
+    private func publishWaveformCache(
+        voices: [[Float]],
+        stereos: [[Float]],
+        stereoChannels: [Int],
+        frames: Int
+    ) {
         let bins = waveformBinCount
-        let voicePeaks = voiceBuffers.map { downsampleAbs($0, binCount: bins, frameCount: $0.count, channelCount: 1) }
+        let voicePeaks = voices.map { downsampleAbs($0, binCount: bins, frameCount: $0.count, channelCount: 1) }
         var stereoPeaks: [[Float]] = []
-        for i in stereoBuffers.indices {
-            let ch = max(1, stereoChannelCounts.indices.contains(i) ? stereoChannelCounts[i] : 2)
-            let frames = stereoBuffers[i].count / ch
-            stereoPeaks.append(downsampleAbs(stereoBuffers[i], binCount: bins, frameCount: frames, channelCount: ch))
+        for i in stereos.indices {
+            let ch = max(1, stereoChannels.indices.contains(i) ? stereoChannels[i] : 2)
+            let count = stereos[i].count / ch
+            stereoPeaks.append(downsampleAbs(stereos[i], binCount: bins, frameCount: count, channelCount: ch))
         }
 
         var master = [Float](repeating: 0, count: bins)
-        let total = max(1, frameCount)
+        let total = max(1, frames)
         for i in 0..<bins {
             let start = i * total / bins
             let end = max(start + 1, (i + 1) * total / bins)
             var peak: Float = 0
             for f in start..<min(end, total) {
-                for buf in voiceBuffers {
+                for buf in voices {
                     if f < buf.count { peak = max(peak, abs(buf[f])) }
                 }
-                for s in stereoBuffers.indices {
-                    let ch = max(1, stereoChannelCounts.indices.contains(s) ? stereoChannelCounts[s] : 2)
-                    let buf = stereoBuffers[s]
+                for s in stereos.indices {
+                    let ch = max(1, stereoChannels.indices.contains(s) ? stereoChannels[s] : 2)
+                    let buf = stereos[s]
                     let base = f * ch
                     if ch >= 2, base + 1 < buf.count {
                         peak = max(peak, abs(buf[base]), abs(buf[base + 1]))
@@ -562,14 +659,25 @@ final class MixerEngine: @unchecked Sendable {
                 recordMap[index] = ch
             }
         }
+        prepareRenderScratchLocked()
+        if !recording {
+            armedFlags = Array(repeating: false, count: voiceCount)
+            for index in recordMap.keys where index >= 0 && index < armedFlags.count {
+                armedFlags[index] = true
+            }
+        }
     }
 
     func start(
         fromBeginning: Bool = false,
         recording: Bool = false,
         inputMetering: Bool = false,
-        inputDeviceUID: String? = nil
+        inputDeviceUID: String? = nil,
+        recordFolder: URL? = nil
     ) throws {
+        if recording, recordFolder == nil {
+            throw MixerError.engine("No session folder")
+        }
         lock.lock()
         let wantsInput = recording || inputMetering
         if !wantsInput, frameCount <= 0 {
@@ -605,15 +713,18 @@ final class MixerEngine: @unchecked Sendable {
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
         masterComp.reset()
-        recLock.lock()
-        resetRecordRingLocked(channels: max(1, recPendingChannels))
-        liveInputPeaks = Array(repeating: 0, count: max(voiceCount, 1))
-        if recording {
-            recordUnderrunFrames = 0
-            recordUnderrunEvents = 0
-        }
-        recLock.unlock()
+        prepareRenderScratchLocked()
+        applyArmedFlagsLocked()
+        recordPunchStartAtomic.store(UInt64(max(0, playhead)))
+        recordFramesCommitted.store(0)
+        renderLockMisses.store(0)
+        transferredMisses.store(0)
+        recordDropoutCount = 0
+        recordWriteFailures = 0
+        recordKeptFiles = []
         lengthEmitCounter = 0
+        var punch = max(0, playhead)
+        var baseFrames = frameCount
         lock.unlock()
 
         if audioEngine != nil {
@@ -621,6 +732,11 @@ final class MixerEngine: @unchecked Sendable {
             lock.lock()
             self.recording = recording
             self.inputMetering = inputMetering || recording
+            prepareRenderScratchLocked()
+            applyArmedFlagsLocked()
+            punch = max(0, playhead)
+            baseFrames = frameCount
+            recordPunchStartAtomic.store(UInt64(punch))
             lock.unlock()
         }
 
@@ -638,30 +754,42 @@ final class MixerEngine: @unchecked Sendable {
                   let rPtr = abl[1].mData?.assumingMemoryBound(to: Float.self)
             else { return noErr }
 
-            self.lock.lock()
+            let n = Int(frameCount)
+            if !self.lock.tryLock() {
+                for i in 0..<n {
+                    lPtr[i] = 0
+                    rPtr[i] = 0
+                }
+                if self.recordingFlag.load() != 0 {
+                    self.renderLockMisses.fetchAdd(1)
+                }
+                return noErr
+            }
             var head = self.playhead
             let slots = max(1, self.meterSlotCount)
-            var pre = Array(repeating: Float(0), count: slots)
-            var post = Array(repeating: Float(0), count: slots)
+            let preN = min(slots, self.scratchPre.count, self.scratchPost.count)
+            for i in 0..<preN {
+                self.scratchPre[i] = 0
+                self.scratchPost[i] = 0
+            }
             var mL: Float = 0
             var mR: Float = 0
+            let punch = Int(self.recordPunchStartAtomic.load())
+            let committed = Int(self.recordFramesCommitted.load())
             var total = self.frameCount
-            let n = Int(frameCount)
-
-            if self.recording {
-                self.ensureCapacityLocked(head + n)
-                self.consumeRecordLocked(from: head, frames: n)
-                total = self.frameCount
+            let liveRecord = self.recording
+            if liveRecord {
+                let extended = punch + committed
+                if extended > total { total = extended }
             }
 
-            // Copy buffers after the record write so CoW does not play a stale take.
+            // Buffer headers only. Armed takes are on disk, so this does not copy samples.
             let voices = self.voiceBuffers
             let stereos = self.stereoBuffers
             let stereoChs = self.stereoChannelCounts
             let master = self.masterGain
             let voiceN = self.voiceCount
             let fadeFrames = MuteSpanStore.fadeFrames(sampleRate: self.sampleRate)
-            let liveRecord = self.recording
             let meterFromInput = self.inputMetering || self.recording
             let anySolo = self.processors.contains(where: \.solo) || self.stereoProcessors.contains(where: \.solo)
 
@@ -669,76 +797,74 @@ final class MixerEngine: @unchecked Sendable {
                 var mixL: Float = 0
                 var mixR: Float = 0
                 if head < total {
-                    var fxSamples = [Float](repeating: 0, count: voiceN)
-                    var levels = [Float](repeating: 0, count: voiceN)
-                    var muted = [Bool](repeating: false, count: voiceN)
+                    let fxN = min(voiceN, self.scratchFX.count, self.scratchLevels.count, self.scratchMuted.count)
+                    for c in 0..<fxN {
+                        self.scratchFX[c] = 0
+                        self.scratchLevels[c] = 0
+                        self.scratchMuted[c] = false
+                    }
                     for c in 0..<voiceN {
                         var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
-                        let armedSilent = liveRecord && self.recordMap[c] != nil
+                        let armedSilent = liveRecord && c < self.armedFlags.count && self.armedFlags[c]
                         if armedSilent {
-                            // Armed strips write dry tape but stay silent in the mix — skip FX on zeros.
+                            // Armed strips are written from the input tap and stay silent in the mix.
                             sample = 0
                         } else {
                             let spans = c < self.voiceMuteSpans.count ? self.voiceMuteSpans[c] : []
                             sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
                         }
-                        if self.processors.indices.contains(c) {
-                            muted[c] = self.processors[c].mute || (anySolo && !self.processors[c].solo)
+                        if self.processors.indices.contains(c), c < fxN {
+                            self.scratchMuted[c] = self.processors[c].mute || (anySolo && !self.processors[c].solo)
                             if armedSilent {
-                                fxSamples[c] = 0
-                                levels[c] = 0
+                                self.scratchFX[c] = 0
+                                self.scratchLevels[c] = 0
                             } else {
                                 let gained = self.processors[c].inputGained(sample)
                                 let fx = self.processors[c].processEffects(gained)
-                                fxSamples[c] = fx
-                                levels[c] = abs(fx)
+                                self.scratchFX[c] = fx
+                                self.scratchLevels[c] = abs(fx)
                             }
                         }
                     }
-                    let autoGains = self.autoBalancer.process(
-                        levels: levels,
-                        muted: muted,
-                        sampleRate: self.sampleRate
-                    )
-                    self.lastAutoGainDb = autoGains.map { g in
-                        20 * log10(max(g, 1e-6))
-                    }
-                    if self.lastLevelerGRDb.count != voiceN {
-                        self.lastLevelerGRDb = Array(repeating: 0, count: voiceN)
-                    }
-                    if self.lastDeessGRDb.count != voiceN {
-                        self.lastDeessGRDb = Array(repeating: 0, count: voiceN)
-                    }
-                    for c in 0..<voiceN {
-                        if self.processors.indices.contains(c) {
-                            self.lastLevelerGRDb[c] = self.processors[c].levelerMeterGRDb
-                            self.lastDeessGRDb[c] = self.processors[c].deessMeterGRDb
-                        }
+                    if voiceN > 0 {
+                        Self.mixAuto(
+                            balancer: &self.autoBalancer,
+                            levels: &self.scratchLevels,
+                            muted: &self.scratchMuted,
+                            gains: &self.scratchAutoGains,
+                            voiceN: voiceN,
+                            sampleRate: self.sampleRate
+                        )
                     }
                     for c in 0..<voiceN {
                         var sample: Float = (c < voices.count && head < voices[c].count) ? voices[c][head] : 0
-                        if liveRecord, self.recordMap[c] != nil {
+                        if liveRecord, c < self.armedFlags.count, self.armedFlags[c] {
                             sample = 0
                         } else {
                             let spans = c < self.voiceMuteSpans.count ? self.voiceMuteSpans[c] : []
                             sample *= MuteSpanStore.gain(at: head, spans: spans, fadeFrames: fadeFrames)
                         }
                         if self.processors.indices.contains(c) {
-                            let g = autoGains.indices.contains(c) ? autoGains[c] : 1
+                            let g = c < self.scratchAutoGains.count ? self.scratchAutoGains[c] : 1
                             let gained = self.processors[c].inputGained(sample)
+                            var preC: Float = c < self.scratchPre.count ? self.scratchPre[c] : 0
+                            var postC: Float = c < self.scratchPost.count ? self.scratchPost[c] : 0
+                            let fx = c < self.scratchFX.count ? self.scratchFX[c] : 0
                             let (l, r) = self.processors[c].finishMono(
-                                fxSamples[c],
+                                fx,
                                 autoMixGain: g,
                                 inputPeak: gained,
-                                prePeak: &pre[c],
-                                postPeak: &post[c]
+                                prePeak: &preC,
+                                postPeak: &postC
                             )
+                            if c < self.scratchPre.count { self.scratchPre[c] = preC }
+                            if c < self.scratchPost.count { self.scratchPost[c] = postC }
                             if !anySolo || self.processors[c].solo {
                                 mixL += l
                                 mixR += r
                             }
                             if !self.rtaIsMusic, !self.rtaIsMaster, c == self.rtaVoiceIndex {
-                                self.rta.push(fxSamples[c] * g)
+                                self.rta.push(fx * g)
                             }
                         }
                     }
@@ -760,16 +886,16 @@ final class MixerEngine: @unchecked Sendable {
                             mr = 0
                         }
                         let meterIdx = voiceN + s
-                        var preS = meterIdx < pre.count ? pre[meterIdx] : Float(0)
-                        var postS = meterIdx < post.count ? post[meterIdx] : Float(0)
+                        var preS = meterIdx < self.scratchPre.count ? self.scratchPre[meterIdx] : Float(0)
+                        var postS = meterIdx < self.scratchPost.count ? self.scratchPost[meterIdx] : Float(0)
                         if self.stereoProcessors.indices.contains(s) {
                             let (ol, orr) = self.stereoProcessors[s].processStereo(ml, mr, prePeak: &preS, postPeak: &postS)
                             if !anySolo || self.stereoProcessors[s].solo {
                                 mixL += ol
                                 mixR += orr
                             }
-                            if meterIdx < pre.count { pre[meterIdx] = preS }
-                            if meterIdx < post.count { post[meterIdx] = postS }
+                            if meterIdx < self.scratchPre.count { self.scratchPre[meterIdx] = preS }
+                            if meterIdx < self.scratchPost.count { self.scratchPost[meterIdx] = postS }
                             if self.rtaIsMusic, !self.rtaIsMaster, s == self.rtaVoiceIndex {
                                 self.rta.push(0.5 * (ol + orr))
                             }
@@ -793,24 +919,34 @@ final class MixerEngine: @unchecked Sendable {
             }
 
             self.playhead = head
-            if self.meterPre.count != slots {
-                self.meterPre = Array(repeating: 0, count: slots)
-                self.meterPost = Array(repeating: 0, count: slots)
+            let gainN = min(voiceN, self.scratchAutoGains.count, self.lastAutoGainDb.count)
+            for c in 0..<gainN {
+                self.lastAutoGainDb[c] = 20 * log10(max(self.scratchAutoGains[c], 1e-6))
             }
-            for i in 0..<slots {
-                self.meterPre[i] = max(self.meterPre[i] * 0.6, pre[i])
-                self.meterPost[i] = max(self.meterPost[i] * 0.6, post[i])
+            let grN = min(voiceN, self.processors.count)
+            for c in 0..<grN {
+                if c < self.lastLevelerGRDb.count {
+                    self.lastLevelerGRDb[c] = self.processors[c].levelerMeterGRDb
+                }
+                if c < self.lastDeessGRDb.count {
+                    self.lastDeessGRDb[c] = self.processors[c].deessMeterGRDb
+                }
             }
-            // Armed strips: PRE/POST show live input while standby or recording (mix stays silent).
+            let meterN = min(slots, self.meterPre.count, self.meterPost.count, self.scratchPre.count, self.scratchPost.count)
+            for i in 0..<meterN {
+                self.meterPre[i] = max(self.meterPre[i] * 0.6, self.scratchPre[i])
+                self.meterPost[i] = max(self.meterPost[i] * 0.6, self.scratchPost[i])
+            }
             if meterFromInput {
-                self.recLock.lock()
-                let live = self.liveInputPeaks
-                self.recLock.unlock()
-                for (voiceIndex, _) in self.recordMap {
-                    guard voiceIndex < slots, voiceIndex < live.count else { continue }
-                    let peak = live[voiceIndex]
-                    self.meterPre[voiceIndex] = max(self.meterPre[voiceIndex], peak)
-                    self.meterPost[voiceIndex] = max(self.meterPost[voiceIndex], peak)
+                let armedN = min(slots, self.armedFlags.count)
+                for voiceIndex in 0..<armedN where self.armedFlags[voiceIndex] {
+                    let peak = self.livePeaks.load(index: voiceIndex)
+                    if voiceIndex < self.meterPre.count {
+                        self.meterPre[voiceIndex] = max(self.meterPre[voiceIndex], peak)
+                    }
+                    if voiceIndex < self.meterPost.count {
+                        self.meterPost[voiceIndex] = max(self.meterPost[voiceIndex], peak)
+                    }
                 }
             }
             self.meterMasterL = max(self.meterMasterL * 0.6, mL)
@@ -819,38 +955,37 @@ final class MixerEngine: @unchecked Sendable {
             self.playheadEmitCounter += n
             let shouldEmit = self.meterCounter >= Int(self.sampleRate / 20)
             let shouldEmitHead = self.playheadEmitCounter >= Int(self.sampleRate / 30)
-            if shouldEmit {
-                self.lastRTABins = self.rta.computeBins(sampleRate: self.sampleRate)
-            }
-            let emitPre = self.meterPre
-            let emitPost = self.meterPost
             let emitL = self.meterMasterL
             let emitR = self.meterMasterR
-            let emitAuto = self.lastAutoGainDb
-            let emitLevelerGR = self.lastLevelerGRDb
-            let emitDeessGR = self.lastDeessGRDb
-            let emitRTA = self.lastRTABins
             let emitCompInL = self.masterComp.meterInL
             let emitCompInR = self.masterComp.meterInR
             let emitCompOutL = self.masterComp.meterOutL
             let emitCompOutR = self.masterComp.meterOutR
             let emitCompGR = self.masterComp.meterGRDb
-            let emitHead = head
+            var sentPre: [Float]?
+            var sentPost: [Float]?
+            var sentAuto: [Float]?
+            var sentLeveler: [Float]?
+            var sentDeess: [Float]?
+            var sentRTA: [Float]?
             if shouldEmit {
+                self.lastRTABins = self.rta.computeBins(sampleRate: self.sampleRate)
+                sentPre = self.meterPre
+                sentPost = self.meterPost
+                sentAuto = self.lastAutoGainDb
+                sentLeveler = self.lastLevelerGRDb
+                sentDeess = self.lastDeessGRDb
+                sentRTA = self.lastRTABins
                 self.meterCounter = 0
-                self.meterPre = Array(repeating: 0, count: slots)
-                self.meterPost = Array(repeating: 0, count: slots)
+                for i in 0..<min(slots, self.meterPre.count) { self.meterPre[i] = 0 }
+                for i in 0..<min(slots, self.meterPost.count) { self.meterPost[i] = 0 }
                 self.meterMasterL = 0
                 self.meterMasterR = 0
-                // Decay live peaks so meters fall when input goes quiet.
                 if meterFromInput {
-                    self.recLock.lock()
-                    for i in self.liveInputPeaks.indices {
-                        self.liveInputPeaks[i] *= 0.6
-                    }
-                    self.recLock.unlock()
+                    self.livePeaks.decayAll(by: 0.6)
                 }
             }
+            let emitHead = head
             if shouldEmitHead {
                 self.playheadEmitCounter = 0
             }
@@ -858,15 +993,16 @@ final class MixerEngine: @unchecked Sendable {
             let ended = !holdOpen && self.frameCount > 0 && head >= total
             let emitLength = self.recording && (self.lengthEmitCounter >= Int(self.sampleRate / 4))
             if emitLength { self.lengthEmitCounter = 0 }
-            let newLength = self.frameCount
+            let lengthCommitted = Int(self.recordFramesCommitted.load())
+            let newLength = self.recording ? max(self.frameCount, punch + lengthCommitted) : self.frameCount
             if self.recording {
                 self.lengthEmitCounter += n
             }
             self.lock.unlock()
 
-            if shouldEmit {
+            if shouldEmit, let sentPre, let sentPost, let sentAuto, let sentRTA, let sentLeveler, let sentDeess {
                 self.onMeters?(
-                    emitPre, emitPost, emitL, emitR, emitAuto, emitRTA, emitLevelerGR, emitDeessGR,
+                    sentPre, sentPost, emitL, emitR, sentAuto, sentRTA, sentLeveler, sentDeess,
                     emitCompInL, emitCompInR, emitCompOutL, emitCompOutR, emitCompGR
                 )
             }
@@ -888,10 +1024,37 @@ final class MixerEngine: @unchecked Sendable {
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 1
-        if recording || inputMetering {
-            try attachSilentInput(engine)
+        var startedSession: RecordSession?
+        if wantsInput {
+            let hooked = try connectSilentInput(engine)
+            if recording, let folder = recordFolder {
+                let session = try openRecordSession(
+                    folder: folder,
+                    punch: punch,
+                    baseFrames: baseFrames,
+                    channels: Int(hooked.format.channelCount),
+                    inputRate: hooked.format.sampleRate,
+                    deviceID: hooked.deviceID
+                )
+                startedSession = session
+                recordSession = session
+                waveformLock.lock()
+                liveWaveform = session
+                liveWaveformPunch = punch
+                liveWaveformBaseFrames = baseFrames
+                waveformLock.unlock()
+                installRecordObservers(on: engine, session: session, deviceID: hooked.deviceID)
+            }
+            installInputTap(on: engine, format: hooked.format, session: startedSession)
         }
-        try engine.start()
+        recordingFlag.store(recording ? 1 : 0)
+        inputTapActive.store(wantsInput ? 1 : 0)
+        do {
+            try engine.start()
+        } catch {
+            abandonStart(engine, session: startedSession)
+            throw error
+        }
         audioEngine = engine
         sourceNode = node
         playing = true
@@ -909,35 +1072,59 @@ final class MixerEngine: @unchecked Sendable {
         lock.lock()
         let wasRecording = recording
         playing = false
-        recording = false
-        inputMetering = false
         lock.unlock()
-        if didInstallInputTap, let engine = audioEngine {
-            engine.inputNode.removeTap(onBus: 0)
-            recSilentMixer.map { engine.disconnectNodeOutput($0) }
+
+        recordingFlag.store(0)
+        inputTapActive.store(0)
+        let running = audioEngine
+        if didInstallInputTap, let running {
+            running.inputNode.removeTap(onBus: 0)
+            recSilentMixer.map { running.disconnectNodeOutput($0) }
         }
         didInstallInputTap = false
-        audioEngine?.stop()
+        removeRecordObservers()
+        running?.stop()
         if let node = sourceNode {
-            audioEngine?.detach(node)
+            running?.detach(node)
         }
         if let mixer = recSilentMixer {
-            audioEngine?.detach(mixer)
+            running?.detach(mixer)
         }
         sourceNode = nil
         recSilentMixer = nil
-        recConverter = nil
-        recSourceFormat = nil
-        recDestFormat = nil
         audioEngine = nil
-        recLock.lock()
-        resetRecordRingLocked(channels: max(1, recPendingChannels))
-        liveInputPeaks = []
-        recLock.unlock()
+        freeTapScratch()
+
+        lock.lock()
+        recording = false
+        inputMetering = false
+        lock.unlock()
+
+        if wasRecording, let session = recordSession {
+            transferRenderLockMisses(to: session)
+            var totals = RecordTotals()
+            do {
+                totals = try session.finish()
+            } catch {
+                totals = session.finishedTotals()
+            }
+            recordDropoutCount = totals.dropouts
+            recordWriteFailures = totals.writeFailures
+            let failed = mergeRecording(session)
+            if !failed.isEmpty {
+                // Keep the raw takes: no rename, no delete.
+                let keep = Set(failed.map { session.folder.appendingPathComponent($0.file) })
+                recordingFiles.removeAll { keep.contains($0) }
+                for item in failed { renameRecording[item.voiceIndex] = nil }
+                recordKeptFiles = failed.map(\.file)
+            }
+        }
+        recordSession = nil
+        waveformLock.lock()
+        liveWaveform = nil
+        waveformLock.unlock()
         if wasRecording {
-            lock.lock()
             rebuildWaveformCache()
-            lock.unlock()
         }
     }
 
@@ -1164,18 +1351,32 @@ final class MixerEngine: @unchecked Sendable {
     }
 
     /// Writes each non-empty speaker buffer as `Speaker_N.wav` so the folder can be dropped later.
+    /// A take that started on an empty strip at frame 0 is renamed from `Speaker_N.recording.wav`.
     func writeWorkingTakes(to folder: URL) throws -> [Int: URL] {
         lock.lock()
         let sr = sampleRate
         let voices = voiceBuffers
         let nums = speakerNumbers
+        let renames = renameRecording
         lock.unlock()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var written: [Int: URL] = [:]
         for (i, buf) in voices.enumerated() {
-            guard !buf.isEmpty else { continue }
             let num = nums.indices.contains(i) ? nums[i] : (i + 1)
             let url = folder.appendingPathComponent("Speaker_\(num).wav")
+            if let src = renames[i], FileManager.default.fileExists(atPath: src.path) {
+                do {
+                    if FileManager.default.fileExists(atPath: url.path) {
+                        try FileManager.default.removeItem(at: url)
+                    }
+                    try FileManager.default.moveItem(at: src, to: url)
+                    written[i] = url
+                    continue
+                } catch {
+                    // Fall through and write the in-memory buffer.
+                }
+            }
+            guard !buf.isEmpty else { continue }
             try WAVIO.write(
                 url: url,
                 buffer: .init(sampleRate: sr, channelCount: 1, samples: buf)
@@ -1183,6 +1384,17 @@ final class MixerEngine: @unchecked Sendable {
             written[i] = url
         }
         return written
+    }
+
+    /// Removes leftover `Speaker_N.recording.wav` files after the canonical takes are saved.
+    func deleteRecordingFiles() {
+        for url in recordingFiles {
+            if FileManager.default.fileExists(atPath: url.path) {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        recordingFiles = []
+        renameRecording = [:]
     }
 
     private func ensureCapacityLocked(_ frames: Int) {
@@ -1203,74 +1415,76 @@ final class MixerEngine: @unchecked Sendable {
         frameCount = max(frameCount, need)
     }
 
-    private func resetRecordRingLocked(channels: Int) {
-        let ch = max(1, channels)
-        recPendingChannels = ch
-        recRingCapacityFrames = Self.recordRingCapacityFrames
-        recRing = Array(repeating: 0, count: recRingCapacityFrames * ch)
-        recRingWriteFrame = 0
-        recRingReadFrame = 0
-        recRingAvailableFrames = 0
-        recHoldSamples = Array(repeating: 0, count: ch)
+    private func openRecordSession(
+        folder: URL,
+        punch: Int,
+        baseFrames: Int,
+        channels: Int,
+        inputRate: Double,
+        deviceID: AudioDeviceID
+    ) throws -> RecordSession {
+        let armed = armedList(punch: punch)
+        let devices = MixerInputDevices.list()
+        let input = devices.first { $0.uid == (inputDeviceUID ?? "") }
+        let output = MixerInputDevices.defaultOutputDevice()
+        let inRate = input?.nominalSampleRate ?? inputRate
+        let outRate = output?.nominalSampleRate ?? 0
+        let inUID = input?.uid ?? (inputDeviceUID ?? "")
+        let outUID = output?.uid ?? ""
+        let header = RecordLogHeader(
+            startedAt: Date(),
+            sampleRate: sampleRate,
+            inputDeviceUID: inUID,
+            inputDeviceName: input?.name ?? "",
+            outputDeviceName: output?.name ?? "",
+            inputNominalRate: inRate,
+            outputNominalRate: outRate,
+            clockDomainsDiffer: inUID != outUID || abs(inRate - outRate) > 0.5,
+            punchStartFrame: punch,
+            armed: armed
+        )
+        _ = deviceID
+        let session = try RecordSession(
+            folder: folder,
+            sampleRate: sampleRate,
+            inputSampleRate: inputRate,
+            punchStartFrame: punch,
+            baseFrameCount: baseFrames,
+            armed: armed,
+            hwChannels: channels,
+            header: header,
+            onDropouts: { [weak self] count in
+                self?.onRecordDropouts?(count)
+            }
+        )
+        recordingFiles = armed.map { folder.appendingPathComponent($0.file) }
+        var renames: [Int: URL] = [:]
+        for item in armed where item.renameWhenDone {
+            renames[item.voiceIndex] = folder.appendingPathComponent(item.file)
+        }
+        renameRecording = renames
+        return session
     }
 
-    /// Dry tape ingest: pull only the frames we need from the ring; leave the rest.
-    /// Shortfall holds last sample per channel (counted underrun) — never blind zero-fill without logging.
-    private func consumeRecordLocked(from head: Int, frames n: Int) {
-        guard n > 0 else { return }
-        recLock.lock()
-        let ch = max(1, recPendingChannels)
-        if recHoldSamples.count < ch {
-            recHoldSamples.append(contentsOf: Array(repeating: 0, count: ch - recHoldSamples.count))
+    private func armedList(punch: Int) -> [RecordArmedChannel] {
+        var list: [RecordArmedChannel] = []
+        for index in recordMap.keys.sorted() {
+            guard let hw = recordMap[index] else { continue }
+            let num = speakerNumbers.indices.contains(index) ? speakerNumbers[index] : (index + 1)
+            let empty = !voiceBuffers.indices.contains(index) || voiceBuffers[index].isEmpty
+            list.append(RecordArmedChannel(
+                voiceIndex: index,
+                speakerNumber: num,
+                hwChannel: hw,
+                file: "Speaker_\(num).recording.wav",
+                renameWhenDone: punch == 0 && empty
+            ))
         }
-        var underrunThisBlock = 0
-        for i in 0..<n {
-            let haveFrame: Bool
-            let frameIdx: Int
-            if recRingAvailableFrames > 0, recRingCapacityFrames > 0 {
-                haveFrame = true
-                frameIdx = recRingReadFrame
-                recRingReadFrame = (recRingReadFrame + 1) % recRingCapacityFrames
-                recRingAvailableFrames -= 1
-            } else {
-                haveFrame = false
-                frameIdx = 0
-                underrunThisBlock += 1
-            }
-            for (voiceIndex, hwCh) in recordMap {
-                guard voiceBuffers.indices.contains(voiceIndex) else { continue }
-                let dest = head + i
-                guard dest < voiceBuffers[voiceIndex].count else { continue }
-                let channel = min(max(0, hwCh), ch - 1)
-                var sample: Float
-                if haveFrame {
-                    let idx = frameIdx * ch + channel
-                    sample = idx < recRing.count ? recRing[idx] : 0
-                    recHoldSamples[channel] = sample
-                } else {
-                    sample = channel < recHoldSamples.count ? recHoldSamples[channel] : 0
-                }
-                voiceBuffers[voiceIndex][dest] = sample
-            }
-        }
-        if underrunThisBlock > 0 {
-            recordUnderrunFrames += UInt64(underrunThisBlock)
-            recordUnderrunEvents += 1
-            if recordUnderrunEvents == 1 || recordUnderrunEvents % 64 == 0 {
-                NSLog(
-                    "PodProducer record underrun: +%d frames (total %llu frames / %llu events) playhead=%d",
-                    underrunThisBlock,
-                    recordUnderrunFrames,
-                    recordUnderrunEvents,
-                    head
-                )
-            }
-        }
-        recLock.unlock()
+        return list
     }
 
-    private func attachSilentInput(_ engine: AVAudioEngine) throws {
-        applyInputDevice(engine, uid: inputDeviceUID)
+    private func connectSilentInput(_ engine: AVAudioEngine) throws -> (format: AVAudioFormat, deviceID: AudioDeviceID) {
+        let deviceID = applyInputDevice(engine, uid: inputDeviceUID)
         let input = engine.inputNode
         let hwFormat = input.inputFormat(forBus: 0)
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
@@ -1283,35 +1497,448 @@ final class MixerEngine: @unchecked Sendable {
         engine.connect(silent, to: engine.mainMixerNode, format: silentOut)
         silent.outputVolume = 0
         recSilentMixer = silent
+        prepareTapScratch(channels: Int(hwFormat.channelCount))
+        livePeaks = RecordLivePeaks(count: max(voiceCount, 1))
+        tapSessionRate = sampleRate
+        tapInputRate = hwFormat.sampleRate
+        return (hwFormat, deviceID)
+    }
 
-        recSourceFormat = hwFormat
-        recDestFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: sampleRate,
-            channels: hwFormat.channelCount,
-            interleaved: true
-        )
-        // Keep the interface clock. Convert to float at that rate; only resample if this
-        // session already has audio at a different rate (mixing onto an existing timeline).
-        recConverter = nil
-
-        recLock.lock()
-        resetRecordRingLocked(channels: Int(hwFormat.channelCount))
-        recLock.unlock()
-
-        input.installTap(onBus: 0, bufferSize: Self.recordTapFrames, format: hwFormat) { [weak self] buffer, _ in
-            self?.ingestRecordBuffer(buffer)
+    private func installInputTap(on engine: AVAudioEngine, format: AVAudioFormat, session: RecordSession?) {
+        engine.inputNode.installTap(onBus: 0, bufferSize: Self.recordTapFrames, format: format) { [weak self] buffer, when in
+            self?.ingestRecordBuffer(buffer, when: when, session: session)
         }
         didInstallInputTap = true
     }
 
-    private func applyInputDevice(_ engine: AVAudioEngine, uid: String?) {
+    private func installRecordObservers(on engine: AVAudioEngine, session: RecordSession, deviceID: AudioDeviceID) {
+        removeRecordObservers()
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: nil
+        ) { _ in
+            session.noteConfigChange()
+        }
+        guard deviceID != 0 else { return }
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDeviceProcessorOverload,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        let block: AudioObjectPropertyListenerBlock = { _, _ in
+            session.noteDeviceOverload()
+        }
+        if AudioObjectAddPropertyListenerBlock(deviceID, &address, nil, block) == noErr {
+            overloadDevice = deviceID
+            overloadBlock = block
+        }
+    }
+
+    private func removeRecordObservers() {
+        if let configObserver {
+            NotificationCenter.default.removeObserver(configObserver)
+            self.configObserver = nil
+        }
+        if overloadDevice != 0, let overloadBlock {
+            var address = AudioObjectPropertyAddress(
+                mSelector: kAudioDeviceProcessorOverload,
+                mScope: kAudioObjectPropertyScopeGlobal,
+                mElement: kAudioObjectPropertyElementMain
+            )
+            AudioObjectRemovePropertyListenerBlock(overloadDevice, &address, nil, overloadBlock)
+            self.overloadDevice = 0
+            self.overloadBlock = nil
+        }
+    }
+
+    private func abandonStart(_ engine: AVAudioEngine, session: RecordSession?) {
+        recordingFlag.store(0)
+        inputTapActive.store(0)
+        if didInstallInputTap {
+            engine.inputNode.removeTap(onBus: 0)
+            didInstallInputTap = false
+        }
+        removeRecordObservers()
+        engine.stop()
+        freeTapScratch()
+        if let session {
+            transferRenderLockMisses(to: session)
+            _ = try? session.finish()
+            for item in session.armed {
+                try? FileManager.default.removeItem(at: session.folder.appendingPathComponent(item.file))
+            }
+        }
+        recordSession = nil
+        waveformLock.lock()
+        liveWaveform = nil
+        waveformLock.unlock()
+        lock.lock()
+        recording = false
+        inputMetering = false
+        playing = false
+        lock.unlock()
+    }
+
+    private func transferRenderLockMisses(to session: RecordSession) {
+        let misses = renderLockMisses.load()
+        let prev = transferredMisses.load()
+        if misses > prev {
+            session.addRenderLockMisses(misses - prev)
+            transferredMisses.store(misses)
+        }
+    }
+
+    private func prepareRenderScratchLocked() {
+        let slots = max(1, meterSlotCount)
+        let voices = max(1, voiceCount)
+        if scratchPre.count != slots {
+            scratchPre = [Float](repeating: 0, count: slots)
+            scratchPost = [Float](repeating: 0, count: slots)
+        }
+        if scratchFX.count != voices {
+            scratchFX = [Float](repeating: 0, count: voices)
+            scratchLevels = [Float](repeating: 0, count: voices)
+            scratchMuted = [Bool](repeating: false, count: voices)
+            scratchAutoGains = [Float](repeating: 1, count: voices)
+        }
+        if lastAutoGainDb.count != voiceCount {
+            lastAutoGainDb = [Float](repeating: 0, count: voiceCount)
+        }
+        if lastLevelerGRDb.count != voiceCount {
+            lastLevelerGRDb = [Float](repeating: 0, count: voiceCount)
+        }
+        if lastDeessGRDb.count != voiceCount {
+            lastDeessGRDb = [Float](repeating: 0, count: voiceCount)
+        }
+        if meterPre.count != slots {
+            meterPre = [Float](repeating: 0, count: slots)
+            meterPost = [Float](repeating: 0, count: slots)
+        }
+    }
+
+    private func applyArmedFlagsLocked() {
+        if armedFlags.count != voiceCount {
+            armedFlags = [Bool](repeating: false, count: voiceCount)
+        } else {
+            for i in armedFlags.indices { armedFlags[i] = false }
+        }
+        tapArmed.removeAll(keepingCapacity: true)
+        for (index, hw) in recordMap where index >= 0 && index < armedFlags.count {
+            armedFlags[index] = true
+            tapArmed.append((voice: index, hw: hw))
+        }
+        tapArmed.sort { $0.voice < $1.voice }
+    }
+
+    private static func mixAuto(
+        balancer: inout AutoBalancer,
+        levels: inout [Float],
+        muted: inout [Bool],
+        gains: inout [Float],
+        voiceN: Int,
+        sampleRate: Double
+    ) {
+        let n = voiceN
+        levels.withUnsafeBufferPointer { levelBuf in
+            muted.withUnsafeBufferPointer { muteBuf in
+                gains.withUnsafeMutableBufferPointer { gainBuf in
+                    guard let levelPtr = levelBuf.baseAddress,
+                          let mutePtr = muteBuf.baseAddress,
+                          let gainPtr = gainBuf.baseAddress
+                    else { return }
+                    let count = min(n, levelBuf.count, muteBuf.count, gainBuf.count)
+                    balancer.process(
+                        levels: UnsafeBufferPointer(start: levelPtr, count: count),
+                        muted: UnsafeBufferPointer(start: mutePtr, count: count),
+                        sampleRate: sampleRate,
+                        out: UnsafeMutableBufferPointer(start: gainPtr, count: count)
+                    )
+                }
+            }
+        }
+    }
+
+    private func prepareTapScratch(channels: Int) {
+        freeTapScratch()
+        let ch = max(1, channels)
+        let frames = Self.tapScratchFrameCapacity
+        let count = frames * ch
+        let ptr = UnsafeMutablePointer<Float>.allocate(capacity: count)
+        ptr.initialize(repeating: 0, count: count)
+        tapScratch = ptr
+        tapScratchFrames = frames
+        tapScratchChannels = ch
+        tapScratchCapacity = count
+    }
+
+    private func freeTapScratch() {
+        if let tapScratch {
+            tapScratch.deinitialize(count: tapScratchCapacity)
+            tapScratch.deallocate()
+        }
+        tapScratch = nil
+        tapScratchFrames = 0
+        tapScratchChannels = 0
+        tapScratchCapacity = 0
+    }
+
+    private func ingestRecordBuffer(_ buffer: AVAudioPCMBuffer, when: AVAudioTime, session: RecordSession?) {
+        if inputTapActive.load() == 0 { return }
+        let frames = Int(buffer.frameLength)
+        if frames <= 0 { return }
+        let ch = max(1, Int(buffer.format.channelCount))
+        if let session {
+            transferRenderLockMisses(to: session)
+        }
+        let srcRate = buffer.format.sampleRate
+        let destRate = tapSessionRate
+        let writing = recordingFlag.load() != 0 && session != nil
+        if writing, let session, abs(srcRate - destRate) > 0.5, srcRate > 0, destRate > 0 {
+            session.noteFormatChangeResample()
+            let copied = copyInterleaved(buffer)
+            copied.withUnsafeBufferPointer { raw in
+                guard let base = raw.baseAddress else { return }
+                noteInputPeaks(base, frames: frames, channels: ch)
+            }
+            if let resampled = try? MixerAudioIO.resampleInterleaved(copied, channels: ch, from: srcRate, to: destRate) {
+                let outFrames = ch > 0 ? resampled.count / ch : 0
+                ingestResampled(
+                    session,
+                    resampled,
+                    channels: ch,
+                    outFrames: outFrames,
+                    inputFrames: frames,
+                    sampleTime: when.isSampleTimeValid ? when.sampleTime : 0,
+                    sampleTimeValid: when.isSampleTimeValid
+                )
+            }
+            recordFramesCommitted.store(session.framesCommitted)
+            return
+        }
+        guard let scratch = tapScratch, tapScratchFrames > 0 else { return }
+        if ch != tapScratchChannels {
+            // Input channel count changed mid-take: can't map strips safely. Log it (once) and skip the buffer.
+            if writing, let session { session.noteChannelCountChange(channels: ch) }
+            return
+        }
+        let valid = when.isSampleTimeValid
+        var offset = 0
+        while offset < frames {
+            let n = min(tapScratchFrames, frames - offset)
+            writeInterleaved(from: buffer, start: offset, frames: n, channels: ch, into: scratch)
+            noteInputPeaks(scratch, frames: n, channels: ch)
+            if writing, let session {
+                let time = valid ? when.sampleTime + Int64(offset) : 0
+                session.ingest(interleaved: scratch, frames: n, sampleTime: time, sampleTimeValid: valid)
+            }
+            offset += n
+        }
+        if writing, let session {
+            recordFramesCommitted.store(session.framesCommitted)
+        }
+    }
+
+    private func ingestResampled(
+        _ session: RecordSession,
+        _ resampled: [Float],
+        channels: Int,
+        outFrames: Int,
+        inputFrames: Int,
+        sampleTime: Int64,
+        sampleTimeValid: Bool
+    ) {
+        let plan = session.beginInputBuffer(
+            sampleTime: sampleTime,
+            sampleTimeValid: sampleTimeValid,
+            inputFrames: inputFrames
+        )
+        if plan.ignore { return }
+        if plan.zeroSessionFrames > 0 {
+            session.writeTimelineZeros(plan.zeroSessionFrames)
+        }
+        let dropIn = min(max(0, plan.dropInputFrames), inputFrames)
+        var dropOut = 0
+        if inputFrames > 0, dropIn > 0 {
+            dropOut = Int((Double(dropIn) * Double(outFrames) / Double(inputFrames)).rounded())
+            if dropOut > outFrames { dropOut = outFrames }
+        }
+        let keep = outFrames - dropOut
+        if keep > 0 {
+            resampled.withUnsafeBufferPointer { raw in
+                guard let base = raw.baseAddress else { return }
+                session.writeTimelineAudio(base.advanced(by: dropOut * channels), frames: keep)
+            }
+        }
+    }
+
+    private func noteInputPeaks(_ src: UnsafePointer<Float>, frames: Int, channels: Int) {
+        for arm in tapArmed {
+            if arm.hw < 0 || arm.hw >= channels || arm.voice < 0 { continue }
+            var peak: Float = 0
+            let hw = arm.hw
+            for f in 0..<frames {
+                let sample = src[f * channels + hw]
+                let mag = sample < 0 ? -sample : sample
+                if mag > peak { peak = mag }
+            }
+            let prev = livePeaks.load(index: arm.voice)
+            if peak > prev {
+                livePeaks.store(index: arm.voice, peak: peak)
+            }
+        }
+    }
+
+    private func copyInterleaved(_ buffer: AVAudioPCMBuffer) -> [Float] {
+        let frames = Int(buffer.frameLength)
+        let ch = max(1, Int(buffer.format.channelCount))
+        var out = [Float](repeating: 0, count: frames * ch)
+        out.withUnsafeMutableBufferPointer { raw in
+            guard let base = raw.baseAddress else { return }
+            writeInterleaved(from: buffer, start: 0, frames: frames, channels: ch, into: base)
+        }
+        return out
+    }
+
+    private func writeInterleaved(
+        from buffer: AVAudioPCMBuffer,
+        start: Int,
+        frames: Int,
+        channels: Int,
+        into dst: UnsafeMutablePointer<Float>
+    ) {
+        let ch = channels
+        if let planar = buffer.floatChannelData {
+            for f in 0..<frames {
+                let src = start + f
+                for c in 0..<ch {
+                    dst[f * ch + c] = planar[c][src]
+                }
+            }
+            return
+        }
+        if let planar = buffer.int16ChannelData {
+            for f in 0..<frames {
+                let src = start + f
+                for c in 0..<ch {
+                    dst[f * ch + c] = Float(planar[c][src]) / 32768.0
+                }
+            }
+            return
+        }
+        if let planar = buffer.int32ChannelData {
+            for f in 0..<frames {
+                let src = start + f
+                for c in 0..<ch {
+                    dst[f * ch + c] = Float(planar[c][src]) / Float(Int32.max)
+                }
+            }
+            return
+        }
+        if buffer.format.isInterleaved, let data = buffer.audioBufferList.pointee.mBuffers.mData {
+            switch buffer.format.commonFormat {
+            case .pcmFormatFloat32:
+                let ptr = data.assumingMemoryBound(to: Float.self).advanced(by: start * ch)
+                dst.update(from: ptr, count: frames * ch)
+            case .pcmFormatInt16:
+                let ptr = data.assumingMemoryBound(to: Int16.self).advanced(by: start * ch)
+                let n = frames * ch
+                for i in 0..<n {
+                    dst[i] = Float(ptr[i]) / 32768.0
+                }
+            case .pcmFormatInt32:
+                let ptr = data.assumingMemoryBound(to: Int32.self).advanced(by: start * ch)
+                let scale = Float(Int32.max)
+                let n = frames * ch
+                for i in 0..<n {
+                    dst[i] = Float(ptr[i]) / scale
+                }
+            default:
+                let n = frames * ch
+                for i in 0..<n { dst[i] = 0 }
+            }
+            return
+        }
+        let n = frames * ch
+        for i in 0..<n { dst[i] = 0 }
+    }
+
+    /// Returns the armed takes that could not be loaded (their `.recording.wav` must be kept).
+    @discardableResult
+    private func mergeRecording(_ session: RecordSession) -> [RecordArmedChannel] {
+        var failed: [RecordArmedChannel] = []
+        let punch = max(0, session.punchStartFrame)
+        lock.lock()
+        var voices = voiceBuffers
+        lock.unlock()
+        var longest = 0
+        for item in session.armed {
+            let url = session.folder.appendingPathComponent(item.file)
+            guard let take = try? WAVIO.load(url: url) else {
+                failed.append(item)
+                continue
+            }
+            let samples = Self.monoTake(take)
+            let old = item.voiceIndex < voices.count ? voices[item.voiceIndex] : []
+            let merged = Self.spliceTake(old: old, punch: punch, take: samples)
+            while voices.count <= item.voiceIndex {
+                voices.append([])
+            }
+            voices[item.voiceIndex] = merged
+            if merged.count > longest { longest = merged.count }
+        }
+        lock.lock()
+        for buf in voices where buf.count > longest {
+            longest = buf.count
+        }
+        voiceBuffers = voices
+        if longest > frameCount {
+            ensureCapacityLocked(longest)
+        } else if longest > 0 {
+            frameCount = max(frameCount, longest)
+        }
+        lock.unlock()
+        return failed
+    }
+
+    private static func monoTake(_ buffer: WAVIO.Buffer) -> [Float] {
+        if buffer.channelCount <= 1 { return buffer.samples }
+        let ch = buffer.channelCount
+        var mono: [Float] = []
+        mono.reserveCapacity(buffer.frameCount)
+        for f in 0..<buffer.frameCount {
+            mono.append(buffer.samples[f * ch])
+        }
+        return mono
+    }
+
+    private static func spliceTake(old: [Float], punch: Int, take: [Float]) -> [Float] {
+        let punch = max(0, punch)
+        var merged: [Float] = []
+        merged.reserveCapacity(max(old.count, punch + take.count))
+        let prefix = min(punch, old.count)
+        if prefix > 0 {
+            merged.append(contentsOf: old[..<prefix])
+        }
+        if punch > prefix {
+            merged.append(contentsOf: repeatElement(Float(0), count: punch - prefix))
+        }
+        merged.append(contentsOf: take)
+        let resume = punch + take.count
+        if old.count > resume {
+            merged.append(contentsOf: old[resume...])
+        }
+        return merged
+    }
+
+    @discardableResult
+    private func applyInputDevice(_ engine: AVAudioEngine, uid: String?) -> AudioDeviceID {
         guard let uid,
               let device = MixerInputDevices.list().first(where: { $0.uid == uid })
-        else { return }
+        else { return 0 }
         var id = device.id
         let size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard let audioUnit = engine.inputNode.audioUnit else { return }
+        guard let audioUnit = engine.inputNode.audioUnit else { return device.id }
         _ = AudioUnitSetProperty(
             audioUnit,
             kAudioOutputUnitProperty_CurrentDevice,
@@ -1320,140 +1947,24 @@ final class MixerEngine: @unchecked Sendable {
             &id,
             size
         )
+        return device.id
+    }
+}
+
+final class UnfairLock: @unchecked Sendable {
+    private let pointer: UnsafeMutablePointer<os_unfair_lock>
+
+    init() {
+        pointer = UnsafeMutablePointer<os_unfair_lock>.allocate(capacity: 1)
+        pointer.initialize(to: os_unfair_lock())
     }
 
-    private func ingestRecordBuffer(_ buffer: AVAudioPCMBuffer) {
-        let frames = Int(buffer.frameLength)
-        guard frames > 0 else { return }
-        let ch = max(1, Int(buffer.format.channelCount))
-        var out = interleavedFloats(from: buffer)
-        var outCh = ch
-        let srcRate = buffer.format.sampleRate
-        let destRate = sampleRate
-        if abs(srcRate - destRate) > 0.5, srcRate > 0, destRate > 0 {
-            if let resampled = try? MixerAudioIO.resampleInterleaved(
-                out,
-                channels: ch,
-                from: srcRate,
-                to: destRate
-            ) {
-                out = resampled
-                outCh = ch
-            }
-        }
-
-        lock.lock()
-        let map = recordMap
-        let voiceN = voiceCount
-        let writing = recording
-        lock.unlock()
-
-        var peaks = Array(repeating: Float(0), count: max(voiceN, 1))
-        let pendingFrames = outCh > 0 ? out.count / outCh : 0
-        for (voiceIndex, hwCh) in map {
-            guard voiceIndex < peaks.count else { continue }
-            let channel = min(max(0, hwCh), outCh - 1)
-            var peak: Float = 0
-            for f in 0..<pendingFrames {
-                let idx = f * outCh + channel
-                if idx < out.count {
-                    peak = max(peak, abs(out[idx]))
-                }
-            }
-            peaks[voiceIndex] = peak
-        }
-
-        recLock.lock()
-        if liveInputPeaks.count < peaks.count {
-            liveInputPeaks.append(contentsOf: Array(repeating: 0, count: peaks.count - liveInputPeaks.count))
-        }
-        for i in peaks.indices {
-            if i < liveInputPeaks.count {
-                liveInputPeaks[i] = max(liveInputPeaks[i], peaks[i])
-            }
-        }
-        if writing {
-            writeRecordRingLocked(interleaved: out, channels: outCh, frames: pendingFrames)
-        }
-        recLock.unlock()
+    deinit {
+        pointer.deinitialize(count: 1)
+        pointer.deallocate()
     }
 
-    /// Append interleaved frames into the ring. Drop oldest on overflow (prefer not stalling the tap).
-    private func writeRecordRingLocked(interleaved out: [Float], channels outCh: Int, frames pendingFrames: Int) {
-        guard pendingFrames > 0, outCh > 0 else { return }
-        if outCh != recPendingChannels || recRing.isEmpty || recRingCapacityFrames == 0 {
-            resetRecordRingLocked(channels: outCh)
-        }
-        let ch = recPendingChannels
-        let cap = recRingCapacityFrames
-        for f in 0..<pendingFrames {
-            if recRingAvailableFrames >= cap {
-                recRingReadFrame = (recRingReadFrame + 1) % cap
-                recRingAvailableFrames -= 1
-            }
-            let destFrame = recRingWriteFrame
-            for c in 0..<ch {
-                let srcIdx = f * outCh + min(c, outCh - 1)
-                let dstIdx = destFrame * ch + c
-                let sample = srcIdx < out.count ? out[srcIdx] : 0
-                if dstIdx < recRing.count {
-                    recRing[dstIdx] = sample
-                }
-                if c < recHoldSamples.count {
-                    recHoldSamples[c] = sample
-                }
-            }
-            recRingWriteFrame = (recRingWriteFrame + 1) % cap
-            recRingAvailableFrames += 1
-        }
-    }
-
-    /// Dante / interfaces often deliver int PCM. Store float at the file’s native rate.
-    private func interleavedFloats(from buffer: AVAudioPCMBuffer) -> [Float] {
-        let frames = Int(buffer.frameLength)
-        let ch = max(1, Int(buffer.format.channelCount))
-        if let planar = buffer.floatChannelData {
-            var out = [Float](repeating: 0, count: frames * ch)
-            for f in 0..<frames {
-                for c in 0..<ch {
-                    out[f * ch + c] = planar[c][f]
-                }
-            }
-            return out
-        }
-        if let planar = buffer.int16ChannelData {
-            var out = [Float](repeating: 0, count: frames * ch)
-            for f in 0..<frames {
-                for c in 0..<ch {
-                    out[f * ch + c] = Float(planar[c][f]) / 32768.0
-                }
-            }
-            return out
-        }
-        if let planar = buffer.int32ChannelData {
-            var out = [Float](repeating: 0, count: frames * ch)
-            for f in 0..<frames {
-                for c in 0..<ch {
-                    out[f * ch + c] = Float(planar[c][f]) / Float(Int32.max)
-                }
-            }
-            return out
-        }
-        if buffer.format.isInterleaved, let data = buffer.audioBufferList.pointee.mBuffers.mData {
-            switch buffer.format.commonFormat {
-            case .pcmFormatFloat32:
-                let ptr = data.assumingMemoryBound(to: Float.self)
-                return Array(UnsafeBufferPointer(start: ptr, count: frames * ch))
-            case .pcmFormatInt16:
-                let ptr = data.assumingMemoryBound(to: Int16.self)
-                return UnsafeBufferPointer(start: ptr, count: frames * ch).map { Float($0) / 32768.0 }
-            case .pcmFormatInt32:
-                let ptr = data.assumingMemoryBound(to: Int32.self)
-                return UnsafeBufferPointer(start: ptr, count: frames * ch).map { Float($0) / Float(Int32.max) }
-            default:
-                break
-            }
-        }
-        return [Float](repeating: 0, count: frames * ch)
-    }
+    func lock() { os_unfair_lock_lock(pointer) }
+    func unlock() { os_unfair_lock_unlock(pointer) }
+    func tryLock() -> Bool { os_unfair_lock_trylock(pointer) }
 }

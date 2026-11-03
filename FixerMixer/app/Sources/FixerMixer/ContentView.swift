@@ -273,6 +273,11 @@ struct ContentView: View {
                             .disabled(session.isBouncing)
                             .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back. Standby is optional.")
                     }
+                    if session.isRecording {
+                        Text("Dropouts: \(session.recordDropouts)")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
+                    }
                 }
             } else {
                 HStack(spacing: 8) {

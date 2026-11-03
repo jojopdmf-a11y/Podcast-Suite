@@ -39,6 +39,8 @@ struct AutoBalancer {
     private var gains: [Float] = []
     /// Locked featured talker for Duck (−1 = none). Prefer stable lock over hair-trigger.
     private var duckWinnerIndex: Int = -1
+    /// Reused by Duck so the real-time path does not allocate a pool each sample.
+    private var poolIndices: [Int] = []
 
     var enabled: Bool {
         get { mode.isActive }
@@ -46,6 +48,9 @@ struct AutoBalancer {
     }
 
     mutating func resize(to n: Int) {
+        if poolIndices.capacity < n {
+            poolIndices.reserveCapacity(n)
+        }
         guard envs.count != n else { return }
         envs = Array(repeating: 0, count: n)
         gains = Array(repeating: 1, count: n)
@@ -72,20 +77,43 @@ struct AutoBalancer {
 
     /// `levels` = absolute amplitude of each voice (post-FX, pre-auto/fader).
     mutating func process(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
+        var out = [Float](repeating: 1, count: levels.count)
+        out.withUnsafeMutableBufferPointer { dst in
+            levels.withUnsafeBufferPointer { lvl in
+                muted.withUnsafeBufferPointer { mute in
+                    process(levels: lvl, muted: mute, sampleRate: sampleRate, out: dst)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Same math as `process(levels:muted:sampleRate:)`, writing into `out` (no per-call array).
+    mutating func process(
+        levels: UnsafeBufferPointer<Float>,
+        muted: UnsafeBufferPointer<Bool>,
+        sampleRate: Double,
+        out: UnsafeMutableBufferPointer<Float>
+    ) {
         let n = levels.count
         resize(to: n)
         if !mode.isActive || n == 0 {
-            for i in gains.indices { gains[i] = 1 }
-            return Array(gains.prefix(n))
+            for i in 0..<n {
+                if i < gains.count { gains[i] = 1 }
+                if i < out.count { out[i] = 1 }
+            }
+            return
         }
         switch mode {
         case .off:
-            for i in gains.indices { gains[i] = 1 }
-            return Array(gains.prefix(n))
+            for i in 0..<n {
+                if i < gains.count { gains[i] = 1 }
+                if i < out.count { out[i] = 1 }
+            }
         case .mix:
-            return processMix(levels: levels, muted: muted, sampleRate: sampleRate)
+            processMix(levels: levels, muted: muted, sampleRate: sampleRate, out: out)
         case .duck:
-            return processDuck(levels: levels, muted: muted, sampleRate: sampleRate)
+            processDuck(levels: levels, muted: muted, sampleRate: sampleRate, out: out)
         }
     }
 
@@ -99,7 +127,12 @@ struct AutoBalancer {
         return baselineDb[i]
     }
 
-    private mutating func processMix(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
+    private mutating func processMix(
+        levels: UnsafeBufferPointer<Float>,
+        muted: UnsafeBufferPointer<Bool>,
+        sampleRate: Double,
+        out: UnsafeMutableBufferPointer<Float>
+    ) {
         let n = levels.count
         // Envelope: slow release so brief pauses don’t look like “quiet talker”
         let envAtk = exp(-1.0 / (0.05 * Float(sampleRate)))
@@ -116,12 +149,12 @@ struct AutoBalancer {
         let strength: Float = 0.5 // only correct half the error
 
         for i in 0..<n {
-            if (muted.indices.contains(i) && muted[i]) || !isIncluded(i) {
+            if (i < muted.count && muted[i]) || !isIncluded(i) {
                 envs[i] *= envRel
                 gains[i] = unitySmooth * gains[i] + (1 - unitySmooth) * 1
                 continue
             }
-            let x = levels[i]
+            let x = i < levels.count ? levels[i] : 0
             if x > envs[i] {
                 envs[i] = envAtk * envs[i] + (1 - envAtk) * x
             } else {
@@ -146,13 +179,20 @@ struct AutoBalancer {
                 gains[i] = cutSmooth * gains[i] + (1 - cutSmooth) * Float(desired)
             }
         }
-        return Array(gains.prefix(n))
+        for i in 0..<n where i < out.count {
+            out[i] = i < gains.count ? gains[i] : 1
+        }
     }
 
     /// Hold-winner duck: featured talker auto gain ≈ 0 dB (baseline audible level);
     /// losers attenuate up to `maxAttenuationDb`. No L_i/L_sum share (that pulled the winner down).
     /// When silent / no clear winner, all pool members return toward unity.
-    private mutating func processDuck(levels: [Float], muted: [Bool], sampleRate: Double) -> [Float] {
+    private mutating func processDuck(
+        levels: UnsafeBufferPointer<Float>,
+        muted: UnsafeBufferPointer<Bool>,
+        sampleRate: Double,
+        out: UnsafeMutableBufferPointer<Float>
+    ) {
         let n = levels.count
         // Prefer stable lock over #66 hair-trigger — restore first-ship timing (~30/250/80 ms).
         let envAtk = exp(-1.0 / (0.03 * Float(sampleRate)))
@@ -164,16 +204,15 @@ struct AutoBalancer {
         let holdRatio: Float = 0.65
         let floorLin = pow(10.0, -max(0, maxAttenuationDb) / 20.0)
 
-        var poolIndices: [Int] = []
-        poolIndices.reserveCapacity(n)
+        poolIndices.removeAll(keepingCapacity: true)
         for i in 0..<n {
-            let x = levels[i]
+            let x = i < levels.count ? levels[i] : 0
             if x > envs[i] {
                 envs[i] = envAtk * envs[i] + (1 - envAtk) * x
             } else {
                 envs[i] = envRel * envs[i] + (1 - envRel) * x
             }
-            let inPool = isIncluded(i) && !(muted.indices.contains(i) && muted[i])
+            let inPool = isIncluded(i) && !(i < muted.count && muted[i])
             if inPool {
                 poolIndices.append(i)
             } else {
@@ -184,7 +223,10 @@ struct AutoBalancer {
 
         guard !poolIndices.isEmpty else {
             duckWinnerIndex = -1
-            return Array(gains.prefix(n))
+            for i in 0..<n where i < out.count {
+                out[i] = i < gains.count ? gains[i] : 1
+            }
+            return
         }
 
         var bestIdx = -1
@@ -224,7 +266,9 @@ struct AutoBalancer {
             let smooth = desired < gains[i] ? duckDownSmooth : releaseSmooth
             gains[i] = smooth * gains[i] + (1 - smooth) * desired
         }
-        return Array(gains.prefix(n))
+        for i in 0..<n where i < out.count {
+            out[i] = i < gains.count ? gains[i] : 1
+        }
     }
 }
 
