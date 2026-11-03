@@ -45,7 +45,7 @@ struct ChannelEQ: Equatable {
 
     subscript(band: GraphicEQBand) -> Float {
         get { gains[band.rawValue] }
-        set { gains[band.rawValue] = max(-12, min(12, newValue)) }
+        set { gains[band.rawValue] = max(-16, min(16, newValue)) }
     }
 
     var hpfIsActive: Bool { hpfHz >= HighPass24DSP.minHz }
@@ -145,7 +145,7 @@ struct ChannelParaEQ: Equatable {
     }
 }
 
-/// Speaker-only dynamic de-esser. Lives inside the EQ block (own bypass), not a reorderable chip.
+/// Speaker-only dynamic de-esser. Its own reorderable strip slot (`.deess`).
 struct ChannelDeEsser: Equatable {
     static let minHz: Float = 1_000
     static let maxHz: Float = 12_000
@@ -196,15 +196,26 @@ struct VoiceFX: Equatable {
     var wetter: Float = 0
     var wetterBypass: Bool = false
     var wetterRoom: WetterRoom = .drumRoom
-    /// 0…1 — correction strength / how hard to push into soft limit at Target
-    var levelerDrive: Float = 0
+    /// Upward compression, 0…+24 dB. Old mixes stored 0…1 in `levelerDrive` and map onto this.
+    var levelerDriveDb: Float = 0
+    /// Downward comp/limiter threshold, 0…−24 dB. 0 = safety ceiling only.
+    var levelerLimiterDb: Float = 0
+    /// Gentle gate under the DRIVE boost. Default on.
+    var levelerGate: Bool = true
     var levelerBypass: Bool = false
+    /// Decoded so older mix files still load. Not shown and not applied.
     var levelerTargetDb: Float = -6
+
+    mutating func clampLeveler() {
+        levelerDriveDb = min(24, max(0, levelerDriveDb))
+        levelerLimiterDb = min(0, max(-24, levelerLimiterDb))
+    }
 }
 
 /// Per-channel DSP chain order (independent per strip).
 enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
     case eq
+    case deess
     case deVerb
     case wetter
     case leveler
@@ -214,6 +225,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .eq: return "EQ"
+        case .deess: return "DE-ESS"
         case .deVerb: return "DE-VERB"
         case .wetter: return "AMBIENCE"
         case .leveler: return "LEVELER"
@@ -223,6 +235,7 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
     var panelTitle: String {
         switch self {
         case .eq: return "EQ 2520"
+        case .deess: return "DE-ESS"
         case .deVerb: return "DE-VERB"
         case .wetter: return "AMBIENCE"
         case .leveler: return "LEVELER"
@@ -231,15 +244,29 @@ enum ChannelDSPSlot: String, CaseIterable, Codable, Identifiable, Hashable {
 
     var panelSubtitle: String {
         switch self {
-        case .eq: return "10-band graphic · 560 curves · finer ±4 dB"
+        case .eq: return "10-band graphic · ±16 dB · 0.5 dB detents"
+        case .deess: return "Dynamic sibilance · Freq · Width · Threshold"
         case .deVerb: return "Dry room / ambience"
         case .wetter: return "Small spaces for dry voices"
-        case .leveler: return "Drive into target · soft compress + limit"
+        case .leveler: return "Drive up · limit down"
         }
     }
 
-    static let voiceDefault: [ChannelDSPSlot] = [.eq, .deVerb, .wetter, .leveler]
+    static let voiceDefault: [ChannelDSPSlot] = [.eq, .deess, .deVerb, .wetter, .leveler]
     static let musicDefault: [ChannelDSPSlot] = [.eq]
+
+    /// Old slot orders have no `.deess`. Insert it immediately after EQ so the chain matches
+    /// the previous “de-ess runs with the EQ” sound. Orders that already contain it are unchanged.
+    static func insertingDeEss(into order: [ChannelDSPSlot]) -> [ChannelDSPSlot] {
+        if order.contains(.deess) { return order }
+        var next = order
+        if let eqIndex = next.firstIndex(of: .eq) {
+            next.insert(.deess, at: eqIndex + 1)
+        } else {
+            next.insert(.deess, at: 0)
+        }
+        return next
+    }
 }
 
 struct ChannelStripState: Identifiable, Equatable {
@@ -264,14 +291,18 @@ struct ChannelStripState: Identifiable, Equatable {
     var eq = ChannelEQ()
     var para = ChannelParaEQ()
     var deess = ChannelDeEsser()
+    /// De-ess LISTEN. Monitoring only: not saved, not recorded, not exported. Cleared on session load.
+    var deessListen: Bool = false
     var voice = VoiceFX()
     /// Signal flow order for this channel’s processors.
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
     var prePeak: Float = 0
     var postPeak: Float = 0
-    /// Live Leveler gain reduction (dB ≥ 0) for the detail-panel GR meter.
+    /// Live Leveler downward gain reduction (dB ≥ 0).
     var levelerGRDb: Float = 0
-    /// Live De-ess gain reduction (dB ≥ 0) for the EQ-block GR meter.
+    /// Live Leveler upward boost (dB ≥ 0).
+    var levelerBoostDb: Float = 0
+    /// Live De-ess gain reduction (dB ≥ 0).
     var deessGRDb: Float = 0
     /// Hardware input channel (0-based) this strip records. Nil = not armed.
     var inputChannel: Int? = nil
@@ -302,6 +333,7 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.eq == rhs.eq
             && lhs.para == rhs.para
             && lhs.deess == rhs.deess
+            && lhs.deessListen == rhs.deessListen
             && lhs.voice == rhs.voice
             && lhs.dspOrder == rhs.dspOrder
             && lhs.inputChannel == rhs.inputChannel
@@ -422,7 +454,7 @@ final class MixerSession: ObservableObject {
     private var syncingLinkedPair = false
 
     func bindEngine() {
-        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, deessGR, compInL, compInR, compOutL, compOutR, compGR in
+        engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, levelerBoost, deessGR, compInL, compInR, compOutL, compOutR, compGR in
             Task { @MainActor in
                 guard let self else { return }
                 let n = self.voices.count
@@ -432,6 +464,9 @@ final class MixerSession: ObservableObject {
                 }
                 for i in 0..<min(n, levelerGR.count) {
                     self.voices[i].levelerGRDb = levelerGR[i]
+                }
+                for i in 0..<min(n, levelerBoost.count) {
+                    self.voices[i].levelerBoostDb = levelerBoost[i]
                 }
                 for i in 0..<min(n, deessGR.count) {
                     self.voices[i].deessGRDb = deessGR[i]

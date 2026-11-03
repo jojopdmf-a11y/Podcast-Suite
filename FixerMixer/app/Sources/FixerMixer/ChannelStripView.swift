@@ -308,7 +308,7 @@ struct GraphicEQView: View {
                     Text(gainLabel(eq[band]))
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .foregroundStyle(abs(eq[band]) < 0.05 ? MixerTheme.cyanDim : MixerTheme.lime)
-                        .frame(width: 28)
+                        .frame(width: 36)
                     Slider(value: Binding(
                         get: { Double(Graphic2520.normalized(fromGainDb: eq[band])) },
                         set: { eq[band] = Graphic2520.gainDb(fromNormalized: Float($0)) }
@@ -327,8 +327,7 @@ struct GraphicEQView: View {
     }
 
     private func gainLabel(_ db: Float) -> String {
-        if abs(db) < 0.05 { return "0" }
-        return String(format: "%+.0f", db)
+        String(format: "%+.1f", db)
     }
 }
 
@@ -504,7 +503,6 @@ struct ChannelStripView: View {
                     SelectChannelButton(isSelected: isSelected, action: onSelect)
                         .help("Select this channel for the waveform timeline")
                 }
-                inputGainRow
                 Text(channel.fileURL?.lastPathComponent ?? "— empty —")
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(MixerTheme.textSecondary)
@@ -776,36 +774,6 @@ struct ChannelStripView: View {
         }
     }
 
-    private var inputGainRow: some View {
-        HStack(spacing: 4) {
-            Text("GAIN")
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                .foregroundStyle(MixerTheme.cyanDim)
-            Slider(
-                value: Binding(
-                    get: { Double(channel.inputGainDb) },
-                    set: {
-                        channel.inputGainDb = Float($0)
-                        channel.clampInputGain()
-                        onChange()
-                    }
-                ),
-                in: Double(ChannelStripState.minInputGainDb)...Double(ChannelStripState.maxInputGainDb)
-            )
-            .controlSize(.mini)
-            .tint(MixerTheme.cyan)
-            Text(abs(channel.inputGainDb) < 0.05 ? "0" : String(format: "%+.0f", channel.inputGainDb))
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(MixerTheme.lime)
-                .frame(width: 28, alignment: .trailing)
-        }
-        .help("Input trim before DSP (−18…+36 dB). IN meter reads after this gain.")
-        .onTapGesture(count: 2) {
-            channel.inputGainDb = 0
-            onChange()
-        }
-    }
-
     @ViewBuilder
     private var channelNameLabel: some View {
         if canRename && isRenaming {
@@ -861,13 +829,15 @@ struct ChannelStripView: View {
     private func isSlotActive(_ slot: ChannelDSPSlot) -> Bool {
         switch slot {
         case .eq:
-            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive || channel.deess.isActive
+            return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive
+        case .deess:
+            return channel.deess.isActive
         case .deVerb:
             return channel.voice.deVerb > 0.02
         case .wetter:
             return channel.voice.wetter > 0.02
         case .leveler:
-            return channel.voice.levelerDrive > 0.02
+            return channel.voice.levelerDriveDb > 0.2 || channel.voice.levelerLimiterDb < -0.2
         }
     }
 
@@ -875,6 +845,8 @@ struct ChannelStripView: View {
         switch slot {
         case .eq:
             return $channel.eq.bypass
+        case .deess:
+            return $channel.deess.bypass
         case .deVerb:
             return $channel.voice.deVerbBypass
         case .wetter:

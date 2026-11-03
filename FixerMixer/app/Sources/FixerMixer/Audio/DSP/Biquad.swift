@@ -173,11 +173,15 @@ struct HighPass24DSP {
 }
 
 /// 560-style proportional-Q curves for the 10-band graphic (named EQ 2520 in the UI).
-/// Wide at small boost/cut, tighter toward ±12 dB. Extra fader travel in the ±4 dB region.
+/// Wide at small boost/cut, tighter toward ±12 dB, then held so ±16 is not narrower.
+/// Fader travel is linear across ±16 dB. Detents are applied only when a fader moves.
 enum Graphic2520 {
+    static let maxGainDb: Float = 16
+
     static func bandwidthOctaves(gainDb: Float) -> Float {
-        let g = abs(gainDb)
-        // ~1.7 oct at 2 dB (smooth overlap), ~0.55 oct at 12 dB (~12 dB/oct slope).
+        // Same curve as the previous ±12 design up through 12 dB (~1.7 oct at 2 dB, ~0.55 oct at 12).
+        // Above 12 dB, hold that bandwidth so ±16 does not get over-narrow.
+        let g = min(abs(gainDb), 12)
         let bw0: Float = 2.92
         let k: Float = 0.359
         return max(0.35, bw0 / (1 + k * g))
@@ -189,29 +193,18 @@ enum Graphic2520 {
         return Float(min(8, max(0.4, q)))
     }
 
-    /// 0 = −12 dB (bottom), 1 = +12 dB (top). Inner half of travel is ±4 dB.
+    /// 0 = −16 dB, 1 = +16 dB, even travel. Snaps to 0.5 dB. Call this from a fader drag, not on load.
     static func gainDb(fromNormalized t: Float) -> Float {
         let x = max(0, min(1, t))
-        let db: Float
-        if x < 0.25 {
-            db = -12 + (x / 0.25) * 8
-        } else if x <= 0.75 {
-            db = -4 + ((x - 0.25) / 0.5) * 8
-        } else {
-            db = 4 + ((x - 0.75) / 0.25) * 8
-        }
-        return max(-12, min(12, db))
+        let db = (x * (maxGainDb * 2)) - maxGainDb
+        let snapped = (db * 2).rounded() / 2
+        return max(-maxGainDb, min(maxGainDb, snapped))
     }
 
+    /// Position for a stored gain. Does not snap, so a loaded value that is off a detent stays put.
     static func normalized(fromGainDb db: Float) -> Float {
-        let g = max(-12, min(12, db))
-        if g < -4 {
-            return 0.25 * (g + 12) / 8
-        }
-        if g <= 4 {
-            return 0.25 + 0.5 * (g + 4) / 8
-        }
-        return 0.75 + 0.25 * (g - 4) / 8
+        let g = max(-maxGainDb, min(maxGainDb, db))
+        return (g + maxGainDb) / (maxGainDb * 2)
     }
 }
 
@@ -309,6 +302,8 @@ struct DeEsserDSP {
     var bypass: Bool = true
     /// Live gain reduction in dB (≥ 0) for the GR meter.
     private(set) var meterGRDb: Float = 0
+    /// Last detection-band sample. LISTEN monitors this; it does not change the processed output.
+    private(set) var lastBand: Float = 0
 
     private var bandPass = Biquad()
     private var env: Float = 0
@@ -342,14 +337,34 @@ struct DeEsserDSP {
         env = 0
         grLin = 1
         meterGRDb = 0
+        lastBand = 0
+    }
+
+    /// One band-pass tick at FREQ / WIDTH. Call once per sample; `reduce` reuses the result.
+    mutating func tickBand(_ x: Float) -> Float {
+        let detect = bandPass.process(x)
+        lastBand = detect
+        return detect
+    }
+
+    mutating func decayMeter() {
+        meterGRDb *= 0.9
     }
 
     mutating func process(_ x: Float) -> Float {
         if bypass {
-            meterGRDb *= 0.9
+            decayMeter()
             return x
         }
-        let detect = bandPass.process(x)
+        return reduce(x, detect: tickBand(x))
+    }
+
+    /// Gain reduction using a band sample already produced by `tickBand` this sample.
+    mutating func reduce(_ x: Float, detect: Float) -> Float {
+        if bypass {
+            decayMeter()
+            return x
+        }
         let absd = abs(detect)
         let atk = exp(-1.0 / (0.003 * Float(sampleRate)))
         let rel = exp(-1.0 / (0.080 * Float(sampleRate)))

@@ -12,88 +12,43 @@ struct SelectedChannelPanel: View {
 
     private var canRename: Bool { !channel.isStereo }
 
+    /// Panel knobs match the approved v3 size: radius 12.
+    private let knob: CGFloat = 24
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SELECTED CHANNEL")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .tracking(0.8)
-                        .foregroundStyle(APILook.accentBlue)
-                    if canRename && isRenaming {
-                        TextField("Channel name", text: $channel.name)
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(APILook.label)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .fill(APILook.panelRaised)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                    .stroke(APILook.accentBlue.opacity(0.7), lineWidth: 1)
-                            )
-                            .focused($nameFieldFocused)
-                            .onSubmit { commitRename() }
-                            .onChange(of: nameFieldFocused) { _, focused in
-                                if !focused { commitRename() }
-                            }
-                    } else {
-                        Text(channel.name)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .tracking(1)
-                            .foregroundStyle(APILook.label)
-                            .help(canRename ? "Double-click to rename" : channel.name)
-                            .onTapGesture(count: 2) {
-                                guard canRename else { return }
-                                isRenaming = true
-                                DispatchQueue.main.async { nameFieldFocused = true }
-                            }
-                    }
-                    if canRename {
-                        Text("Export name → \(channel.bounceStemBaseName)_fixed.wav")
-                            .font(.system(size: 8, weight: .medium, design: .monospaced))
-                            .foregroundStyle(APILook.labelDim)
-                    }
-                }
-                Spacer()
-                Text(channel.fileURL?.lastPathComponent ?? "—")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(APILook.labelDim)
-                    .lineLimit(1)
-            }
-
-            RTAView(bins: rtaBins, apiStyle: true)
-                .frame(height: 96)
-
+        VStack(alignment: .leading, spacing: 6) {
+            header
             if !channel.isStereo {
-                HStack(spacing: 6) {
-                    BypassToggle(bypass: $channel.dspBypass)
-                    Text("DSP ALL")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
-                    Spacer()
-                    Text(channel.dspBypass ? "Bypassed" : "Processing")
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundStyle(APILook.labelDim)
-                }
+                dspAllRow
             }
-            inputGainControl
-
-            ScrollView(.vertical, showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(channel.dspOrder) { slot in
-                        dspSlotBlock(slot)
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 6) {
+                    RTAView(bins: rtaBins, apiStyle: true)
+                        .frame(height: 44)
+                    eqCard
+                    if !channel.isStereo {
+                        HStack(alignment: .top, spacing: 6) {
+                            paraCard
+                                .frame(maxWidth: .infinity)
+                            deessCard
+                                .frame(maxWidth: .infinity)
+                        }
+                        HStack(alignment: .top, spacing: 6) {
+                            deVerbCard
+                                .frame(width: 86)
+                            ambienceCard
+                                .frame(maxWidth: .infinity)
+                            levelerCard
+                                .frame(width: 176)
+                        }
                     }
                 }
-                .padding(.bottom, 4)
-                .opacity(channel.dspBypass && !channel.isStereo ? 0.45 : 1)
-                .allowsHitTesting(!(channel.dspBypass && !channel.isStereo))
+                .opacity(channel.dspBypass && !channel.isStereo ? 0.55 : 1)
+                inputRail
+                    .frame(width: 58)
             }
         }
-        .padding(12)
+        .padding(8)
         .frame(width: 460, height: ChannelStripView.stripHeight, alignment: .top)
         .background(APILook.charcoal)
         .overlay(
@@ -102,6 +57,73 @@ struct SelectedChannelPanel: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onChange(of: channel) { _, _ in onChange() }
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("SELECTED CHANNEL")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.8)
+                    .foregroundStyle(APILook.accentBlue)
+                if canRename && isRenaming {
+                    TextField("Channel name", text: $channel.name)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(APILook.label)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(APILook.panelRaised)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(APILook.accentBlue.opacity(0.7), lineWidth: 1)
+                        )
+                        .focused($nameFieldFocused)
+                        .onSubmit { commitRename() }
+                        .onChange(of: nameFieldFocused) { _, focused in
+                            if !focused { commitRename() }
+                        }
+                } else {
+                    Text(channel.name)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .foregroundStyle(APILook.label)
+                        .lineLimit(1)
+                        .help(canRename ? "Double-click to rename" : channel.name)
+                        .onTapGesture(count: 2) {
+                            guard canRename else { return }
+                            isRenaming = true
+                            DispatchQueue.main.async { nameFieldFocused = true }
+                        }
+                }
+            }
+            if canRename {
+                Text("Export name → \(channel.bounceStemBaseName)_fixed.wav")
+                    .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    .foregroundStyle(APILook.labelDim)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            Text(channel.fileURL?.lastPathComponent ?? "—")
+                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                .foregroundStyle(APILook.labelDim)
+                .lineLimit(1)
+        }
+    }
+
+    private var dspAllRow: some View {
+        HStack(spacing: 6) {
+            BypassToggle(bypass: $channel.dspBypass)
+            Text("DSP ALL")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
+            Spacer()
+            Text(channel.dspBypass ? "Bypassed" : "Processing")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+        }
     }
 
     private func commitRename() {
@@ -118,91 +140,263 @@ struct SelectedChannelPanel: View {
         }
     }
 
-    @ViewBuilder
-    private func dspSlotBlock(_ slot: ChannelDSPSlot) -> some View {
-        switch slot {
-        case .eq:
-            VStack(alignment: .leading, spacing: 12) {
-                dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.eq.bypass) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        API560EQView(eq: $channel.eq)
-                        HPFControl(hpfHz: $channel.eq.hpfHz)
+    private func flowNumber(_ slot: ChannelDSPSlot) -> Int {
+        (channel.dspOrder.firstIndex(of: slot) ?? 0) + 1
+    }
+
+    private var eqCard: some View {
+        dspCard(
+            title: "EQ 2520",
+            subtitle: "10-band graphic · ±16 dB · 0.5 dB detents",
+            bypass: $channel.eq.bypass,
+            flow: flowNumber(.eq),
+            dotOn: !channel.eq.bypass && !channel.dspBypass
+        ) {
+            HStack(alignment: .top, spacing: 6) {
+                API560EQView(eq: $channel.eq)
+                hpfKnob
+                    .frame(width: 52)
+            }
+        }
+    }
+
+    private var hpfKnob: some View {
+        HardwareKnob(
+            value: Binding(
+                get: { channel.eq.hpfHz < HighPass24DSP.minHz ? 0 : channel.eq.hpfHz },
+                set: { raw in
+                    if raw < HighPass24DSP.minHz {
+                        channel.eq.hpfHz = 0
+                    } else {
+                        channel.eq.hpfHz = min(HighPass24DSP.maxHz, raw)
                     }
                 }
-                if !channel.isStereo {
-                    dspBlock(
-                        title: "PARA EQ",
-                        subtitle: "Proportional-Q notch · tighter as you boost or cut",
-                        bypass: $channel.para.bypass
-                    ) {
-                        ParaEQView(para: $channel.para)
-                    }
-                    dspBlock(
-                        title: "DE-ESS",
-                        subtitle: "Dynamic sibilance · Freq · Width · Threshold · GR only",
-                        bypass: $channel.deess.bypass
-                    ) {
-                        DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb)
-                    }
-                }
+            ),
+            range: 0...HighPass24DSP.maxHz,
+            label: "HPF",
+            valueText: { $0 < HighPass24DSP.minHz ? "OFF" : String(format: "%.0f", $0) },
+            diameter: knob,
+            defaultValue: 0,
+            dragSensitivity: 0.35
+        )
+        .help("24 dB/oct high-pass. Double-click for off.")
+    }
+
+    private var paraCard: some View {
+        dspCard(
+            title: "PARA EQ",
+            subtitle: nil,
+            bypass: $channel.para.bypass,
+            flow: flowNumber(.eq),
+            dotOn: !channel.para.bypass && !channel.dspBypass
+        ) {
+            ParaEQView(para: $channel.para, knob: knob)
+        }
+    }
+
+    private var deessCard: some View {
+        dspCard(
+            title: "DE-ESS",
+            subtitle: nil,
+            bypass: $channel.deess.bypass,
+            flow: flowNumber(.deess),
+            dotOn: !channel.deess.bypass && !channel.dspBypass,
+            headerExtra: AnyView(listenButton)
+        ) {
+            DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb, knob: knob)
+        }
+    }
+
+    private var listenButton: some View {
+        Button {
+            channel.deessListen.toggle()
+        } label: {
+            Text("LISTEN")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .foregroundStyle(channel.deessListen ? Color.black : APILook.label)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(channel.deessListen
+                              ? Color(red: 0.88, green: 0.70, blue: 0.23)
+                              : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(channel.deessListen
+                                ? Color(red: 0.88, green: 0.70, blue: 0.23)
+                                : Color(white: 0.35).opacity(0.6), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Monitor only: this channel’s output becomes the de-ess band at FREQ and WIDTH. Not recorded, not exported, and it turns off when a session loads.")
+    }
+
+    private var deVerbCard: some View {
+        dspCard(
+            title: "DE-VERB",
+            subtitle: nil,
+            bypass: $channel.voice.deVerbBypass,
+            flow: flowNumber(.deVerb),
+            dotOn: !channel.voice.deVerbBypass && !channel.dspBypass
+        ) {
+            VStack(spacing: 2) {
+                HardwareKnob(
+                    value: $channel.voice.deVerb,
+                    range: 0...1,
+                    label: "AMOUNT",
+                    valueText: { String(format: "%.0f%%", $0 * 100) },
+                    diameter: knob,
+                    defaultValue: 0
+                )
+                Text("deeper range (+25%)")
+                    .font(.system(size: 7, weight: .medium, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
-        case .deVerb:
-            dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.deVerbBypass) {
-                MixerLabeledSlider(title: "AMOUNT", value: $channel.voice.deVerb, range: 0...1, asPercent: true, defaultValue: 0)
-            }
-        case .wetter:
-            dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.wetterBypass) {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 4) {
-                        ForEach(WetterRoom.allCases) { mode in
-                            wetterRoomButton(mode)
-                        }
+        }
+    }
+
+    private var ambienceCard: some View {
+        dspCard(
+            title: "AMBIENCE",
+            subtitle: nil,
+            bypass: $channel.voice.wetterBypass,
+            flow: flowNumber(.wetter),
+            dotOn: !channel.voice.wetterBypass && !channel.dspBypass
+        ) {
+            HStack(alignment: .center, spacing: 6) {
+                HardwareKnob(
+                    value: $channel.voice.wetter,
+                    range: 0...1,
+                    label: "AMOUNT",
+                    valueText: { String(format: "%.0f%%", $0 * 100) },
+                    diameter: knob,
+                    defaultValue: 0
+                )
+                VStack(spacing: 3) {
+                    ForEach(WetterRoom.allCases) { mode in
+                        wetterRoomButton(mode)
                     }
-                    MixerLabeledSlider(title: "AMOUNT", value: $channel.voice.wetter, range: 0...1, asPercent: true, defaultValue: 0)
-                }
-            }
-        case .leveler:
-            dspBlock(title: slot.panelTitle, subtitle: slot.panelSubtitle, bypass: $channel.voice.levelerBypass) {
-                VStack(spacing: 8) {
-                    MixerLabeledSlider(title: "TARGET dB", value: $channel.voice.levelerTargetDb, range: -30...0, asPercent: false, defaultValue: -6)
-                    MixerLabeledSlider(title: "DRIVE", value: $channel.voice.levelerDrive, range: 0...1, asPercent: true, defaultValue: 0)
-                    LevelerGRMeter(grDb: channel.levelerGRDb)
                 }
             }
         }
     }
 
-    @ViewBuilder
-    private func dspBlock<Content: View>(
-        title: String,
-        subtitle: String,
-        bypass: Binding<Bool>,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                BypassToggle(bypass: bypass)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(title)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                        .foregroundStyle(bypass.wrappedValue ? APILook.labelDim : APILook.label)
-                    Text(subtitle)
-                        .font(.system(size: 9, weight: .medium, design: .rounded))
-                        .foregroundStyle(APILook.labelDim)
+    private var levelerCard: some View {
+        dspCard(
+            title: "LEVELER",
+            subtitle: nil,
+            bypass: $channel.voice.levelerBypass,
+            flow: flowNumber(.leveler),
+            dotOn: !channel.voice.levelerBypass && !channel.dspBypass
+        ) {
+            HStack(alignment: .top, spacing: 6) {
+                VStack(spacing: 2) {
+                    HardwareKnob(
+                        value: Binding(
+                            get: { channel.voice.levelerDriveDb },
+                            set: {
+                                channel.voice.levelerDriveDb = $0
+                                channel.voice.clampLeveler()
+                            }
+                        ),
+                        range: 0...24,
+                        label: "DRIVE",
+                        valueText: { String(format: "%+.1f", $0) },
+                        diameter: knob,
+                        defaultValue: 0
+                    )
+                    HardwareKnob(
+                        value: Binding(
+                            get: { channel.voice.levelerLimiterDb },
+                            set: {
+                                channel.voice.levelerLimiterDb = $0
+                                channel.voice.clampLeveler()
+                            }
+                        ),
+                        range: -24...0,
+                        label: "LIMITER",
+                        valueText: { String(format: "%+.1f", $0) },
+                        diameter: knob,
+                        defaultValue: 0
+                    )
                 }
-                Spacer()
+                VStack(spacing: 4) {
+                    gateButton
+                    HStack(spacing: 6) {
+                        LevelerDynMeter(db: channel.levelerBoostDb, maxDb: 24, label: "BST", fromBottom: true)
+                        LevelerDynMeter(db: channel.levelerGRDb, maxDb: 24, label: "GR", fromBottom: false)
+                    }
+                }
             }
-            content()
-                .opacity(bypass.wrappedValue ? 0.4 : 1)
-                .allowsHitTesting(!bypass.wrappedValue)
         }
-        .padding(10)
+    }
+
+    private var gateButton: some View {
+        let on = channel.voice.levelerGate
+        return Button {
+            channel.voice.levelerGate.toggle()
+        } label: {
+            Text("GATE")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .foregroundStyle(on ? Color.black : APILook.label)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.6), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help("On: a gentle gate under DRIVE so silence and room noise are not boosted. Default on.")
+    }
+
+    private var inputRail: some View {
+        VStack(spacing: 4) {
+            Text("INPUT")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+            Text("GAIN")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+            HardwareKnob(
+                value: Binding(
+                    get: { channel.inputGainDb },
+                    set: {
+                        channel.inputGainDb = $0
+                        channel.clampInputGain()
+                    }
+                ),
+                range: ChannelStripState.minInputGainDb...ChannelStripState.maxInputGainDb,
+                label: "dB",
+                valueText: { abs($0) < 0.05 ? "0.0" : String(format: "%+.1f", $0) },
+                diameter: knob,
+                defaultValue: 0,
+                dragSensitivity: 0.55
+            )
+            .help("Trim before DSP (−18…+36 dB). The strip IN meter reads after this gain. Double-click to reset.")
+            Text("OUT")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+                .padding(.top, 4)
+            PanelOutMeter(level: channel.postPeak)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+        .frame(maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(APILook.panelFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(APILook.border, lineWidth: 1)
         )
     }
@@ -212,67 +406,157 @@ struct SelectedChannelPanel: View {
         return Button {
             channel.voice.wetterRoom = mode
         } label: {
-            VStack(spacing: 4) {
-                LEDDot(on: on, color: APILook.ledGreen)
-                Text(mode.title)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .tracking(0.3)
-                    .foregroundStyle(APILook.label)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: on
-                                ? [Color(white: 0.22), Color(white: 0.14)]
-                                : [Color(white: 0.18), Color(white: 0.10)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(on ? APILook.accentBlue.opacity(0.7) : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-            )
+            Text(mode.title)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .tracking(0.2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+                .foregroundStyle(on ? Color.black : APILook.label)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.55), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .help(mode.help)
     }
 
-    private var inputGainControl: some View {
-        HStack(spacing: 8) {
-            Text("INPUT GAIN")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
-            Slider(
-                value: Binding(
-                    get: { Double(channel.inputGainDb) },
-                    set: {
-                        channel.inputGainDb = Float($0)
-                        channel.clampInputGain()
-                    }
-                ),
-                in: Double(ChannelStripState.minInputGainDb)...Double(ChannelStripState.maxInputGainDb)
+    /// Fixed card. The number is this channel’s strip order. Cards themselves do not move.
+    private func dspCard<Content: View>(
+        title: String,
+        subtitle: String?,
+        bypass: Binding<Bool>,
+        flow: Int,
+        dotOn: Bool,
+        headerExtra: AnyView? = nil,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        let controlsLocked = bypass.wrappedValue || channel.dspBypass
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                BypassToggle(bypass: bypass)
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(controlsLocked ? APILook.labelDim : APILook.label)
+                    .lineLimit(1)
+                if let headerExtra {
+                    headerExtra
+                }
+                Spacer(minLength: 2)
+                FlowDot(number: flow, on: dotOn)
+            }
+            if let subtitle {
+                Text(subtitle)
+                    .font(.system(size: 7, weight: .medium, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+                    .lineLimit(1)
+            }
+            content()
+                .opacity(controlsLocked ? 0.4 : 1)
+                .allowsHitTesting(!controlsLocked)
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(bypass.wrappedValue ? Color(white: 0.07) : APILook.panelFill)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(APILook.border, lineWidth: 1)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(bypass.wrappedValue ? 0.22 : 0))
+                .allowsHitTesting(false)
+        )
+    }
+}
+
+private struct FlowDot: View {
+    var number: Int
+    var on: Bool
+
+    var body: some View {
+        Text("\(number)")
+            .font(.system(size: 7, weight: .bold, design: .rounded))
+            .foregroundStyle(Color(white: 0.04))
+            .frame(width: 12, height: 12)
+            .background(
+                Circle().fill(on ? Color(red: 0.22, green: 0.89, blue: 0.48) : Color(white: 0.42))
             )
-            .tint(APILook.accentBlue)
-            Text(abs(channel.inputGainDb) < 0.05 ? "0.0 dB" : String(format: "%+.1f dB", channel.inputGainDb))
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundStyle(APILook.accentBlue)
-                .frame(width: 64, alignment: .trailing)
+            .help("Signal-flow step on this channel’s strip. Drag the strip chips to change the order.")
+    }
+}
+
+private struct PanelOutMeter: View {
+    var level: Float
+
+    private var db: Float { 20 * log10(max(level, 1e-5)) }
+
+    private var norm: CGFloat {
+        CGFloat(max(0, min(1, (db + 48) / 48)))
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.black.opacity(0.55))
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(APILook.ledGreen)
+                    .frame(height: max(2, geo.size.height * norm))
+            }
         }
-        .help("Trim before DSP (−18…+36 dB). IN meter on the strip reads after this gain. Double-click slider to reset.")
-        .onTapGesture(count: 2) {
-            channel.inputGainDb = 0
+        .frame(width: 14)
+        .frame(maxHeight: .infinity)
+        .help("Channel output, dBFS")
+    }
+}
+
+private struct LevelerDynMeter: View {
+    var db: Float
+    var maxDb: Float
+    var label: String
+    /// BOOST fills from the bottom. GR fills from the top.
+    var fromBottom: Bool
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(label)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+            GeometryReader { geo in
+                let fill = CGFloat(min(1, max(0, db / max(0.001, maxDb))))
+                ZStack(alignment: fromBottom ? .bottom : .top) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.55))
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(fromBottom ? APILook.ledGreen : APILook.ledYellow)
+                        .frame(height: max(1, geo.size.height * fill))
+                }
+            }
+            .frame(width: 10, height: 44)
+            Text(String(format: fromBottom ? "%+.1f" : "%.1f", max(0, db)))
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(db > 0.15 ? APILook.accentBlue : APILook.labelDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
+        .help(fromBottom ? "Leveler upward boost" : "Leveler downward gain reduction")
     }
 }
 
 struct DeEsserView: View {
     @Binding var deess: ChannelDeEsser
     var grDb: Float
+    var knob: CGFloat = 24
 
     private var logFreq: Binding<Float> {
         Binding(
@@ -285,49 +569,47 @@ struct DeEsserView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("LISTEN = solo the FREQ band only")
+                .font(.system(size: 7, weight: .medium, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+                .lineLimit(1)
+            HStack(alignment: .top, spacing: 4) {
                 HardwareKnob(
                     value: logFreq,
                     range: log2(ChannelDeEsser.minHz)...log2(ChannelDeEsser.maxHz),
                     label: "FREQ",
                     valueText: { Self.freqLabel(hz: exp2($0)) },
-                    diameter: 48,
+                    diameter: knob,
                     defaultValue: log2(Float(6_000)),
                     dragSensitivity: 0.32
                 )
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("WIDTH")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(APILook.labelDim)
-                    HStack(spacing: 4) {
-                        ForEach(ParaEQWidth.allCases) { mode in
-                            widthButton(mode)
+                HardwareKnob(
+                    value: Binding(
+                        get: { deess.thresholdDb },
+                        set: {
+                            deess.thresholdDb = $0
+                            deess.clamp()
                         }
-                    }
-                    Text(widthCaption)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(APILook.accentBlue)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                    ),
+                    range: ChannelDeEsser.minThresholdDb...ChannelDeEsser.maxThresholdDb,
+                    label: "THRESHOLD",
+                    valueText: { String(format: "%+.0f", $0) },
+                    diameter: knob,
+                    defaultValue: -24,
+                    dragSensitivity: 0.45
+                )
+                DeEssGRMeter(grDb: grDb)
             }
-            MixerLabeledSlider(
-                title: "THRESHOLD",
-                value: Binding(
-                    get: { deess.thresholdDb },
-                    set: {
-                        deess.thresholdDb = $0
-                        deess.clamp()
-                    }
-                ),
-                range: ChannelDeEsser.minThresholdDb...ChannelDeEsser.maxThresholdDb,
-                asPercent: false,
-                defaultValue: -24
-            )
-            DeEssGRMeter(grDb: grDb)
-            Text("Width blends split-band cut toward wideband. No presets.")
-                .font(.system(size: 8, weight: .medium, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
+            HStack(spacing: 3) {
+                ForEach(ParaEQWidth.allCases) { mode in
+                    widthButton(mode)
+                }
+            }
+            Text(widthCaption)
+                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                .foregroundStyle(APILook.accentBlue)
+                .lineLimit(1)
         }
     }
 
@@ -344,31 +626,21 @@ struct DeEsserView: View {
         return Button {
             deess.width = mode
         } label: {
-            VStack(spacing: 4) {
-                LEDDot(on: on, color: APILook.ledGreen)
-                Text(mode.title)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .tracking(0.3)
-                    .foregroundStyle(APILook.label)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: on
-                                ? [Color(white: 0.22), Color(white: 0.14)]
-                                : [Color(white: 0.18), Color(white: 0.10)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(on ? APILook.accentBlue.opacity(0.7) : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-            )
+            Text(mode.title)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .foregroundStyle(on ? Color.black : APILook.label)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .help("Detection / reduction bandwidth — carries split vs wideband")
@@ -382,40 +654,30 @@ struct DeEsserView: View {
     }
 }
 
-/// Compact GR bar for De-ess (0…12 dB display).
+/// Compact vertical GR bar for De-ess (0…12 dB display).
 private struct DeEssGRMeter: View {
     var grDb: Float
     private let maxDisplay: Float = 12
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("GR")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(APILook.labelDim)
-                Spacer()
-                Text(String(format: "%.1f dB", max(0, grDb)))
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
-            }
+        VStack(spacing: 2) {
+            Text("GR")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
             GeometryReader { geo in
-                let w = geo.size.width
                 let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
-                ZStack(alignment: .trailing) {
-                    Capsule()
-                        .fill(Color.black.opacity(0.4))
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [APILook.ledYellow.opacity(0.85), APILook.ledRed.opacity(0.9)],
-                                startPoint: .trailing,
-                                endPoint: .leading
-                            )
-                        )
-                        .frame(width: max(2, w * fill))
+                ZStack(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.45))
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(APILook.ledYellow)
+                        .frame(height: max(1, geo.size.height * fill))
                 }
             }
-            .frame(height: 8)
+            .frame(width: 8, height: 36)
+            Text(String(format: "%.1f", max(0, grDb)))
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
         }
         .help("De-ess gain reduction")
     }
@@ -476,6 +738,7 @@ struct RTAView: View {
 
 struct ParaEQView: View {
     @Binding var para: ChannelParaEQ
+    var knob: CGFloat = 24
 
     private var logFreq: Binding<Float> {
         Binding(
@@ -488,23 +751,23 @@ struct ParaEQView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
                 Text("vs GRAPHIC")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
                     .foregroundStyle(APILook.labelDim)
                 ForEach(ParaEQPlacement.allCases) { mode in
                     placementButton(mode)
                 }
                 Spacer(minLength: 0)
             }
-            HStack(alignment: .top, spacing: 10) {
+            HStack(alignment: .top, spacing: 4) {
                 HardwareKnob(
                     value: logFreq,
                     range: log2(ChannelParaEQ.minHz)...log2(ChannelParaEQ.maxHz),
                     label: "FREQ",
                     valueText: { Self.freqLabel(hz: exp2($0)) },
-                    diameter: 52,
+                    diameter: knob,
                     defaultValue: log2(Float(1_000)),
                     dragSensitivity: 0.32
                 )
@@ -518,30 +781,22 @@ struct ParaEQView: View {
                     ),
                     range: ChannelParaEQ.minGainDb...ChannelParaEQ.maxGainDb,
                     label: "GAIN",
-                    valueText: { abs($0) < 0.05 ? "0.0 dB" : String(format: "%+.1f dB", $0) },
-                    diameter: 52,
+                    valueText: { abs($0) < 0.05 ? "0.0" : String(format: "%+.1f", $0) },
+                    diameter: knob,
                     defaultValue: 0,
                     dragSensitivity: 0.45
                 )
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("WIDTH")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .foregroundStyle(APILook.labelDim)
-                    HStack(spacing: 4) {
-                        ForEach(ParaEQWidth.allCases) { mode in
-                            widthButton(mode)
-                        }
+                VStack(spacing: 3) {
+                    ForEach(ParaEQWidth.allCases) { mode in
+                        widthButton(mode)
                     }
-                    Text(widthCaption)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(APILook.accentBlue)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            Text("Bandwidth shrinks as |gain| grows. Double-click a knob to reset. Option-drag for extra-fine.")
-                .font(.system(size: 8, weight: .medium, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
+            Text(widthCaption)
+                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                .foregroundStyle(APILook.accentBlue)
+                .lineLimit(1)
         }
     }
 
@@ -560,11 +815,11 @@ struct ParaEQView: View {
             para.placement = mode
         } label: {
             Text(mode.title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.4)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .tracking(0.3)
                 .foregroundStyle(on ? APILook.charcoal : APILook.label)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
                 .background(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(on ? APILook.accentBlue : Color(white: 0.16))
@@ -583,31 +838,21 @@ struct ParaEQView: View {
         return Button {
             para.width = mode
         } label: {
-            VStack(spacing: 4) {
-                LEDDot(on: on, color: APILook.ledGreen)
-                Text(mode.title)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .tracking(0.3)
-                    .foregroundStyle(APILook.label)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: on
-                                ? [Color(white: 0.22), Color(white: 0.14)]
-                                : [Color(white: 0.18), Color(white: 0.10)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(on ? APILook.accentBlue.opacity(0.7) : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-            )
+            Text(mode.title)
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 3)
+                .foregroundStyle(on ? Color.black : APILook.label)
+                .background(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
+                )
         }
         .buttonStyle(.plain)
         .help("How quickly the band narrows as you boost or cut")
@@ -666,45 +911,6 @@ struct HPFControl: View {
             }
         }
         .help("Double-click to turn HPF off")
-    }
-}
-
-/// Compact gain-reduction bar for the Leveler detail panel (0…12 dB display).
-private struct LevelerGRMeter: View {
-    var grDb: Float
-    private let maxDisplay: Float = 12
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("GR")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(APILook.labelDim)
-                Spacer()
-                Text(String(format: "%.1f dB", max(0, grDb)))
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(grDb > 0.15 ? APILook.ledYellow : APILook.labelDim)
-            }
-            GeometryReader { geo in
-                let w = geo.size.width
-                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
-                ZStack(alignment: .trailing) {
-                    Capsule()
-                        .fill(Color.black.opacity(0.4))
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [APILook.ledYellow.opacity(0.85), APILook.ledRed.opacity(0.9)],
-                                startPoint: .trailing,
-                                endPoint: .leading
-                            )
-                        )
-                        .frame(width: max(2, w * fill))
-                }
-            }
-            .frame(height: 8)
-        }
-        .help("Leveler gain reduction")
     }
 }
 
