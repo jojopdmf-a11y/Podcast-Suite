@@ -5,13 +5,15 @@ import SwiftUI
 struct SelectedChannelPanel: View {
     @Binding var channel: ChannelStripState
     var rtaBins: [Float]
+    /// Polled by the clip lamp. True for about 2 seconds after the post-gain input hits 0 dBFS.
+    var inputIsClipping: () -> Bool = { false }
     var onChange: () -> Void
 
     @State private var isRenaming = false
     @FocusState private var nameFieldFocused: Bool
 
-    /// Fitting height of this column with the RTA at its original 96pt frame.
-    /// The window cannot shrink the panel below this; the strip bay gives up space first.
+    /// Floor for this column. The RTA starts at 96pt and grows with the window;
+    /// the strip bay gives up height before this panel clips.
     static let minimumHeight: CGFloat = 644
 
     private var canRename: Bool { !channel.isStereo }
@@ -20,45 +22,36 @@ struct SelectedChannelPanel: View {
     private let knob: CGFloat = 24
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             header
-            if !channel.isStereo {
-                dspAllRow
-            }
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Same frame as main (before this branch): the whole RTA view, label included.
-                    RTAView(bins: rtaBins, apiStyle: true)
-                        .frame(height: 96)
-                    eqCard
-                    if !channel.isStereo {
-                        HStack(alignment: .top, spacing: 6) {
-                            paraCard
-                                .frame(maxWidth: .infinity)
-                            deessCard
-                                .frame(maxWidth: .infinity)
-                        }
-                        HStack(alignment: .top, spacing: 6) {
-                            deVerbCard
-                                .frame(width: 86)
-                            ambienceCard
-                                .frame(maxWidth: .infinity)
-                            levelerCard
-                                .frame(width: 176)
-                        }
+            dspAllRow
+            VStack(alignment: .leading, spacing: 8) {
+                // RTA and the bottom row share leftover height so the column fills to the strip bottoms.
+                RTAView(bins: rtaBins, apiStyle: true)
+                    .frame(minHeight: 96, maxHeight: .infinity, alignment: .top)
+                eqCard
+                if !channel.isStereo {
+                    HStack(alignment: .top, spacing: 8) {
+                        paraCard
+                            .frame(maxWidth: .infinity)
+                        deessCard
+                            .frame(maxWidth: .infinity)
                     }
+                    HStack(alignment: .top, spacing: 8) {
+                        deVerbCard
+                            .frame(width: 124, alignment: .top)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                        ambienceCard
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        levelerCard
+                            .frame(width: 198, alignment: .top)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(channel.dspBypass && !channel.isStereo ? 0.55 : 1)
-                // Width reservation only. The live rail is overlaid so its flexible meter
-                // does not inflate this column's ideal height.
-                Color.clear.frame(width: 58, height: 0)
             }
-            .overlay(alignment: .topTrailing) {
-                inputRail
-                    .frame(width: 58)
-                    .frame(maxHeight: .infinity)
-            }
+            .frame(maxHeight: .infinity, alignment: .top)
+            .opacity(channel.dspBypass && !channel.isStereo ? 0.55 : 1)
         }
         .padding(8)
         .frame(width: 460, alignment: .topLeading)
@@ -127,15 +120,47 @@ struct SelectedChannelPanel: View {
     }
 
     private var dspAllRow: some View {
-        HStack(spacing: 6) {
-            BypassToggle(bypass: $channel.dspBypass)
-            Text("DSP ALL")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
-            Spacer()
-            Text(channel.dspBypass ? "Bypassed" : "Processing")
-                .font(.system(size: 9, weight: .medium, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
+        HStack(alignment: .center, spacing: 6) {
+            if !channel.isStereo {
+                BypassToggle(bypass: $channel.dspBypass)
+                Text("DSP ALL")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
+                Text(channel.dspBypass ? "Bypassed" : "Processing")
+                    .font(.system(size: 9, weight: .medium, design: .rounded))
+                    .foregroundStyle(APILook.labelDim)
+            }
+            Spacer(minLength: 8)
+            inputGainCluster
+        }
+    }
+
+    /// Input trim sits in the header. The clip lamp is the signal right after this gain.
+    private var inputGainCluster: some View {
+        HStack(alignment: .center, spacing: 6) {
+            VStack(spacing: 0) {
+                Text("INPUT")
+                Text("GAIN")
+            }
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .foregroundStyle(APILook.labelDim)
+            InputClipLamp(isClipping: inputIsClipping)
+            HardwareKnob(
+                value: Binding(
+                    get: { channel.inputGainDb },
+                    set: {
+                        channel.inputGainDb = $0
+                        channel.clampInputGain()
+                    }
+                ),
+                range: ChannelStripState.minInputGainDb...ChannelStripState.maxInputGainDb,
+                label: "dB",
+                valueText: { abs($0) < 0.05 ? "0.0" : String(format: "%+.1f", $0) },
+                diameter: knob,
+                defaultValue: 0,
+                dragSensitivity: 0.55
+            )
+            .help("Trim before DSP (−18…+36 dB). The strip IN meter reads after this gain. Double-click to reset.")
         }
     }
 
@@ -167,6 +192,7 @@ struct SelectedChannelPanel: View {
         ) {
             HStack(alignment: .top, spacing: 6) {
                 API560EQView(eq: $channel.eq)
+                Spacer(minLength: 4)
                 hpfKnob
                     .frame(width: 52)
             }
@@ -252,7 +278,8 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.deVerbBypass,
             flow: flowNumber(.deVerb),
-            dotOn: !channel.voice.deVerbBypass && !channel.dspBypass
+            dotOn: !channel.voice.deVerbBypass && !channel.dspBypass,
+            expands: true
         ) {
             VStack(spacing: 2) {
                 HardwareKnob(
@@ -278,7 +305,8 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.wetterBypass,
             flow: flowNumber(.wetter),
-            dotOn: !channel.voice.wetterBypass && !channel.dspBypass
+            dotOn: !channel.voice.wetterBypass && !channel.dspBypass,
+            expands: true
         ) {
             HStack(alignment: .center, spacing: 6) {
                 HardwareKnob(
@@ -304,7 +332,8 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.levelerBypass,
             flow: flowNumber(.leveler),
-            dotOn: !channel.voice.levelerBypass && !channel.dspBypass
+            dotOn: !channel.voice.levelerBypass && !channel.dspBypass,
+            expands: true
         ) {
             HStack(alignment: .top, spacing: 6) {
                 VStack(spacing: 2) {
@@ -371,49 +400,6 @@ struct SelectedChannelPanel: View {
         .help("On: a gentle gate under DRIVE so silence and room noise are not boosted. Default on.")
     }
 
-    private var inputRail: some View {
-        VStack(spacing: 4) {
-            Text("INPUT")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
-            Text("GAIN")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
-            HardwareKnob(
-                value: Binding(
-                    get: { channel.inputGainDb },
-                    set: {
-                        channel.inputGainDb = $0
-                        channel.clampInputGain()
-                    }
-                ),
-                range: ChannelStripState.minInputGainDb...ChannelStripState.maxInputGainDb,
-                label: "dB",
-                valueText: { abs($0) < 0.05 ? "0.0" : String(format: "%+.1f", $0) },
-                diameter: knob,
-                defaultValue: 0,
-                dragSensitivity: 0.55
-            )
-            .help("Trim before DSP (−18…+36 dB). The strip IN meter reads after this gain. Double-click to reset.")
-            Text("OUT")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
-                .padding(.top, 4)
-            PanelOutMeter(level: channel.postPeak)
-            Spacer(minLength: 0)
-        }
-        .padding(.vertical, 4)
-        .frame(maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(APILook.panelFill)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .stroke(APILook.border, lineWidth: 1)
-        )
-    }
-
     private func wetterRoomButton(_ mode: WetterRoom) -> some View {
         let on = channel.voice.wetterRoom == mode
         return Button {
@@ -447,6 +433,7 @@ struct SelectedChannelPanel: View {
         bypass: Binding<Bool>,
         flow: Int,
         dotOn: Bool,
+        expands: Bool = false,
         headerExtra: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -458,6 +445,7 @@ struct SelectedChannelPanel: View {
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .foregroundStyle(controlsLocked ? APILook.labelDim : APILook.label)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 if let headerExtra {
                     headerExtra
                 }
@@ -475,7 +463,7 @@ struct SelectedChannelPanel: View {
                 .allowsHitTesting(!controlsLocked)
         }
         .padding(6)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: expands ? .infinity : nil, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(bypass.wrappedValue ? Color(white: 0.07) : APILook.panelFill)
@@ -508,28 +496,28 @@ private struct FlowDot: View {
     }
 }
 
-private struct PanelOutMeter: View {
-    var level: Float
-
-    private var db: Float { 20 * log10(max(level, 1e-5)) }
-
-    private var norm: CGFloat {
-        CGFloat(max(0, min(1, (db + 48) / 48)))
-    }
+/// Red while any post-gain, pre-DSP sample is at 0 dBFS, then for about 2 seconds.
+private struct InputClipLamp: View {
+    var isClipping: () -> Bool
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .bottom) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.black.opacity(0.55))
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(APILook.ledGreen)
-                    .frame(height: max(2, geo.size.height * norm))
+        TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+            let on = isClipping()
+            VStack(spacing: 2) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(on ? APILook.ledRed : Color(red: 0.32, green: 0.06, blue: 0.05))
+                    .frame(width: 18, height: 12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .stroke(Color.white.opacity(on ? 0.5 : 0.14), lineWidth: 0.8)
+                    )
+                    .shadow(color: on ? APILook.ledRed.opacity(0.95) : .clear, radius: on ? 5 : 0)
+                Text("CLIP")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(on ? APILook.ledRed : APILook.labelDim)
             }
         }
-        .frame(width: 14)
-        .frame(maxHeight: .infinity)
-        .help("Channel output, dBFS")
+        .help("Lights when the signal after input gain reaches 0 dBFS, before any DSP. Holds about 2 seconds, then clears.")
     }
 }
 

@@ -607,15 +607,19 @@ struct ContentView: View {
                 onChange: { session.syncParamsToEngine() }
             )
         } else if let idx = session.stereos.firstIndex(where: { $0.id == session.selectedChannelID }) {
+            let channelID = session.stereos[idx].id
             SelectedChannelPanel(
                 channel: $session.stereos[idx],
                 rtaBins: session.rtaBins,
+                inputIsClipping: { session.inputIsClipping(channelID: channelID) },
                 onChange: { session.syncParamsToEngine() }
             )
         } else if let idx = session.voices.firstIndex(where: { $0.id == session.selectedChannelID }) {
+            let channelID = session.voices[idx].id
             SelectedChannelPanel(
                 channel: $session.voices[idx],
                 rtaBins: session.rtaBins,
+                inputIsClipping: { session.inputIsClipping(channelID: channelID) },
                 onChange: {
                     session.syncParamsToEngine()
                     session.syncLinkedFrom(session.voices[idx].id)
@@ -757,21 +761,20 @@ struct ContentView: View {
                 .help("Limits how far Auto Duck can attenuate a channel (0 = no duck).")
             }
 
-            Spacer(minLength: 4)
-
-            // Meters beside OUT fader so the fader never clips under fixed strip height.
-            HStack(alignment: .bottom, spacing: 6) {
-                LevelMeter(level: session.masterPeakL, label: "L")
-                LevelMeter(level: session.masterPeakR, label: "R")
-                VStack(spacing: 2) {
-                    Text(masterOutLabel)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(masterOutColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Text("dBFS")
-                        .font(.system(size: 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(MixerTheme.cyanDim)
+            VStack(spacing: 2) {
+                Text(masterOutLabel)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(masterOutColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                Text("dBFS")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                    .frame(maxWidth: .infinity)
+                HStack(alignment: .bottom, spacing: 6) {
+                    LevelMeter(level: session.masterPeakL, label: "L")
+                        .frame(maxHeight: .infinity)
                     VerticalFader(
                         valueDb: Binding(
                             get: { session.masterDb },
@@ -782,12 +785,15 @@ struct ContentView: View {
                         ),
                         defaultValue: 0,
                         range: -24...12,
-                        caption: "OUT"
+                        caption: "OUT",
+                        expands: true
                     )
+                    LevelMeter(level: session.masterPeakR, label: "R")
+                        .frame(maxHeight: .infinity)
                 }
-                .layoutPriority(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 148)
+            .frame(maxHeight: .infinity)
             .help("Live peak on the master bus after the OUT fader")
         }
         .padding(.horizontal, 8)

@@ -74,6 +74,9 @@ final class MixerEngine: @unchecked Sendable {
     private let recordFramesCommitted = PPAtomicU64(0)
     private let renderLockMisses = PPAtomicU64(0)
     private let transferredMisses = PPAtomicU64(0)
+    /// Per mixer slot: host time (`mach_absolute_time`) of the last post-gain, pre-DSP sample at 0 dBFS.
+    /// Render only stores; the UI reads and holds the lamp. Fixed storage, no allocation in the callback.
+    private let inputClipTime: [PPAtomicU64] = (0..<32).map { _ in PPAtomicU64(0) }
     private var recordSession: RecordSession?
     private var livePeaks = RecordLivePeaks(count: 1)
     private var recordingFiles: [URL] = []
@@ -113,6 +116,13 @@ final class MixerEngine: @unchecked Sendable {
     private static let tapScratchFrameCapacity = 16_384
 
     private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
+
+    /// Host ticks of the last input-clip on this slot, or 0 if that slot has not clipped.
+    /// Slot 0..<voiceCount are monos; the rest are stereo beds. Lock-free.
+    func inputClipHostTicks(slot: Int) -> UInt64 {
+        guard inputClipTime.indices.contains(slot) else { return 0 }
+        return inputClipTime[slot].load()
+    }
 
     func setRTASource(isMusic: Bool, voiceIndex: Int, isMaster: Bool = false) {
         lock.lock()
@@ -924,6 +934,15 @@ final class MixerEngine: @unchecked Sendable {
                 rPtr[i] = mixR
                 mL = max(mL, abs(mixL))
                 mR = max(mR, abs(mixR))
+            }
+
+            // Clip lamp: scratchPre is the buffer peak of samples after input gain and before DSP
+            // (mono `finishMono` inputPeak, stereo `processStereo` pre-EQ). Does not touch the samples.
+            let clipSlots = min(preN, self.inputClipTime.count)
+            var clipTicks: UInt64 = 0
+            for i in 0..<clipSlots where self.scratchPre[i] >= 1 {
+                if clipTicks == 0 { clipTicks = mach_absolute_time() }
+                self.inputClipTime[i].store(clipTicks)
             }
 
             self.playhead = head

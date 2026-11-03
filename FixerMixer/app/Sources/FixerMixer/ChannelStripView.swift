@@ -44,8 +44,10 @@ struct VerticalFader: View {
     var defaultValue: Float = 0
     var range: ClosedRange<Float> = -60...12
     var caption: String? = nil
+    /// Master column: the track grows to the height the parent proposes. Strip faders stay 110 pt.
+    var expands: Bool = false
 
-    private let trackHeight: CGFloat = 110
+    private let fixedTrackHeight: CGFloat = 110
     private let capHeight: CGFloat = 22
     private let capWidth: CGFloat = 28
 
@@ -55,100 +57,119 @@ struct VerticalFader: View {
         return CGFloat((valueDb - range.lowerBound) / span)
     }
 
-    /// Y of cap center: 1 = top (+12), 0 = bottom (−60)
-    private var capCenterY: CGFloat {
-        let travel = trackHeight - capHeight
-        return (1 - normalized) * travel + capHeight / 2
-    }
-
     private var accent: Color {
         autoDriven ? MixerTheme.lime : MixerTheme.cyan
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            Text(String(format: "%+.0f", valueDb))
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(accent)
-
-            ZStack(alignment: .top) {
-                // Chassis plate behind the slot
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color(white: 0.14), Color(white: 0.08), Color(white: 0.12)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-                    .frame(width: 36, height: trackHeight)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 3, style: .continuous)
-                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                    )
-
-                // Recessed slot
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.black.opacity(0.85))
-                    .frame(width: 5, height: trackHeight - 8)
-                    .overlay(
-                        // Slot highlight edge
-                        RoundedRectangle(cornerRadius: 1.5)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.12), Color.clear, Color.white.opacity(0.06)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                ),
-                                lineWidth: 0.8
-                            )
-                    )
-                    .overlay(alignment: .center) {
-                        // 0 dB tick across the slot
-                        Rectangle()
-                            .fill(accent.opacity(0.7))
-                            .frame(width: 14, height: 1)
-                            .offset(y: zeroTickOffset)
+        if expands {
+            GeometryReader { geo in
+                VStack(spacing: 4) {
+                    valueReadout
+                    GeometryReader { trackGeo in
+                        track(height: max(48, trackGeo.size.height))
                     }
-                    .offset(y: 4)
-
-                // Fader cap
-                FaderCap(accent: accent, autoDriven: autoDriven)
-                    .frame(width: capWidth, height: capHeight)
-                    .position(x: 18, y: capCenterY)
-                    .shadow(color: .black.opacity(0.55), radius: 2, y: 1.5)
+                    captionReadout
+                }
+                .frame(width: 36, height: geo.size.height, alignment: .top)
             }
-            .frame(width: 36, height: trackHeight)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { g in
-                        let y = min(trackHeight, max(0, g.location.y))
-                        let travel = trackHeight - capHeight
-                        let n = 1 - ((y - capHeight / 2) / max(travel, 1))
-                        let clamped = Float(min(1, max(0, n)))
-                        let span = range.upperBound - range.lowerBound
-                        valueDb = range.lowerBound + clamped * span
-                    }
-            )
-            .onTapGesture(count: 2) {
-                valueDb = defaultValue
+            .frame(width: 36)
+            .frame(maxHeight: .infinity)
+        } else {
+            VStack(spacing: 4) {
+                valueReadout
+                track(height: fixedTrackHeight)
+                captionReadout
             }
-
-            Text(caption ?? "FADER")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(MixerTheme.cyanDim)
-                .padding(.bottom, 1)
         }
-        .help("Double-click to zero")
     }
 
-    private var zeroTickOffset: CGFloat {
+    private var valueReadout: some View {
+        Text(String(format: "%+.0f", valueDb))
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(accent)
+    }
+
+    private var captionReadout: some View {
+        Text(caption ?? "FADER")
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .foregroundStyle(MixerTheme.cyanDim)
+            .padding(.bottom, 1)
+    }
+
+    /// Y of cap center: 1 = top of the range, 0 = bottom.
+    private func capCenterY(trackHeight: CGFloat) -> CGFloat {
+        let travel = trackHeight - capHeight
+        return (1 - normalized) * travel + capHeight / 2
+    }
+
+    private func zeroTickOffset(trackHeight: CGFloat) -> CGFloat {
         let span = range.upperBound - range.lowerBound
-        let zeroNorm = CGFloat((0 - range.lowerBound) / span) // 0 dB position from bottom
+        let zeroNorm = CGFloat((0 - range.lowerBound) / span)
         let travel = trackHeight - 8
-        // Center of slot is mid; offset from center toward top for higher dB
         return travel / 2 - zeroNorm * travel
+    }
+
+    private func track(height trackHeight: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(white: 0.14), Color(white: 0.08), Color(white: 0.12)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 36, height: trackHeight)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                )
+
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.black.opacity(0.85))
+                .frame(width: 5, height: trackHeight - 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.12), Color.clear, Color.white.opacity(0.06)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            lineWidth: 0.8
+                        )
+                )
+                .overlay(alignment: .center) {
+                    Rectangle()
+                        .fill(accent.opacity(0.7))
+                        .frame(width: 14, height: 1)
+                        .offset(y: zeroTickOffset(trackHeight: trackHeight))
+                }
+                .offset(y: 4)
+
+            FaderCap(accent: accent, autoDriven: autoDriven)
+                .frame(width: capWidth, height: capHeight)
+                .position(x: 18, y: capCenterY(trackHeight: trackHeight))
+                .shadow(color: .black.opacity(0.55), radius: 2, y: 1.5)
+        }
+        .frame(width: 36, height: trackHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    let y = min(trackHeight, max(0, g.location.y))
+                    let travel = trackHeight - capHeight
+                    let n = 1 - ((y - capHeight / 2) / max(travel, 1))
+                    let clamped = Float(min(1, max(0, n)))
+                    let span = range.upperBound - range.lowerBound
+                    valueDb = range.lowerBound + clamped * span
+                }
+        )
+        .onTapGesture(count: 2) {
+            valueDb = defaultValue
+        }
+        .help("Double-click to zero")
     }
 }
 

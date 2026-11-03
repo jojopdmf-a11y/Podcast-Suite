@@ -452,6 +452,31 @@ final class MixerSession: ObservableObject {
     let engine = MixerEngine()
     /// Guards recursive copy when a linked pair updates each other.
     private var syncingLinkedPair = false
+    /// Converts `mach_absolute_time` ticks to seconds. Read on the main thread only.
+    private let hostSecondsPerTick: Double = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let denom = Double(max(info.denom, 1))
+        return Double(info.numer) / denom / 1_000_000_000
+    }()
+
+    /// Post-gain, pre-DSP clip on this channel, held for about 2 seconds after the last clip.
+    /// The render callback only stamps a host time; this is the hold.
+    func inputIsClipping(channelID: Int) -> Bool {
+        let slot: Int
+        if let i = voices.firstIndex(where: { $0.id == channelID }) {
+            slot = i
+        } else if let i = stereos.firstIndex(where: { $0.id == channelID }) {
+            slot = voices.count + i
+        } else {
+            return false
+        }
+        let stamp = engine.inputClipHostTicks(slot: slot)
+        guard stamp != 0 else { return false }
+        let now = mach_absolute_time()
+        guard now >= stamp else { return false }
+        return Double(now - stamp) * hostSecondsPerTick < 2
+    }
 
     func bindEngine() {
         engine.onMeters = { [weak self] pre, post, masterL, masterR, autoDb, rta, levelerGR, levelerBoost, deessGR, compInL, compInR, compOutL, compOutR, compGR in
