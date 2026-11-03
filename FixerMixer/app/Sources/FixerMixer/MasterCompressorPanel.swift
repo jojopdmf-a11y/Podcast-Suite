@@ -786,7 +786,8 @@ struct MasterCompressorPanel: View {
                 .padding(.top, 8)
             }
         }
-        .frame(width: 460, height: ChannelStripView.stripHeight, alignment: .top)
+        .frame(width: 460)
+        .frame(maxHeight: .infinity, alignment: .top)
         .background(APILook.charcoal)
         .overlay(
             HStack(spacing: 0) {

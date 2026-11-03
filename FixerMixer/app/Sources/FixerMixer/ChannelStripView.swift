@@ -857,6 +857,23 @@ struct ChannelStripView: View {
     }
 }
 
+/// Compact transport chrome so time, −, +, RESET, and ALL TRACKS fit the narrower waveform.
+private struct WaveformTransportButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundStyle(configuration.isPressed ? MixerTheme.lime : MixerTheme.cyan)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(MixerTheme.panelRaised))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
+            )
+    }
+}
+
 struct TimelineWaveformView: View {
     var peaks: [Float]
     var playhead: Double
@@ -890,35 +907,39 @@ struct TimelineWaveformView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("WAVEFORM · \(channelName)")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(0.8)
-                    .foregroundStyle(MixerTheme.cyanDim)
-                Spacer()
+        VStack(alignment: .leading, spacing: 4) {
+            Text("WAVEFORM · \(channelName)")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(MixerTheme.cyanDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 4) {
+                Spacer(minLength: 0)
                 Text("\(currentTime)  /  \(duration)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(MixerTheme.cyan)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Text(zoom <= 1.01 ? "1×" : String(format: "%.0f×", zoom))
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(MixerTheme.cyanDim)
-                    .frame(minWidth: 22)
+                    .lineLimit(1)
                 Button("−") { nudgeZoom(0.5) }
-                    .buttonStyle(MixerGhostButtonStyle())
+                    .buttonStyle(WaveformTransportButtonStyle())
                     .disabled(zoom <= 1.01)
                     .help("Zoom out")
                 Button("+") { nudgeZoom(2) }
-                    .buttonStyle(MixerGhostButtonStyle())
+                    .buttonStyle(WaveformTransportButtonStyle())
                     .disabled(zoom >= 15.9)
                     .help("Zoom in")
                 Button("RESET") { zoom = 1; start = 0 }
-                    .buttonStyle(MixerGhostButtonStyle())
+                    .buttonStyle(WaveformTransportButtonStyle())
                     .disabled(zoom <= 1.01)
                     .help("Show the whole file")
                 if let onShowAllTracks {
                     Button("ALL TRACKS") { onShowAllTracks() }
-                        .buttonStyle(MixerGhostButtonStyle())
+                        .buttonStyle(WaveformTransportButtonStyle())
                         .help("Stack every strip’s waveform in one box. Extra lanes scroll; Mixer stays on screen. Click a lane to zoom in.")
                 }
             }
@@ -1026,7 +1047,8 @@ struct TimelineWaveformView: View {
                 keepPlayheadVisible(p)
             }
         }
-        .padding(12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .mixerPanel()
     }
 
@@ -1144,23 +1166,29 @@ struct OverviewWaveformView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("WAVEFORM · ALL TRACKS")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(0.8)
-                    .foregroundStyle(MixerTheme.cyanDim)
-                Spacer()
+        VStack(alignment: .leading, spacing: 4) {
+            Text("WAVEFORM · ALL TRACKS")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.8)
+                .foregroundStyle(MixerTheme.cyanDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 4) {
                 Text("\(currentTime)  /  \(duration)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(MixerTheme.cyan)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: 4)
                 Button("ONE TRACK") { onShowOne() }
-                    .buttonStyle(MixerGhostButtonStyle())
+                    .buttonStyle(WaveformTransportButtonStyle())
                     .help("Back to one channel’s waveform")
             }
             Text("Click a lane to zoom in · drag to seek · extra tracks scroll in this box")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(MixerTheme.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
 
             ScrollView(.vertical, showsIndicators: stackHeight > maxStackHeight) {
                 VStack(spacing: laneGap) {
@@ -1171,7 +1199,8 @@ struct OverviewWaveformView: View {
             }
             .frame(height: min(stackHeight, maxStackHeight))
         }
-        .padding(12)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .mixerPanel()
     }
 

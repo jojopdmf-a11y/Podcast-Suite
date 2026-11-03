@@ -10,6 +10,10 @@ struct SelectedChannelPanel: View {
     @State private var isRenaming = false
     @FocusState private var nameFieldFocused: Bool
 
+    /// Fitting height of this column with the RTA at its original 96pt frame.
+    /// The window cannot shrink the panel below this; the strip bay gives up space first.
+    static let minimumHeight: CGFloat = 644
+
     private var canRename: Bool { !channel.isStereo }
 
     /// Panel knobs match the approved v3 size: radius 12.
@@ -23,8 +27,9 @@ struct SelectedChannelPanel: View {
             }
             HStack(alignment: .top, spacing: 6) {
                 VStack(alignment: .leading, spacing: 6) {
+                    // Same frame as main (before this branch): the whole RTA view, label included.
                     RTAView(bins: rtaBins, apiStyle: true)
-                        .frame(height: 44)
+                        .frame(height: 96)
                     eqCard
                     if !channel.isStereo {
                         HStack(alignment: .top, spacing: 6) {
@@ -43,13 +48,21 @@ struct SelectedChannelPanel: View {
                         }
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .opacity(channel.dspBypass && !channel.isStereo ? 0.55 : 1)
+                // Width reservation only. The live rail is overlaid so its flexible meter
+                // does not inflate this column's ideal height.
+                Color.clear.frame(width: 58, height: 0)
+            }
+            .overlay(alignment: .topTrailing) {
                 inputRail
                     .frame(width: 58)
+                    .frame(maxHeight: .infinity)
             }
         }
         .padding(8)
-        .frame(width: 460, height: ChannelStripView.stripHeight, alignment: .top)
+        .frame(width: 460, alignment: .topLeading)
+        .frame(minHeight: Self.minimumHeight, maxHeight: .infinity, alignment: .top)
         .background(APILook.charcoal)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
