@@ -12,8 +12,8 @@ struct SelectedChannelPanel: View {
     @State private var isRenaming = false
     @FocusState private var nameFieldFocused: Bool
 
-    /// Floor for this column. The RTA starts at 96pt and grows with the window;
-    /// the strip bay gives up height before this panel clips.
+    /// Floor for this column. The RTA stays 96 pt. Extra height goes to the EQ faders.
+    /// The strip bay gives up height before this panel clips.
     static let minimumHeight: CGFloat = 644
 
     private var canRename: Bool { !channel.isStereo }
@@ -26,10 +26,11 @@ struct SelectedChannelPanel: View {
             header
             dspAllRow
             VStack(alignment: .leading, spacing: 8) {
-                // RTA and the bottom row share leftover height so the column fills to the strip bottoms.
+                // RTA stays at its 96 pt floor. Leftover column height goes to the EQ faders.
                 RTAView(bins: rtaBins, apiStyle: true)
-                    .frame(minHeight: 96, maxHeight: .infinity, alignment: .top)
+                    .frame(height: 96, alignment: .top)
                 eqCard
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 if !channel.isStereo {
                     HStack(alignment: .top, spacing: 8) {
                         paraCard
@@ -40,14 +41,12 @@ struct SelectedChannelPanel: View {
                     HStack(alignment: .top, spacing: 8) {
                         deVerbCard
                             .frame(width: 124, alignment: .top)
-                            .frame(maxHeight: .infinity, alignment: .top)
                         ambienceCard
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                            .frame(maxWidth: .infinity, alignment: .top)
                         levelerCard
                             .frame(width: 198, alignment: .top)
-                            .frame(maxHeight: .infinity, alignment: .top)
                     }
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .layoutPriority(1)
                 }
             }
             .frame(maxHeight: .infinity, alignment: .top)
@@ -188,11 +187,12 @@ struct SelectedChannelPanel: View {
             subtitle: "10-band graphic · ±16 dB · 0.5 dB detents",
             bypass: $channel.eq.bypass,
             flow: flowNumber(.eq),
-            dotOn: !channel.eq.bypass && !channel.dspBypass
+            dotOn: !channel.eq.bypass && !channel.dspBypass,
+            expands: true,
+            fillsBody: true
         ) {
             HStack(alignment: .top, spacing: 6) {
                 API560EQView(eq: $channel.eq)
-                Spacer(minLength: 4)
                 hpfKnob
                     .frame(width: 52)
             }
@@ -278,8 +278,7 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.deVerbBypass,
             flow: flowNumber(.deVerb),
-            dotOn: !channel.voice.deVerbBypass && !channel.dspBypass,
-            expands: true
+            dotOn: !channel.voice.deVerbBypass && !channel.dspBypass
         ) {
             VStack(spacing: 2) {
                 HardwareKnob(
@@ -305,8 +304,7 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.wetterBypass,
             flow: flowNumber(.wetter),
-            dotOn: !channel.voice.wetterBypass && !channel.dspBypass,
-            expands: true
+            dotOn: !channel.voice.wetterBypass && !channel.dspBypass
         ) {
             HStack(alignment: .center, spacing: 6) {
                 HardwareKnob(
@@ -332,8 +330,7 @@ struct SelectedChannelPanel: View {
             subtitle: nil,
             bypass: $channel.voice.levelerBypass,
             flow: flowNumber(.leveler),
-            dotOn: !channel.voice.levelerBypass && !channel.dspBypass,
-            expands: true
+            dotOn: !channel.voice.levelerBypass && !channel.dspBypass
         ) {
             HStack(alignment: .top, spacing: 6) {
                 VStack(spacing: 2) {
@@ -434,6 +431,7 @@ struct SelectedChannelPanel: View {
         flow: Int,
         dotOn: Bool,
         expands: Bool = false,
+        fillsBody: Bool = false,
         headerExtra: AnyView? = nil,
         @ViewBuilder content: () -> Content
     ) -> some View {
@@ -459,6 +457,7 @@ struct SelectedChannelPanel: View {
                     .lineLimit(1)
             }
             content()
+                .frame(maxWidth: .infinity, maxHeight: fillsBody ? .infinity : nil, alignment: .topLeading)
                 .opacity(controlsLocked ? 0.4 : 1)
                 .allowsHitTesting(!controlsLocked)
         }
@@ -543,7 +542,7 @@ private struct LevelerDynMeter: View {
                         .frame(height: max(1, geo.size.height * fill))
                 }
             }
-            .frame(width: 10, height: 44)
+            .frame(width: 10, height: 28)
             Text(String(format: fromBottom ? "%+.1f" : "%.1f", max(0, db)))
                 .font(.system(size: 7, weight: .bold, design: .monospaced))
                 .foregroundStyle(db > 0.15 ? APILook.accentBlue : APILook.labelDim)

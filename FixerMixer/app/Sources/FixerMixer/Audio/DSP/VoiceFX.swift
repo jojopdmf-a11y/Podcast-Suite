@@ -1,7 +1,7 @@
 import Foundation
 
 /// MV2-style leveler. DRIVE is upward compression (quiet parts up, loud parts left alone).
-/// LIMITER is downward compression with auto make-up, then a fixed −1 dBFS safety ceiling.
+/// LIMITER is downward only — no make-up — then a fixed −1 dBFS safety ceiling.
 /// GATE, when on, keeps the DRIVE boost off silence and room noise.
 /// Gains are one-pole smoothed so knob moves and the gate do not click.
 struct LevelerDSP {
@@ -79,8 +79,8 @@ struct LevelerDSP {
         Self.follow(&envDown, abs(y), attack: 0.002, release: 0.080, sampleRate: sr)
         let thresh = min(0, max(-24, limiterDb))
         let grDb = downwardGRDb(peakDb: Self.ampToDb(envDown), thresholdDb: thresh)
-        let makeupDb = -thresh * (1 - 1 / limiterRatio)
-        let desiredComp = Self.dbToAmp(grDb + makeupDb)
+        // Attenuation only. A lower threshold never raises the level.
+        let desiredComp = Self.dbToAmp(grDb)
         let atk = exp(Float(-1) / (0.003 * sr))
         let rel = exp(Float(-1) / (0.120 * sr))
         if desiredComp < compLin {
@@ -94,7 +94,8 @@ struct LevelerDSP {
         y = ceiling * tanhf(y / max(ceiling, 1e-4))
 
         meterBoostDb = max(0, 20 * log10(max(boostLin, 1e-6)))
-        meterGRDb = max(0, -grDb)
+        // GR follows the smoothed limiter gain. That gain is only reduction.
+        meterGRDb = max(0, -Self.ampToDb(min(compLin, 1)))
         return y
     }
 
