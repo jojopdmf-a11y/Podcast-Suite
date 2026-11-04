@@ -354,6 +354,8 @@ struct GraphicEQView: View {
 
 struct BypassToggle: View {
     @Binding var bypass: Bool
+    /// Shorter pill for the DSP cards. Strips keep the full 26 pt control.
+    var compact: Bool = false
 
     var body: some View {
         Button {
@@ -361,7 +363,7 @@ struct BypassToggle: View {
         } label: {
             Text(bypass ? "BYP" : "ON")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
-                .frame(width: 28, height: 26)
+                .frame(width: 28, height: compact ? 18 : 26)
                 .foregroundStyle(MixerTheme.bgBottom)
                 .background(
                     RoundedRectangle(cornerRadius: 5, style: .continuous)

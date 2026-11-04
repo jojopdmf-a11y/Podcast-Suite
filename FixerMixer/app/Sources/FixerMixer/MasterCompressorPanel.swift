@@ -70,6 +70,8 @@ struct HardwareKnob: View {
     var defaultValue: Float = 0
     /// 1 = original speed. Para EQ uses a lower value so frequency sweeps stay controllable.
     var dragSensitivity: Float = 1
+    /// Value and label sit tight on the face. Diameter is unchanged. Header knobs leave this off.
+    var tight: Bool = false
 
     enum KnobStyle {
         case metal
@@ -121,12 +123,13 @@ struct HardwareKnob: View {
     private var skirtExtra: CGFloat { compact ? 4 : 10 }
 
     var body: some View {
-        VStack(spacing: compact ? 1 : 5) {
+        VStack(spacing: tight ? 0 : (compact ? 1 : 5)) {
             Text(valueText(displayValue))
                 .font(.system(size: compact ? 7 : 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(style == .outputRed ? APILook.ledRed.opacity(0.9) : APILook.accentBlue)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .frame(height: tight ? 9 : nil)
 
             ZStack {
                 // Skirt / collar
@@ -262,6 +265,7 @@ struct HardwareKnob: View {
                 .foregroundStyle(APILook.label)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
+                .frame(height: tight ? 9 : nil)
         }
         .help("Double-click to reset · Option-drag for fine")
     }
@@ -539,20 +543,18 @@ struct LEDDot: View {
 
 /// Shared by the graphic fader so the cap, the drag, and the scale labels use one range.
 enum GraphicFaderMetrics {
-    /// Floor for the slot. The selected-channel card grows this with the window.
-    static let minTrackH: CGFloat = 64
+    /// Cap-center travel from +16 to −16. Fixed; the slot does not grow with the window.
+    static let panelTravel: CGFloat = 92
     static let capH: CGFloat = 10
-    static let readoutH: CGFloat = 11
+    /// Slot height. Travel is the distance between cap centers, so the slot is one cap taller.
+    static let panelTrackH: CGFloat = panelTravel + capH
+    static let readoutH: CGFloat = 10
     /// Band-name row. The scale column uses the same height so the rows line up.
-    static let labelH: CGFloat = 12
-    static let stackSpacing: CGFloat = 2
+    static let labelH: CGFloat = 10
+    static let stackSpacing: CGFloat = 1
 
-    /// Readout + gaps + band name. Subtract from the column to get the slot.
+    /// Readout + gaps + band name.
     static var columnChrome: CGFloat { readoutH + labelH + stackSpacing * 2 }
-
-    static func trackHeight(columnHeight: CGFloat) -> CGFloat {
-        max(minTrackH, columnHeight - columnChrome)
-    }
 
     /// Distance the cap center travels from +16 to −16.
     static func travel(trackH: CGFloat) -> CGFloat {
@@ -582,41 +584,39 @@ struct API560EQView: View {
     ]
 
     var body: some View {
-        GeometryReader { geo in
-            let trackH = GraphicFaderMetrics.trackHeight(columnHeight: geo.size.height)
-            HStack(alignment: .top, spacing: 2) {
-                VStack(spacing: GraphicFaderMetrics.stackSpacing) {
-                    Color.clear.frame(height: GraphicFaderMetrics.readoutH)
-                    ZStack(alignment: .top) {
-                        ForEach(scaleMarks, id: \.0) { mark in
-                            Text(mark.0)
-                                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundStyle(mark.1 == 0 ? APILook.accentBlue : APILook.labelDim)
-                                .position(
-                                    x: 12,
-                                    y: GraphicFaderMetrics.yCenter(db: mark.1, trackH: trackH)
-                                )
-                        }
+        let trackH = GraphicFaderMetrics.panelTrackH
+        HStack(alignment: .top, spacing: 2) {
+            VStack(spacing: GraphicFaderMetrics.stackSpacing) {
+                Color.clear.frame(height: GraphicFaderMetrics.readoutH)
+                ZStack(alignment: .top) {
+                    ForEach(scaleMarks, id: \.0) { mark in
+                        Text(mark.0)
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundStyle(mark.1 == 0 ? APILook.accentBlue : APILook.labelDim)
+                            .position(
+                                x: 12,
+                                y: GraphicFaderMetrics.yCenter(db: mark.1, trackH: trackH)
+                            )
                     }
-                    .frame(width: 24, height: trackH)
-                    Color.clear.frame(height: GraphicFaderMetrics.labelH)
                 }
+                .frame(width: 24, height: trackH)
+                Color.clear.frame(height: GraphicFaderMetrics.labelH)
+            }
 
-                ForEach(GraphicEQBand.allCases) { band in
-                    API560BandFader(
-                        value: Binding(
-                            get: { eq[band] },
-                            set: { eq[band] = $0 }
-                        ),
-                        label: band.shortLabel,
-                        trackH: trackH
-                    )
-                }
+            ForEach(GraphicEQBand.allCases) { band in
+                API560BandFader(
+                    value: Binding(
+                        get: { eq[band] },
+                        set: { eq[band] = $0 }
+                    ),
+                    label: band.shortLabel,
+                    trackH: trackH
+                )
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
-        .frame(minHeight: GraphicFaderMetrics.minTrackH + GraphicFaderMetrics.columnChrome + 8)
+        .padding(.horizontal, 2)
+        .padding(.vertical, 1)
+        .frame(height: trackH + GraphicFaderMetrics.columnChrome + 2)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(APILook.charcoal)
