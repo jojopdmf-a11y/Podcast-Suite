@@ -35,8 +35,8 @@ final class MixerEngine: @unchecked Sendable {
     private var audioEngine: AVAudioEngine?
     private var sourceNode: AVAudioSourceNode?
 
-    /// pre, post, masterL, masterR, autoGainDb, rtaBins, levelerGRDb, deessGRDb, compInL, compInR, compOutL, compOutR, compGRDb
-    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
+    /// pre, post, masterL, masterR, autoGainDb, rtaBins, levelerGRDb, levelerBoostDb, deessGRDb, compInL, compInR, compOutL, compOutR, compGRDb
+    var onMeters: (([Float], [Float], Float, Float, [Float], [Float], [Float], [Float], [Float], Float, Float, Float, Float, Float) -> Void)?
     var onPlayhead: ((Int) -> Void)?
     var onPlaybackEnded: (() -> Void)?
     var onSessionLength: ((Int) -> Void)?
@@ -49,6 +49,7 @@ final class MixerEngine: @unchecked Sendable {
     private var playheadEmitCounter: Int = 0
     private var lastAutoGainDb: [Float] = []
     private var lastLevelerGRDb: [Float] = []
+    private var lastLevelerBoostDb: [Float] = []
     private var lastDeessGRDb: [Float] = []
     private var lastRTABins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     /// Separate from the audio lock so channel-select waveform swaps never stall the render thread.
@@ -73,6 +74,9 @@ final class MixerEngine: @unchecked Sendable {
     private let recordFramesCommitted = PPAtomicU64(0)
     private let renderLockMisses = PPAtomicU64(0)
     private let transferredMisses = PPAtomicU64(0)
+    /// Per mixer slot: host time (`mach_absolute_time`) of the last post-gain, pre-DSP sample at 0 dBFS.
+    /// Render only stores; the UI reads and holds the lamp. Fixed storage, no allocation in the callback.
+    private let inputClipTime: [PPAtomicU64] = (0..<32).map { _ in PPAtomicU64(0) }
     private var recordSession: RecordSession?
     private var livePeaks = RecordLivePeaks(count: 1)
     private var recordingFiles: [URL] = []
@@ -112,6 +116,13 @@ final class MixerEngine: @unchecked Sendable {
     private static let tapScratchFrameCapacity = 16_384
 
     private var meterSlotCount: Int { voiceCount + stereoBuffers.count }
+
+    /// Host ticks of the last input-clip on this slot, or 0 if that slot has not clipped.
+    /// Slot 0..<voiceCount are monos; the rest are stereo beds. Lock-free.
+    func inputClipHostTicks(slot: Int) -> UInt64 {
+        guard inputClipTime.indices.contains(slot) else { return 0 }
+        return inputClipTime[slot].load()
+    }
 
     func setRTASource(isMusic: Bool, voiceIndex: Int, isMaster: Bool = false) {
         lock.lock()
@@ -612,15 +623,17 @@ final class MixerEngine: @unchecked Sendable {
             processors[i].deessWidth = voices[i].deess.width
             processors[i].deessThresholdDb = voices[i].deess.thresholdDb
             processors[i].deessBypass = voices[i].deess.bypass
+            processors[i].deessListen = voices[i].deessListen
             processors[i].inputGainDb = voices[i].inputGainDb
             processors[i].deVerbAmount = voices[i].voice.deVerb
             processors[i].deVerbBypass = voices[i].voice.deVerbBypass
             processors[i].wetterAmount = voices[i].voice.wetter
             processors[i].wetterBypass = voices[i].voice.wetterBypass
             processors[i].wetterRoom = voices[i].voice.wetterRoom
-            processors[i].levelerDrive = voices[i].voice.levelerDrive
+            processors[i].levelerDriveDb = voices[i].voice.levelerDriveDb
+            processors[i].levelerLimiterDb = voices[i].voice.levelerLimiterDb
+            processors[i].levelerGate = voices[i].voice.levelerGate
             processors[i].levelerBypass = voices[i].voice.levelerBypass
-            processors[i].levelerTargetDb = voices[i].voice.levelerTargetDb
             processors[i].dspOrder = voices[i].dspOrder
             processors[i].configure(sampleRate: sampleRate)
         }
@@ -818,6 +831,7 @@ final class MixerEngine: @unchecked Sendable {
                             if armedSilent {
                                 self.scratchFX[c] = 0
                                 self.scratchLevels[c] = 0
+                                self.processors[c].deessListenTap = 0
                             } else {
                                 let gained = self.processors[c].inputGained(sample)
                                 let fx = self.processors[c].processEffects(gained)
@@ -850,8 +864,11 @@ final class MixerEngine: @unchecked Sendable {
                             var preC: Float = c < self.scratchPre.count ? self.scratchPre[c] : 0
                             var postC: Float = c < self.scratchPost.count ? self.scratchPost[c] : 0
                             let fx = c < self.scratchFX.count ? self.scratchFX[c] : 0
+                            // LISTEN replaces this channel's monitor output only. Auto-mix still
+                            // sees `fx` above. Bounce never reads this tap.
+                            let audible = self.processors[c].deessListen ? self.processors[c].deessListenTap : fx
                             let (l, r) = self.processors[c].finishMono(
-                                fx,
+                                audible,
                                 autoMixGain: g,
                                 inputPeak: gained,
                                 prePeak: &preC,
@@ -864,7 +881,8 @@ final class MixerEngine: @unchecked Sendable {
                                 mixR += r
                             }
                             if !self.rtaIsMusic, !self.rtaIsMaster, c == self.rtaVoiceIndex {
-                                self.rta.push(fx * g)
+                                let shown = self.processors[c].deessListen ? self.processors[c].deessListenTap : fx
+                                self.rta.push(shown * g)
                             }
                         }
                     }
@@ -918,6 +936,15 @@ final class MixerEngine: @unchecked Sendable {
                 mR = max(mR, abs(mixR))
             }
 
+            // Clip lamp: scratchPre is the buffer peak of samples after input gain and before DSP
+            // (mono `finishMono` inputPeak, stereo `processStereo` pre-EQ). Does not touch the samples.
+            let clipSlots = min(preN, self.inputClipTime.count)
+            var clipTicks: UInt64 = 0
+            for i in 0..<clipSlots where self.scratchPre[i] >= 1 {
+                if clipTicks == 0 { clipTicks = mach_absolute_time() }
+                self.inputClipTime[i].store(clipTicks)
+            }
+
             self.playhead = head
             let gainN = min(voiceN, self.scratchAutoGains.count, self.lastAutoGainDb.count)
             for c in 0..<gainN {
@@ -927,6 +954,9 @@ final class MixerEngine: @unchecked Sendable {
             for c in 0..<grN {
                 if c < self.lastLevelerGRDb.count {
                     self.lastLevelerGRDb[c] = self.processors[c].levelerMeterGRDb
+                }
+                if c < self.lastLevelerBoostDb.count {
+                    self.lastLevelerBoostDb[c] = self.processors[c].levelerMeterBoostDb
                 }
                 if c < self.lastDeessGRDb.count {
                     self.lastDeessGRDb[c] = self.processors[c].deessMeterGRDb
@@ -966,6 +996,7 @@ final class MixerEngine: @unchecked Sendable {
             var sentPost: [Float]?
             var sentAuto: [Float]?
             var sentLeveler: [Float]?
+            var sentLevelerBoost: [Float]?
             var sentDeess: [Float]?
             var sentRTA: [Float]?
             if shouldEmit {
@@ -974,6 +1005,7 @@ final class MixerEngine: @unchecked Sendable {
                 sentPost = self.meterPost
                 sentAuto = self.lastAutoGainDb
                 sentLeveler = self.lastLevelerGRDb
+                sentLevelerBoost = self.lastLevelerBoostDb
                 sentDeess = self.lastDeessGRDb
                 sentRTA = self.lastRTABins
                 self.meterCounter = 0
@@ -1000,9 +1032,9 @@ final class MixerEngine: @unchecked Sendable {
             }
             self.lock.unlock()
 
-            if shouldEmit, let sentPre, let sentPost, let sentAuto, let sentRTA, let sentLeveler, let sentDeess {
+            if shouldEmit, let sentPre, let sentPost, let sentAuto, let sentRTA, let sentLeveler, let sentLevelerBoost, let sentDeess {
                 self.onMeters?(
-                    sentPre, sentPost, emitL, emitR, sentAuto, sentRTA, sentLeveler, sentDeess,
+                    sentPre, sentPost, emitL, emitR, sentAuto, sentRTA, sentLeveler, sentLevelerBoost, sentDeess,
                     emitCompInL, emitCompInR, emitCompOutL, emitCompOutR, emitCompGR
                 )
             }
@@ -1176,6 +1208,7 @@ final class MixerEngine: @unchecked Sendable {
         let ext = plan.format.pathExtension
 
         for i in procs.indices {
+            procs[i].deessListen = false
             procs[i].reset()
             procs[i].configure(sampleRate: sr)
         }
@@ -1607,6 +1640,9 @@ final class MixerEngine: @unchecked Sendable {
         }
         if lastLevelerGRDb.count != voiceCount {
             lastLevelerGRDb = [Float](repeating: 0, count: voiceCount)
+        }
+        if lastLevelerBoostDb.count != voiceCount {
+            lastLevelerBoostDb = [Float](repeating: 0, count: voiceCount)
         }
         if lastDeessGRDb.count != voiceCount {
             lastDeessGRDb = [Float](repeating: 0, count: voiceCount)

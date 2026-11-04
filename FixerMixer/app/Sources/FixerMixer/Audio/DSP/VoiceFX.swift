@@ -1,89 +1,135 @@
 import Foundation
 
-/// Target-driven leveler: Drive packs level toward Target, then soft-compresses / soft-limits there.
-/// (No wet/dry blend — Drive is correction strength + how hard you push into the ceiling.)
+/// MV2-style leveler. DRIVE is upward compression (quiet parts up, loud parts left alone).
+/// LIMITER is downward only — no make-up — then a fixed −1 dBFS safety ceiling.
+/// GATE, when on, keeps the DRIVE boost off silence and room noise.
+/// Gains are one-pole smoothed so knob moves and the gate do not click.
 struct LevelerDSP {
-    var drive: Float = 0
-    var targetDb: Float = -6
+    /// 0…+24 dB of upward compression.
+    var driveDb: Float = 0
+    /// Downward threshold, 0…−24 dB.
+    var limiterDb: Float = 0
+    var gateEnabled: Bool = true
     var bypass: Bool = false
-    /// Live compressor gain reduction in dB (≥ 0). UI GR meter.
+    /// Downward gain reduction in dB (≥ 0). UI GR meter.
     private(set) var meterGRDb: Float = 0
-    private var env: Float = 0
-    private var gain: Float = 1
-    private var compGR: Float = 1
-    private let attack: Float = 0.012
-    private let release: Float = 0.22
+    /// Upward boost actually applied, in dB (≥ 0). UI BOOST meter.
+    private(set) var meterBoostDb: Float = 0
+
+    private var envUp: Float = 0
+    private var envGate: Float = 0
+    private var envDown: Float = 0
+    private var boostLin: Float = 1
+    private var compLin: Float = 1
+
+    // Levels above this are not boosted. DRIVE raises quieter audio toward it, up to +24 dB.
+    private let pivotDb: Float = -12
+    // Gate is fully open at and above −46 dBFS, fully closed at −62, gentle in between.
+    private let gateOpenDb: Float = -46
+    private let gateClosedDb: Float = -62
+    /// Extra cut (dB) applied when the gate is fully closed, on top of cancelling the boost.
+    private let gateClosedCutDb: Float = 8
+    private let limiterRatio: Float = 20
+    private let limiterKneeDb: Float = 4
+    private let safetyCeilingDb: Float = -1
 
     mutating func reset() {
-        env = 0
-        gain = 1
-        compGR = 1
+        envUp = 0
+        envGate = 0
+        envDown = 0
+        boostLin = 1
+        compLin = 1
         meterGRDb = 0
+        meterBoostDb = 0
     }
 
     mutating func process(_ x: Float, sampleRate: Double) -> Float {
-        if bypass || drive < 0.001 {
+        let sr = Float(max(1, sampleRate))
+        if bypass {
             meterGRDb *= 0.9
+            meterBoostDb *= 0.9
+            boostLin += (1 - boostLin) * 0.002
+            compLin += (1 - compLin) * 0.002
             return x
         }
 
         let absx = abs(x)
-        let atk = exp(-1.0 / (attack * Float(sampleRate)))
-        let rel = exp(-1.0 / (release * Float(sampleRate)))
-        if absx > env {
-            env = atk * env + (1 - atk) * absx
+        Self.follow(&envUp, absx, attack: 0.010, release: 0.120, sampleRate: sr)
+        Self.follow(&envGate, absx, attack: 0.008, release: 0.350, sampleRate: sr)
+
+        var desiredBoostDb: Float = 0
+        let upDb = Self.ampToDb(envUp)
+        let drive = min(24, max(0, driveDb))
+        if drive > 0.05, upDb < pivotDb {
+            desiredBoostDb = min(drive, pivotDb - upDb)
+        }
+
+        var gateCutDb: Float = 0
+        if gateEnabled, drive > 0.05 {
+            let closure = gateClosure(Self.ampToDb(envGate))
+            desiredBoostDb *= (1 - closure)
+            gateCutDb = gateClosedCutDb * closure
+        }
+
+        let desiredBoostLin = Self.dbToAmp(desiredBoostDb - gateCutDb)
+        let boostSmooth = exp(Float(-1) / (0.025 * sr))
+        boostLin = boostSmooth * boostLin + (1 - boostSmooth) * desiredBoostLin
+        var y = x * boostLin
+
+        Self.follow(&envDown, abs(y), attack: 0.002, release: 0.080, sampleRate: sr)
+        let thresh = min(0, max(-24, limiterDb))
+        let grDb = downwardGRDb(peakDb: Self.ampToDb(envDown), thresholdDb: thresh)
+        // Attenuation only. A lower threshold never raises the level.
+        let desiredComp = Self.dbToAmp(grDb)
+        let atk = exp(Float(-1) / (0.003 * sr))
+        let rel = exp(Float(-1) / (0.120 * sr))
+        if desiredComp < compLin {
+            compLin = atk * compLin + (1 - atk) * desiredComp
         } else {
-            env = rel * env + (1 - rel) * absx
+            compLin = rel * compLin + (1 - rel) * desiredComp
         }
+        y *= compLin
 
-        let currentDb = 20 * log10(max(env, 1e-6))
-        // Auto-level toward target; Drive scales how much of the error we correct
-        let errorDb = targetDb - currentDb
-        let correctionDb = max(-18, min(12, errorDb)) * drive
-        let desired = pow(10.0, correctionDb / 20.0)
-        let gainSmooth = exp(-1.0 / (0.07 * Float(sampleRate)))
-        gain = gainSmooth * gain + (1 - gainSmooth) * Float(desired)
+        let ceiling = Self.dbToAmp(safetyCeilingDb)
+        y = ceiling * tanhf(y / max(ceiling, 1e-4))
 
-        var y = x * gain
-
-        // Soft-knee compressor once we're at/above target (peaks that leveling didn't catch)
-        let peakDb = 20 * log10(max(abs(y), 1e-6))
-        let thresh = targetDb
-        let knee: Float = 6
-        let ratio = 2.0 + drive * 6.0 // 2:1 … 8:1
-        var grDb: Float = 0
-        if peakDb > (thresh - knee / 2) {
-            if peakDb < (thresh + knee / 2) {
-                // Soft knee region
-                let xk = peakDb - thresh + knee / 2
-                grDb = ((1 / ratio - 1) * (xk * xk)) / (2 * knee)
-            } else {
-                grDb = (thresh - peakDb) * (1 - 1 / ratio)
-            }
-        }
-        let targetGR = pow(10.0, grDb / 20.0)
-        let grAtk = exp(-1.0 / (0.003 * Float(sampleRate)))
-        let grRel = exp(-1.0 / (0.12 * Float(sampleRate)))
-        if Float(targetGR) < compGR {
-            compGR = grAtk * compGR + (1 - grAtk) * Float(targetGR)
-        } else {
-            compGR = grRel * compGR + (1 - grRel) * Float(targetGR)
-        }
-        y *= compGR
-        meterGRDb = max(0, -20 * log10(max(compGR, 1e-6)))
-
-        // Soft limiter ceiling just above target — Drive leans harder into it
-        let ceilingDb = targetDb + (1.0 - drive * 0.5) // ~+1 dB at low drive, +0.5 at full
-        let ceiling = pow(10.0, ceilingDb / 20.0)
-        y = softLimit(y, ceiling: ceiling)
-
+        meterBoostDb = max(0, 20 * log10(max(boostLin, 1e-6)))
+        // GR follows the smoothed limiter gain. That gain is only reduction.
+        meterGRDb = max(0, -Self.ampToDb(min(compLin, 1)))
         return y
     }
 
-    private func softLimit(_ x: Float, ceiling: Float) -> Float {
-        let c = max(ceiling, 1e-4)
-        // tanh soft clip: transparent well below ceiling, rounds into it
-        return c * tanhf(x / c)
+    private func gateClosure(_ levelDb: Float) -> Float {
+        if levelDb >= gateOpenDb { return 0 }
+        if levelDb <= gateClosedDb { return 1 }
+        return (gateOpenDb - levelDb) / (gateOpenDb - gateClosedDb)
+    }
+
+    /// Soft-knee downward gain reduction in dB (≤ 0).
+    private func downwardGRDb(peakDb: Float, thresholdDb: Float) -> Float {
+        let knee = limiterKneeDb
+        let ratio = limiterRatio
+        let kneeLow = thresholdDb - knee / 2
+        let kneeHigh = thresholdDb + knee / 2
+        if peakDb <= kneeLow { return 0 }
+        if peakDb < kneeHigh {
+            let xk = peakDb - thresholdDb + knee / 2
+            return ((1 / ratio - 1) * (xk * xk)) / (2 * knee)
+        }
+        return (thresholdDb - peakDb) * (1 - 1 / ratio)
+    }
+
+    private static func follow(_ env: inout Float, _ x: Float, attack: Float, release: Float, sampleRate sr: Float) {
+        let coeff = exp(Float(-1) / ((x > env ? attack : release) * sr))
+        env = coeff * env + (1 - coeff) * x
+    }
+
+    private static func ampToDb(_ amp: Float) -> Float {
+        20 * log10(max(amp, 1e-8))
+    }
+
+    private static func dbToAmp(_ db: Float) -> Float {
+        pow(Float(10), db / 20)
     }
 }
 
@@ -296,9 +342,9 @@ struct DeVerbDSP {
 
         let direct = max(envFast, 1e-5)
         let ratio = min(2.5, reverbEnv / direct)
-        // Stronger amount curve so mid settings actually audibly dry the room
-        let strength = amount * amount * 1.35
-        let targetReduce = min(0.92, ratio * 0.55 * strength)
+        // 25% stronger than the previous 1.35 factor (1.35 × 1.25 = 1.6875). Cap raised so the top isn't clipped.
+        let strength = amount * amount * 1.6875
+        let targetReduce = min(0.95, ratio * 0.55 * strength)
         let smooth = exp(-1.0 / (0.025 * Float(sampleRate)))
         reduce = smooth * reduce + (1 - smooth) * targetReduce
 

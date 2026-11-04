@@ -76,6 +76,12 @@ enum MixerMixFile {
         var levelerDrive: Float
         var levelerBypass: Bool
         var levelerTargetDb: Float
+        /// Upward DRIVE in dB (0…+24). Omitted in older mixes → mapped from `levelerDrive` (0…1).
+        var levelerDriveDb: Float?
+        /// LIMITER threshold in dB (0…−24). Omitted → 0 (safety ceiling only).
+        var levelerLimiterDb: Float?
+        /// Gate under DRIVE. Omitted → on.
+        var levelerGate: Bool?
         var dspOrder: [String]
         var muteSpans: [MuteSpan]?
         var inputChannel: Int?
@@ -159,9 +165,12 @@ enum MixerMixFile {
             wetter: ch.voice.wetter,
             wetterBypass: ch.voice.wetterBypass,
             wetterRoom: ch.voice.wetterRoom.rawValue,
-            levelerDrive: ch.voice.levelerDrive,
+            levelerDrive: min(1, max(0, ch.voice.levelerDriveDb / 24)),
             levelerBypass: ch.voice.levelerBypass,
             levelerTargetDb: ch.voice.levelerTargetDb,
+            levelerDriveDb: ch.voice.levelerDriveDb,
+            levelerLimiterDb: ch.voice.levelerLimiterDb,
+            levelerGate: ch.voice.levelerGate,
             dspOrder: ch.dspOrder.map(\.rawValue),
             muteSpans: ch.muteSpans,
             inputChannel: ch.inputChannel,
@@ -206,23 +215,40 @@ enum MixerMixFile {
         if snap.deessFreqHz != nil || snap.deessWidth != nil || snap.deessThresholdDb != nil || snap.deessBypass != nil {
             ch.deess.freqHz = snap.deessFreqHz ?? ch.deess.freqHz
             ch.deess.width = ParaEQWidth(rawValue: snap.deessWidth ?? "") ?? ch.deess.width
-            ch.deess.thresholdDb = snap.deessThresholdDb ?? ch.deess.thresholdDb
+            // A stored threshold always wins. A missing key keeps −24 dB, the default from
+            // before new strips started at 0. This channel was just built, so `ch.deess.thresholdDb`
+            // is now 0 and must not be the fallback. Not a new-strip path.
+            ch.deess.thresholdDb = snap.deessThresholdDb ?? -24
             ch.deess.bypass = snap.deessBypass ?? true
             ch.deess.clamp()
         } else {
+            // No de-ess keys at all (older mixes). Same quiet defaults as before: bypassed, −24 dB.
             ch.deess = ChannelDeEsser()
+            ch.deess.thresholdDb = -24
         }
         ch.voice.deVerb = snap.deVerb
         ch.voice.deVerbBypass = snap.deVerbBypass
         ch.voice.wetter = snap.wetter
         ch.voice.wetterBypass = snap.wetterBypass
         ch.voice.wetterRoom = WetterRoom(rawValue: snap.wetterRoom) ?? .drumRoom
-        ch.voice.levelerDrive = snap.levelerDrive
+        if let driveDb = snap.levelerDriveDb {
+            ch.voice.levelerDriveDb = driveDb
+        } else {
+            // Old Drive was 0…1. Map that percent onto 0…+24 dB. The sound is not otherwise rescaled.
+            let pct = min(1, max(0, snap.levelerDrive))
+            ch.voice.levelerDriveDb = pct * 24
+        }
+        ch.voice.levelerLimiterDb = snap.levelerLimiterDb ?? 0
+        ch.voice.levelerGate = snap.levelerGate ?? true
         ch.voice.levelerBypass = snap.levelerBypass
         ch.voice.levelerTargetDb = snap.levelerTargetDb
+        ch.voice.clampLeveler()
+        ch.deessListen = false
         let order = snap.dspOrder.compactMap(ChannelDSPSlot.init(rawValue:))
         if !order.isEmpty {
-            ch.dspOrder = order
+            ch.dspOrder = ch.isStereo ? order : ChannelDSPSlot.insertingDeEss(into: order)
+        } else if !ch.isStereo {
+            ch.dspOrder = ChannelDSPSlot.voiceDefault
         }
         ch.muteSpans = snap.muteSpans ?? []
         ch.inputChannel = snap.inputChannel
@@ -230,6 +256,9 @@ enum MixerMixFile {
 
     @MainActor
     static func apply(_ doc: Document, to session: MixerSession) {
+        for i in session.voices.indices {
+            session.voices[i].deessListen = false
+        }
         for i in session.voices.indices {
             let number = session.voices[i].speakerNumber
             guard let snap = doc.voices.first(where: { $0.speakerNumber == number }) else { continue }

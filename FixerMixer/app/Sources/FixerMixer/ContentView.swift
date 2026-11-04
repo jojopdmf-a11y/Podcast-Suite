@@ -17,12 +17,25 @@ struct ContentView: View {
     @State private var reorderDropID: Int?
     @State private var confirmRemoveStrip = false
     @State private var showInputPicker = false
+    /// Voice-strip fader block, so stereo beds use the same throw.
+    @State private var voiceFaderSectionHeight: CGFloat = VerticalFader.minSectionHeight
+    /// Link-gap center in the strip cluster. Negative until the first layout.
+    @State private var linkGapMidY: CGFloat = -1
 
     /// Half/half seam control between adjacent mono strips (no gutter).
     private static let monoLinkSeamWidth: CGFloat = 36
-    /// Vertical center in the open gap between last DSP chip (LEVELER) and the fader row.
-    private static let monoLinkSeamY: CGFloat = 308
     private static let monoLinkSeamHeight: CGFloat = 22
+    /// Content height that fits a voice strip at `VerticalFader.minTravel`.
+    /// Measured from the live layout: chrome outside the desk 80, one-track
+    /// waveform 140, column spacing 10, strip 556, cluster padding 8.
+    /// 80 + 140 + 10 + 556 + 8 = 794. The 600 pt DSP floor is inside this.
+    private static let minimumContentHeight: CGFloat = 794
+    private static let oneTrackWaveformHeight: CGFloat = 140
+    /// All-tracks panel with its 220 pt stack cap. 147 pt taller than one track.
+    private static let allTracksWaveformHeight: CGFloat = 287
+    /// Voice strip at minimum fader travel, plus the cluster's 8 pt of vertical padding.
+    private static let minimumStripBayHeight: CGFloat = 564
+    private static let stripColumnSpacing: CGFloat = 10
 
     var body: some View {
         ZStack {
@@ -35,58 +48,39 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 10) {
-                header
-                if session.hasSession {
-                    // Hybrid scale: waveform collapses first; desk geometry (strips) stays fixed.
-                    Group {
-                        if showAllWaveforms {
-                            OverviewWaveformView(
-                                lanes: session.waveformLanes,
-                                playhead: session.playheadNormalized,
-                                currentTime: formatTime(session.playheadFrame),
-                                duration: formatTime(session.frameCount),
-                                onSeek: { session.seekNormalized($0) },
-                                onFocusLane: { focusChannel($0) },
-                                onShowOne: { showAllWaveforms = false }
-                            )
-                        } else {
-                            TimelineWaveformView(
-                                peaks: session.waveformPeaks,
-                                playhead: session.playheadNormalized,
-                                channelName: session.selectedChannelName,
-                                currentTime: formatTime(session.playheadFrame),
-                                duration: formatTime(session.frameCount),
-                                muteSpans: session.selectedMuteSpansNormalized,
-                                onSeek: { session.seekNormalized($0) },
-                                onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
-                                onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
-                                onShowAllTracks: { showAllWaveforms = true }
-                            )
-                            .id(session.sourceFolder?.path ?? "empty")
-                        }
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    header
+                    if session.hasSession {
+                        // Waveform sits over the strips only. DSP + master fill the full column
+                        // beside it, so the panel is taller than a strip and is not clipped.
+                        sessionDesk
+                            .frame(maxWidth: .infinity, minHeight: SelectedChannelPanel.minimumHeight, maxHeight: .infinity)
+                    } else {
+                        dropZone
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
-                    .frame(minHeight: 64, idealHeight: 150, maxHeight: .infinity)
-                    .layoutPriority(0)
-                    mixerRow
-                        .layoutPriority(1)
-                } else {
-                    dropZone
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 statusBar
+                    .padding(.top, 6)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
-        // Fixed min size so extra strips / ALL TRACKS never shove Mixer off the screen.
-        .frame(minWidth: 960, idealWidth: 1100, maxWidth: .infinity, minHeight: 640, idealHeight: 820, maxHeight: .infinity)
+        // Min height keeps the fader throw usable and the DSP column on screen.
+        .frame(
+            minWidth: 960,
+            idealWidth: 1100,
+            maxWidth: .infinity,
+            minHeight: Self.minimumContentHeight,
+            idealHeight: 820,
+            maxHeight: .infinity,
+            alignment: .top
+        )
         .preferredColorScheme(.dark)
-        .onAppear {
-            session.bindEngine()
-            installSpacebarMonitor()
-        }
+        .onAppear(perform: startSession)
         .onChange(of: session.hasSession) { _, open in
             if open {
                 session.refreshInputDevices()
@@ -187,6 +181,11 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func startSession() {
+        session.bindEngine()
+        installSpacebarMonitor()
     }
 
     private func installSpacebarMonitor() {
@@ -329,47 +328,118 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, minHeight: 280)
     }
 
-    private var mixerRow: some View {
-        let cluster = mixerClusterWidth
-        return GeometryReader { geo in
-            let selectedW: CGFloat = 460
-            let masterW: CGFloat = 110
-            let gap: CGFloat = 10
-            let available = max(ChannelStripView.stripWidth, geo.size.width - selectedW - masterW - gap * 2)
-            HStack(alignment: .top, spacing: gap) {
-                ScrollView(.horizontal, showsIndicators: cluster > available + 1) {
-                    ZStack(alignment: .topLeading) {
-                        HStack(alignment: .top, spacing: 0) {
-                            ForEach(Array(session.displayChannelOrder.enumerated()), id: \.element) { index, id in
-                                stripView(for: id)
-                                // Tiny gap only before a non-linkable neighbor (e.g. stereo bed).
-                                if shouldGapAfterStrip(at: index) {
-                                    Color.clear.frame(width: 8)
-                                }
-                            }
-                        }
-                        .padding(.vertical, 4)
+    /// Waveform over the strips; selected-channel DSP and master share the column to the right.
+    private var sessionDesk: some View {
+        HStack(alignment: .top, spacing: 10) {
+            stripColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
-                        ForEach(monoLinkSeamIndices, id: \.self) { index in
-                            let order = session.displayChannelOrder
-                            let leftID = order[index]
-                            let rightID = order[index + 1]
-                            monoLinkSeamButton(leftID: leftID, rightID: rightID)
-                                .offset(
-                                    x: linkSeamCenterX(afterStripIndex: index) - Self.monoLinkSeamWidth / 2,
-                                    y: Self.monoLinkSeamY
-                                )
-                        }
-                    }
-                }
-                .frame(width: min(cluster, available), alignment: .leading)
-                Spacer(minLength: 0)
-                selectedChannelPane
-                masterStrip
+            selectedChannelPane
+                .frame(maxHeight: .infinity, alignment: .top)
+                .layoutPriority(1)
+
+            masterStrip
+                .layoutPriority(1)
+        }
+    }
+
+    /// Waveform keeps its height until the strip would drop below its minimum.
+    /// All Tracks then scrolls in a shorter box so the fader, meters, and the
+    /// rows under them stay on screen.
+    private var stripColumn: some View {
+        GeometryReader { geo in
+            let available = max(0, geo.size.height)
+            let waveIdeal = showAllWaveforms ? Self.allTracksWaveformHeight : Self.oneTrackWaveformHeight
+            let room = max(0, available - Self.stripColumnSpacing)
+            let bay = min(room, max(Self.minimumStripBayHeight, room - waveIdeal))
+            let wave = room - bay
+            VStack(alignment: .leading, spacing: Self.stripColumnSpacing) {
+                waveformPane
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: max(0, wave))
+                stripBay
+                    .frame(maxWidth: .infinity)
+                    .frame(height: max(0, bay))
             }
         }
-        .frame(maxWidth: .infinity)
-        .frame(height: ChannelStripView.stripHeight + 8)
+    }
+
+    @ViewBuilder
+    private var waveformPane: some View {
+        if showAllWaveforms {
+            OverviewWaveformView(
+                lanes: session.waveformLanes,
+                playhead: session.playheadNormalized,
+                currentTime: formatTime(session.playheadFrame),
+                duration: formatTime(session.frameCount),
+                onSeek: { session.seekNormalized($0) },
+                onFocusLane: { focusChannel($0) },
+                onShowOne: { showAllWaveforms = false }
+            )
+        } else {
+            TimelineWaveformView(
+                peaks: session.waveformPeaks,
+                playhead: session.playheadNormalized,
+                channelName: session.selectedChannelName,
+                currentTime: formatTime(session.playheadFrame),
+                duration: formatTime(session.frameCount),
+                muteSpans: session.selectedMuteSpansNormalized,
+                onSeek: { session.seekNormalized($0) },
+                onPaintMute: { session.paintMute(normalizedFrom: $0, to: $1) },
+                onClearMute: { session.clearMute(normalizedFrom: $0, to: $1) },
+                onShowAllTracks: { showAllWaveforms = true }
+            )
+            .id(session.sourceFolder?.path ?? "empty")
+        }
+    }
+
+    /// Strips fill this bay from the top. Fader travel absorbs the height; the rest of
+    /// the strip stays put. Extra channels scroll sideways.
+    private var stripBay: some View {
+        GeometryReader { geo in
+            let cluster = mixerClusterWidth
+            ScrollView(.horizontal, showsIndicators: cluster > geo.size.width + 1) {
+                stripCluster
+                    .frame(height: max(0, geo.size.height), alignment: .top)
+            }
+            .frame(width: max(0, geo.size.width), height: max(0, geo.size.height))
+        }
+    }
+
+    private var stripCluster: some View {
+        ZStack(alignment: .topLeading) {
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(session.displayChannelOrder.enumerated()), id: \.element) { index, id in
+                    stripView(for: id)
+                    // Tiny gap only before a non-linkable neighbor (e.g. stereo bed).
+                    if shouldGapAfterStrip(at: index) {
+                        Color.clear.frame(width: 8)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+
+            ForEach(monoLinkSeamIndices, id: \.self) { index in
+                let order = session.displayChannelOrder
+                let leftID = order[index]
+                let rightID = order[index + 1]
+                monoLinkSeamButton(leftID: leftID, rightID: rightID)
+                    .offset(
+                        x: linkSeamCenterX(afterStripIndex: index) - Self.monoLinkSeamWidth / 2,
+                        y: linkGapMidY - Self.monoLinkSeamHeight / 2
+                    )
+                    .opacity(linkGapMidY >= 0 ? 1 : 0)
+            }
+        }
+        .coordinateSpace(name: "stripCluster")
+        .onPreferenceChange(StripFaderSectionKey.self) { height in
+            guard height > 1, abs(height - voiceFaderSectionHeight) > 0.5 else { return }
+            voiceFaderSectionHeight = height
+        }
+        .onPreferenceChange(StripLinkGapKey.self) { y in
+            guard y >= 0, abs(y - linkGapMidY) > 0.5 else { return }
+            linkGapMidY = y
+        }
     }
 
     /// Speaker + stereo strips only (master is pinned beside SEL). Extra strips scroll sideways.
@@ -436,30 +506,14 @@ struct ContentView: View {
         Button {
             session.toggleMonoLink(between: leftID, and: rightID)
         } label: {
-            Text("link")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.4)
-                .foregroundStyle(
-                    lit ? MixerTheme.bgBottom
-                        : (dark ? MixerTheme.cyanDim.opacity(0.35) : MixerTheme.cyan)
-                )
-                .frame(width: Self.monoLinkSeamWidth, height: Self.monoLinkSeamHeight)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(
-                            lit ? MixerTheme.lime
-                                : (dark ? Color(white: 0.08) : MixerTheme.panelRaised)
-                        )
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(
-                            lit ? MixerTheme.lime
-                                : (dark ? Color.white.opacity(0.08) : MixerTheme.cyan.opacity(0.45)),
-                            lineWidth: 1
-                        )
-                )
-                .opacity(dark ? 0.55 : 1)
+            DSPBevelPillLabel(
+                title: "link",
+                lit: lit && !dark,
+                kind: .lime,
+                fontSize: 9,
+                fixedSize: CGSize(width: Self.monoLinkSeamWidth, height: Self.monoLinkSeamHeight)
+            )
+            .opacity(dark ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .disabled(!canToggle || session.isRecording)
@@ -512,7 +566,8 @@ struct ContentView: View {
                 onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
                 onReorderTargeted: { targeted in
                     reorderDropID = targeted ? id : (reorderDropID == id ? nil : reorderDropID)
-                }
+                },
+                alignedFaderSectionHeight: voiceFaderSectionHeight
             )
         }
     }
@@ -571,15 +626,19 @@ struct ContentView: View {
                 onChange: { session.syncParamsToEngine() }
             )
         } else if let idx = session.stereos.firstIndex(where: { $0.id == session.selectedChannelID }) {
+            let channelID = session.stereos[idx].id
             SelectedChannelPanel(
                 channel: $session.stereos[idx],
                 rtaBins: session.rtaBins,
+                inputIsClipping: { session.inputIsClipping(channelID: channelID) },
                 onChange: { session.syncParamsToEngine() }
             )
         } else if let idx = session.voices.firstIndex(where: { $0.id == session.selectedChannelID }) {
+            let channelID = session.voices[idx].id
             SelectedChannelPanel(
                 channel: $session.voices[idx],
                 rtaBins: session.rtaBins,
+                inputIsClipping: { session.inputIsClipping(channelID: channelID) },
                 onChange: {
                     session.syncParamsToEngine()
                     session.syncLinkedFrom(session.voices[idx].id)
@@ -596,7 +655,8 @@ struct ContentView: View {
                 Spacer()
             }
             .padding(12)
-            .frame(width: 460, height: ChannelStripView.stripHeight, alignment: .top)
+            .frame(width: 460, alignment: .top)
+            .frame(maxHeight: .infinity, alignment: .top)
             .mixerPanel()
         }
     }
@@ -720,21 +780,20 @@ struct ContentView: View {
                 .help("Limits how far Auto Duck can attenuate a channel (0 = no duck).")
             }
 
-            Spacer(minLength: 4)
-
-            // Meters beside OUT fader so the fader never clips under fixed strip height.
-            HStack(alignment: .bottom, spacing: 6) {
-                LevelMeter(level: session.masterPeakL, label: "L")
-                LevelMeter(level: session.masterPeakR, label: "R")
-                VStack(spacing: 2) {
-                    Text(masterOutLabel)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(masterOutColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Text("dBFS")
-                        .font(.system(size: 7, weight: .bold, design: .rounded))
-                        .foregroundStyle(MixerTheme.cyanDim)
+            VStack(spacing: 2) {
+                Text(masterOutLabel)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(masterOutColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(maxWidth: .infinity)
+                Text("dBFS")
+                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .foregroundStyle(MixerTheme.cyanDim)
+                    .frame(maxWidth: .infinity)
+                HStack(alignment: .bottom, spacing: 6) {
+                    LevelMeter(level: session.masterPeakL, label: "L", stripChrome: true)
+                        .frame(maxHeight: .infinity)
                     VerticalFader(
                         valueDb: Binding(
                             get: { session.masterDb },
@@ -745,18 +804,22 @@ struct ContentView: View {
                         ),
                         defaultValue: 0,
                         range: -24...12,
-                        caption: "OUT"
+                        caption: "OUT",
+                        expands: true
                     )
+                    LevelMeter(level: session.masterPeakR, label: "R", stripChrome: true)
+                        .frame(maxHeight: .infinity)
                 }
-                .layoutPriority(1)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 148)
+            .frame(maxHeight: .infinity)
             .help("Live peak on the master bus after the OUT fader")
         }
         .padding(.horizontal, 8)
         .padding(.top, 8)
         .padding(.bottom, 6)
-        .frame(width: 110, height: ChannelStripView.stripHeight, alignment: .top)
+        .frame(width: 110)
+        .frame(maxHeight: .infinity, alignment: .top)
         .mixerPanel(glow: true)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -780,21 +843,26 @@ struct ContentView: View {
     }
 
     private var statusBar: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 1) {
             if let progress = session.busyProgress {
-                HStack(spacing: 8) {
-                    ProgressView(value: progress)
-                        .progressViewStyle(.linear)
-                        .tint(MixerTheme.cyan)
-                        .frame(maxWidth: 280)
+                HStack(spacing: 6) {
+                    Capsule()
+                        .fill(MixerTheme.cyan.opacity(0.18))
+                        .frame(width: 160, height: 3)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(MixerTheme.cyan)
+                                .frame(width: max(3, 160 * CGFloat(min(1, max(0, progress)))))
+                        }
                     Text(session.busyProgressLabel.map { "\($0) · \(Int(progress * 100))%" } ?? String(format: "%.0f%%", progress * 100))
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
                         .foregroundStyle(MixerTheme.lime)
                         .monospacedDigit()
+                        .lineLimit(1)
                 }
             }
             Text(session.status)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(MixerTheme.textPrimary)
             if session.hasSession {
                 Text("File menu · Load/Save/Import/Export/Input · SEL opens DSP · Shift-drag waveform to silence · Option-drag clears")
@@ -804,7 +872,6 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
     }
 
     private func formatTime(_ frames: Int) -> String {

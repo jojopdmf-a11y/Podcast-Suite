@@ -295,14 +295,17 @@ struct ChannelProcessor {
     var deessWidth: ParaEQWidth = .narrow
     var deessThresholdDb: Float = -24
     var deessBypass: Bool = true
+    /// Monitoring only. Does not change `processEffects` output (bounce / export stay clean).
+    var deessListen: Bool = false
 
     var deVerbAmount: Float = 0
     var deVerbBypass: Bool = false
     var wetterAmount: Float = 0
     var wetterBypass: Bool = false
     var wetterRoom: WetterRoom = .drumRoom
-    var levelerDrive: Float = 0
-    var levelerTargetDb: Float = -6
+    var levelerDriveDb: Float = 0
+    var levelerLimiterDb: Float = 0
+    var levelerGate: Bool = true
     var levelerBypass: Bool = false
     var dspOrder: [ChannelDSPSlot] = ChannelDSPSlot.voiceDefault
 
@@ -319,8 +322,12 @@ struct ChannelProcessor {
 
     /// Live Leveler gain-reduction (dB ≥ 0) for the selected-channel GR meter.
     var levelerMeterGRDb: Float { leveler.meterGRDb }
+    /// Live Leveler upward boost (dB ≥ 0).
+    var levelerMeterBoostDb: Float { leveler.meterBoostDb }
     /// Live De-ess gain-reduction (dB ≥ 0).
     var deessMeterGRDb: Float { deess.meterGRDb }
+    /// De-ess detection band for LISTEN. Updated while `processEffects` runs. Not the recorded signal.
+    var deessListenTap: Float = 0
 
     init(isStereo: Bool, hasVoiceFX: Bool) {
         self.isStereo = isStereo
@@ -354,8 +361,9 @@ struct ChannelProcessor {
             deVerb.bypass = deVerbBypass || dspBypass
             wetter.amount = wetterAmount
             wetter.bypass = wetterBypass || dspBypass
-            leveler.drive = levelerDrive
-            leveler.targetDb = levelerTargetDb
+            leveler.driveDb = levelerDriveDb
+            leveler.limiterDb = levelerLimiterDb
+            leveler.gateEnabled = levelerGate
             leveler.bypass = levelerBypass || dspBypass
         }
     }
@@ -378,8 +386,8 @@ struct ChannelProcessor {
         return x * pow(10.0, inputGainDb / 20.0)
     }
 
-    /// Graphic + HPF (+ optional para) + de-ess for the `.eq` slot.
-    /// Order: para PRE → HPF → graphic → para POST → de-ess.
+    /// Graphic + HPF (+ optional para) for the `.eq` slot.
+    /// Order: para PRE → HPF → graphic → para POST. De-ess is its own slot.
     private mutating func processEQSlot(_ x: Float, useLeft: Bool) -> Float {
         var y = x
         let paraPre = hasVoiceFX && !paraBypass && paraPlacement == .pre
@@ -395,24 +403,47 @@ struct ChannelProcessor {
             }
         }
         if paraPost { y = para.process(y) }
-        if hasVoiceFX && !deessBypass {
-            y = deess.process(y)
-        }
         return y
     }
 
+    /// Band-pass at the de-ess FREQ / WIDTH. Does not apply threshold or gain reduction.
+    private mutating func tapDeEssBand(_ x: Float) {
+        guard hasVoiceFX, deessListen else { return }
+        deessListenTap = deess.tickBand(x)
+    }
+
     /// FX only, in this channel’s `dspOrder`. Mute returns 0. Caller applies input gain first.
+    /// LISTEN fills `deessListenTap` and leaves this return value unchanged, so export stays clean.
     mutating func processEffects(_ x: Float) -> Float {
-        if mute { return 0 }
+        if mute {
+            deessListenTap = 0
+            return 0
+        }
         var y = x
-        if dspBypass { return y }
+        if dspBypass {
+            tapDeEssBand(y)
+            if !(hasVoiceFX && deessListen) { deessListenTap = 0 }
+            return y
+        }
         let order = dspOrder.isEmpty
             ? (hasVoiceFX ? ChannelDSPSlot.voiceDefault : ChannelDSPSlot.musicDefault)
             : dspOrder
+        var heardDeEss = false
         for slot in order {
             switch slot {
             case .eq:
                 y = processEQSlot(y, useLeft: true)
+            case .deess:
+                if hasVoiceFX {
+                    heardDeEss = true
+                    let band = deess.tickBand(y)
+                    if deessListen { deessListenTap = band }
+                    if deessBypass {
+                        deess.decayMeter()
+                    } else {
+                        y = deess.reduce(y, detect: band)
+                    }
+                }
             case .deVerb:
                 if hasVoiceFX { y = deVerb.process(y, sampleRate: sampleRate) }
             case .wetter:
@@ -421,6 +452,10 @@ struct ChannelProcessor {
                 if hasVoiceFX { y = leveler.process(y, sampleRate: sampleRate) }
             }
         }
+        if deessListen && !heardDeEss {
+            tapDeEssBand(x)
+        }
+        if !deessListen { deessListenTap = 0 }
         return y
     }
 
