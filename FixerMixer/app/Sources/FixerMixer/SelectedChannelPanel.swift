@@ -12,34 +12,47 @@ struct SelectedChannelPanel: View {
     @State private var isRenaming = false
     @FocusState private var nameFieldFocused: Bool
 
-    /// Gaps and the card heights that fit the approved mockup at the real
-    /// panel width. EQ, the mid row, and the bottom row stay these heights.
-    /// Extra column height goes to the RTA. A shorter window shrinks the RTA
-    /// first, and not below `rtaFloor`.
+    /// RTA and EQ 2520 split whatever is left above the fixed rows, equally.
+    /// Para EQ / De-ess and the bottom row keep these heights at every window size.
+    /// The window minimum is the strip bay from job 6; this column’s own floor stays 600.
     enum Layout {
         static let gap: CGFloat = 5
         static let sideInset: CGFloat = 4
-        static let rtaFloor: CGFloat = 96
-        /// Tall enough for a 92 pt fader travel plus the header and HPF knob.
-        static let eqCardH: CGFloat = 168
-        /// Para EQ and De-ess, same height. Holds the radius-12 knobs.
-        static let midRowH: CGFloat = 112
-        /// De-verb, Ambience, and Leveler, same height.
-        static let bottomRowH: CGFloat = 108
-        /// De-verb : Ambience : Leveler, from the mockup. Leveler takes the rest.
+        /// Para EQ and De-ess. Fixed. Holds the larger knobs and the De-ess GR meter.
+        static let midRowH: CGFloat = 136
+        /// De-verb, Ambience, and Leveler. Fixed.
+        static let bottomRowH: CGFloat = 150
+        /// De-verb : Ambience : Leveler. Leveler takes the rest.
         static let deVerbShare: CGFloat = 82
         static let ambienceShare: CGFloat = 96
         static let levelerShare: CGFloat = 110
+
+        /// Height each of RTA and EQ 2520 gets inside the card column.
+        /// They are always equal. A short column shares what is left; it does not
+        /// push the window up.
+        static func equalShare(columnHeight: CGFloat, voice: Bool) -> CGFloat {
+            let fixed = voice ? midRowH + bottomRowH : 0
+            let gaps = gap * CGFloat(voice ? 3 : 1)
+            let available = max(0, columnHeight - fixed - gaps)
+            return available / 2
+        }
     }
 
-    /// Floor for this column with the RTA at its 96 pt hard floor.
-    /// The reachable window minimum is taller, so the RTA stays above this.
+    /// Does not set the window minimum. The strip bay does (job 6).
     static let minimumHeight: CGFloat = 600
 
     private var canRename: Bool { !channel.isStereo }
 
-    /// Panel knobs match the approved v3 size: radius 12.
-    private let knob: CGFloat = 24
+    /// Header INPUT GAIN. Unchanged from the approved header.
+    private let headerKnob: CGFloat = 24
+    /// Para EQ, De-ess, Drive, and Limiter. About 40% over the old 24 pt face.
+    private let bandKnob: CGFloat = 34
+    /// Slightly larger than the old 24 pt HPF.
+    private let hpfDiameter: CGFloat = 30
+    /// One large centered De-verb amount.
+    private let deVerbDiameter: CGFloat = 50
+    /// Larger Ambience amount. The room buttons take the rest of the card.
+    private let ambienceDiameter: CGFloat = 42
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.gap) {
@@ -152,7 +165,7 @@ struct SelectedChannelPanel: View {
                 range: ChannelStripState.minInputGainDb...ChannelStripState.maxInputGainDb,
                 label: "dB",
                 valueText: { abs($0) < 0.05 ? "0.0" : String(format: "%+.1f", $0) },
-                diameter: knob,
+                diameter: headerKnob,
                 defaultValue: 0,
                 dragSensitivity: 0.55
             )
@@ -178,21 +191,22 @@ struct SelectedChannelPanel: View {
         (channel.dspOrder.firstIndex(of: slot) ?? 0) + 1
     }
 
-    /// RTA takes whatever the fixed cards do not. The cards keep their ideal height.
+    /// RTA and EQ 2520 are the same height and share everything above the fixed rows.
     private var cardColumn: some View {
         GeometryReader { geo in
             let gap = Layout.gap
             let voice = !channel.isStereo
             let inner = geo.size.width
+            let share = Layout.equalShare(columnHeight: geo.size.height, voice: voice)
             let shares = Layout.deVerbShare + Layout.ambienceShare + Layout.levelerShare
             let deVerbW = (inner - gap * 2) * Layout.deVerbShare / shares
             let ambienceW = (inner - gap * 2) * Layout.ambienceShare / shares
             VStack(alignment: .leading, spacing: gap) {
                 RTAView(bins: rtaBins, apiStyle: true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .frame(minHeight: Layout.rtaFloor)
+                    .frame(height: share)
                 eqCard
-                    .frame(height: Layout.eqCardH, alignment: .top)
+                    .frame(height: share, alignment: .top)
                 if voice {
                     HStack(alignment: .top, spacing: gap) {
                         paraCard
@@ -226,13 +240,16 @@ struct SelectedChannelPanel: View {
             bypass: $channel.eq.bypass,
             flow: flowNumber(.eq),
             dotOn: !channel.eq.bypass && !channel.dspBypass,
-            expands: true
+            expands: true,
+            fillsBody: true
         ) {
             HStack(alignment: .center, spacing: 4) {
                 API560EQView(eq: $channel.eq)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 hpfKnob
-                    .frame(width: 46)
+                    .frame(width: 48)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -251,7 +268,7 @@ struct SelectedChannelPanel: View {
             range: 0...HighPass24DSP.maxHz,
             label: "HPF",
             valueText: { $0 < HighPass24DSP.minHz ? "OFF" : String(format: "%.0f", $0) },
-            diameter: knob,
+            diameter: hpfDiameter,
             defaultValue: 0,
             dragSensitivity: 0.35,
             tight: true
@@ -269,7 +286,7 @@ struct SelectedChannelPanel: View {
             expands: true,
             fillsBody: true
         ) {
-            ParaEQView(para: $channel.para, knob: knob, showsCaption: false)
+            ParaEQView(para: $channel.para, knob: bandKnob, showsCaption: false)
         }
     }
 
@@ -284,7 +301,7 @@ struct SelectedChannelPanel: View {
             fillsBody: true,
             headerExtra: AnyView(listenButton)
         ) {
-            DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb, knob: knob)
+            DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb, knob: bandKnob)
         }
     }
 
@@ -293,9 +310,9 @@ struct SelectedChannelPanel: View {
             channel.deessListen.toggle()
         } label: {
             Text("LISTEN")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
                 .foregroundStyle(channel.deessListen ? Color.black : APILook.label)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -321,24 +338,18 @@ struct SelectedChannelPanel: View {
             bypass: $channel.voice.deVerbBypass,
             flow: flowNumber(.deVerb),
             dotOn: !channel.voice.deVerbBypass && !channel.dspBypass,
-            expands: true
+            expands: true,
+            fillsBody: true
         ) {
-            VStack(spacing: 0) {
-                HardwareKnob(
-                    value: $channel.voice.deVerb,
-                    range: 0...1,
-                    label: "AMOUNT",
-                    valueText: { String(format: "%.0f%%", $0 * 100) },
-                    diameter: knob,
-                    defaultValue: 0,
-                    tight: true
-                )
-                Text("deeper range (+25%)")
-                    .font(.system(size: 6, weight: .medium, design: .rounded))
-                    .foregroundStyle(APILook.labelDim)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
+            HardwareKnob(
+                value: $channel.voice.deVerb,
+                range: 0...1,
+                label: "AMOUNT",
+                valueText: { String(format: "%.0f%%", $0 * 100) },
+                diameter: deVerbDiameter,
+                defaultValue: 0,
+                tight: true
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
     }
@@ -350,19 +361,20 @@ struct SelectedChannelPanel: View {
             bypass: $channel.voice.wetterBypass,
             flow: flowNumber(.wetter),
             dotOn: !channel.voice.wetterBypass && !channel.dspBypass,
-            expands: true
+            expands: true,
+            fillsBody: true
         ) {
-            HStack(alignment: .center, spacing: 4) {
+            HStack(alignment: .center, spacing: 6) {
                 HardwareKnob(
                     value: $channel.voice.wetter,
                     range: 0...1,
                     label: "AMOUNT",
                     valueText: { String(format: "%.0f%%", $0 * 100) },
-                    diameter: knob,
+                    diameter: ambienceDiameter,
                     defaultValue: 0,
                     tight: true
                 )
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     ForEach(WetterRoom.allCases) { mode in
                         wetterRoomButton(mode)
                     }
@@ -380,18 +392,19 @@ struct SelectedChannelPanel: View {
             bypass: $channel.voice.levelerBypass,
             flow: flowNumber(.leveler),
             dotOn: !channel.voice.levelerBypass && !channel.dspBypass,
-            expands: true
+            expands: true,
+            fillsBody: true
         ) {
-            VStack(spacing: 2) {
+            VStack(spacing: 4) {
                 gateButton
                 HStack(alignment: .center, spacing: 4) {
                     driveKnob
                     limiterKnob
-                    HStack(alignment: .bottom, spacing: 3) {
-                        LevelerDynMeter(db: channel.levelerBoostDb, maxDb: 24, label: "BST", fromBottom: true, compact: true)
-                        LevelerDynMeter(db: channel.levelerGRDb, maxDb: 24, label: "GR", fromBottom: false, compact: true)
+                    HStack(alignment: .bottom, spacing: 4) {
+                        LevelerDynMeter(db: channel.levelerBoostDb, maxDb: 24, label: "BST", fromBottom: true)
+                        LevelerDynMeter(db: channel.levelerGRDb, maxDb: 24, label: "GR", fromBottom: false)
                     }
-                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             }
@@ -411,7 +424,7 @@ struct SelectedChannelPanel: View {
             range: 0...24,
             label: "DRIVE",
             valueText: { String(format: "%+.1f", $0) },
-            diameter: knob,
+            diameter: bandKnob,
             defaultValue: 0,
             tight: true
         )
@@ -430,7 +443,7 @@ struct SelectedChannelPanel: View {
             range: -24...0,
             label: "LIMITER",
             valueText: { String(format: "%+.1f", $0) },
-            diameter: knob,
+            diameter: bandKnob,
             defaultValue: 0,
             tight: true
         )
@@ -443,9 +456,9 @@ struct SelectedChannelPanel: View {
             channel.voice.levelerGate.toggle()
         } label: {
             Text("GATE")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .font(.system(size: 11, weight: .bold, design: .rounded))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+                .padding(.vertical, 6)
                 .foregroundStyle(on ? Color.black : APILook.label)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -466,12 +479,12 @@ struct SelectedChannelPanel: View {
             channel.voice.wetterRoom = mode
         } label: {
             Text(mode.title)
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                .tracking(0.2)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(0.3)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.vertical, 4)
                 .foregroundStyle(on ? Color.black : APILook.label)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -499,11 +512,11 @@ struct SelectedChannelPanel: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         let controlsLocked = bypass.wrappedValue || channel.dspBypass
-        return VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 4) {
-                BypassToggle(bypass: bypass, compact: true)
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 5) {
+                CardBypassPill(bypass: bypass)
                 Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
                     .foregroundStyle(controlsLocked ? APILook.labelDim : APILook.label)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -515,7 +528,7 @@ struct SelectedChannelPanel: View {
             }
             if let subtitle {
                 Text(subtitle)
-                    .font(.system(size: 7, weight: .medium, design: .rounded))
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
                     .foregroundStyle(APILook.labelDim)
                     .lineLimit(1)
             }
@@ -524,8 +537,8 @@ struct SelectedChannelPanel: View {
                 .opacity(controlsLocked ? 0.4 : 1)
                 .allowsHitTesting(!controlsLocked)
         }
-        .padding(.horizontal, 5)
-        .padding(.vertical, 3)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, maxHeight: expands ? .infinity : nil, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -540,6 +553,33 @@ struct SelectedChannelPanel: View {
                 .fill(Color.black.opacity(bypass.wrappedValue ? 0.22 : 0))
                 .allowsHitTesting(false)
         )
+    }
+}
+
+/// Card ON/BYP. About 30% larger than the old 28×18 compact pill.
+/// Strips and DSP ALL keep `BypassToggle`.
+private struct CardBypassPill: View {
+    @Binding var bypass: Bool
+
+    var body: some View {
+        Button {
+            bypass.toggle()
+        } label: {
+            Text(bypass ? "BYP" : "ON")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .frame(width: 36, height: 23)
+                .foregroundStyle(MixerTheme.bgBottom)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(bypass ? MixerTheme.danger : MixerTheme.meterGreen)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .help(bypass ? "Bypassed — click to engage" : "Engaged — click to bypass")
     }
 }
 
@@ -590,14 +630,9 @@ private struct LevelerDynMeter: View {
     var label: String
     /// BOOST fills from the bottom. GR fills from the top.
     var fromBottom: Bool
-    /// Short bar beside the leveler knobs. Hides the numeric readout so the row fits.
-    var compact: Bool = false
 
     var body: some View {
-        VStack(spacing: 1) {
-            Text(label)
-                .font(.system(size: 7, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
+        VStack(spacing: 2) {
             GeometryReader { geo in
                 let fill = CGFloat(min(1, max(0, db / max(0.001, maxDb))))
                 ZStack(alignment: fromBottom ? .bottom : .top) {
@@ -608,15 +643,19 @@ private struct LevelerDynMeter: View {
                         .frame(height: max(1, geo.size.height * fill))
                 }
             }
-            .frame(width: compact ? 7 : 10, height: compact ? 22 : 28)
-            if !compact {
-                Text(String(format: fromBottom ? "%+.1f" : "%.1f", max(0, db)))
-                    .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .foregroundStyle(db > 0.15 ? APILook.accentBlue : APILook.labelDim)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-            }
+            .frame(width: 21)
+            .frame(maxHeight: .infinity)
+            Text(String(format: fromBottom ? "%+.1f" : "%.1f", max(0, db)))
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(db > 0.15 ? APILook.accentBlue : APILook.labelDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.5)
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
         }
+        .frame(width: 28)
+        .frame(maxHeight: .infinity)
         .help(fromBottom ? "Leveler upward boost" : "Leveler downward gain reduction")
     }
 }
@@ -664,7 +703,8 @@ struct DeEsserView: View {
                 dragSensitivity: 0.45,
                 tight: true
             )
-            VStack(spacing: 2) {
+            DeEssGRMeter(grDb: grDb)
+            VStack(spacing: 3) {
                 ForEach(ParaEQWidth.allCases) { mode in
                     widthButton(mode)
                 }
@@ -689,11 +729,11 @@ struct DeEsserView: View {
             deess.width = mode
         } label: {
             Text(mode.title)
-                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .font(.system(size: 9, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.vertical, 3)
                 .foregroundStyle(on ? Color.black : APILook.label)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -713,6 +753,39 @@ struct DeEsserView: View {
             return String(format: hz >= 10_000 ? "%.1fk" : "%.2fk", hz / 1000)
         }
         return String(format: "%.0f Hz", hz)
+    }
+}
+
+/// Vertical De-ess gain-reduction bar beside THRESH. Display is 0…12 dB. Yellow while reduction is happening.
+private struct DeEssGRMeter: View {
+    var grDb: Float
+    private let maxDisplay: Float = 12
+
+    var body: some View {
+        let active = grDb > 0.15
+        VStack(spacing: 2) {
+            Text("GR")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+            GeometryReader { geo in
+                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
+                ZStack(alignment: .top) {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.black.opacity(0.55))
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(active ? APILook.ledYellow : Color(white: 0.34))
+                        .frame(height: max(1, geo.size.height * fill))
+                }
+            }
+            .frame(width: 12, height: 52)
+            Text(String(format: "%.1f", max(0, grDb)))
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(active ? APILook.ledYellow : APILook.labelDim)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(width: 30)
+        .help("De-ess gain reduction, 0–12 dB")
     }
 }
 
@@ -786,17 +859,19 @@ struct ParaEQView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Text("vs GRAPHIC")
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
                     .foregroundStyle(APILook.labelDim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 ForEach(ParaEQPlacement.allCases) { mode in
                     placementButton(mode)
                 }
                 Spacer(minLength: 0)
             }
-            HStack(alignment: .top, spacing: 4) {
+            HStack(alignment: .center, spacing: 4) {
                 HardwareKnob(
                     value: logFreq,
                     range: log2(ChannelParaEQ.minHz)...log2(ChannelParaEQ.maxHz),
@@ -823,13 +898,14 @@ struct ParaEQView: View {
                     dragSensitivity: 0.45,
                     tight: true
                 )
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     ForEach(ParaEQWidth.allCases) { mode in
                         widthButton(mode)
                     }
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
             if showsCaption {
                 Text(widthCaption)
                     .font(.system(size: 7, weight: .medium, design: .monospaced))
@@ -837,6 +913,7 @@ struct ParaEQView: View {
                     .lineLimit(1)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var widthCaption: String {
@@ -854,11 +931,11 @@ struct ParaEQView: View {
             para.placement = mode
         } label: {
             Text(mode.title)
-                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(0.3)
                 .foregroundStyle(on ? APILook.charcoal : APILook.label)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .background(
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(on ? APILook.accentBlue : Color(white: 0.16))
@@ -878,11 +955,11 @@ struct ParaEQView: View {
             para.width = mode
         } label: {
             Text(mode.title)
-                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .font(.system(size: 9, weight: .bold, design: .rounded))
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 2)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.vertical, 3)
                 .foregroundStyle(on ? Color.black : APILook.label)
                 .background(
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
