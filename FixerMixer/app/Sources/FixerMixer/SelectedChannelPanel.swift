@@ -45,14 +45,8 @@ struct SelectedChannelPanel: View {
 
     /// Header INPUT GAIN. Unchanged from the approved header.
     private let headerKnob: CGFloat = 24
-    /// Para EQ, De-ess, Drive, and Limiter. About 40% over the old 24 pt face.
-    private let bandKnob: CGFloat = 34
-    /// Slightly larger than the old 24 pt HPF.
-    private let hpfDiameter: CGFloat = 30
-    /// One large centered De-verb amount.
-    private let deVerbDiameter: CGFloat = 50
-    /// Larger Ambience amount. The room buttons take the rest of the card.
-    private let ambienceDiameter: CGFloat = 42
+    /// One face size for every rotary inside the cards. Header INPUT GAIN stays on HardwareKnob.
+    private let cardKnob: CGFloat = 34
 
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.gap) {
@@ -254,7 +248,7 @@ struct SelectedChannelPanel: View {
     }
 
     private var hpfKnob: some View {
-        HardwareKnob(
+        DSPPanelKnob(
             value: Binding(
                 get: { channel.eq.hpfHz < HighPass24DSP.minHz ? 0 : channel.eq.hpfHz },
                 set: { raw in
@@ -268,10 +262,9 @@ struct SelectedChannelPanel: View {
             range: 0...HighPass24DSP.maxHz,
             label: "HPF",
             valueText: { $0 < HighPass24DSP.minHz ? "OFF" : String(format: "%.0f", $0) },
-            diameter: hpfDiameter,
+            diameter: cardKnob,
             defaultValue: 0,
-            dragSensitivity: 0.35,
-            tight: true
+            dragSensitivity: 0.35
         )
         .help("24 dB/oct high-pass. Double-click for off.")
     }
@@ -286,7 +279,7 @@ struct SelectedChannelPanel: View {
             expands: true,
             fillsBody: true
         ) {
-            ParaEQView(para: $channel.para, knob: bandKnob, showsCaption: false)
+            ParaEQView(para: $channel.para, knob: cardKnob, showsCaption: false)
         }
     }
 
@@ -301,7 +294,7 @@ struct SelectedChannelPanel: View {
             fillsBody: true,
             headerExtra: AnyView(listenButton)
         ) {
-            DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb, knob: bandKnob)
+            DeEsserView(deess: $channel.deess, grDb: channel.deessGRDb, knob: cardKnob)
         }
     }
 
@@ -309,23 +302,14 @@ struct SelectedChannelPanel: View {
         Button {
             channel.deessListen.toggle()
         } label: {
-            Text("LISTEN")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(channel.deessListen ? Color.black : APILook.label)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(channel.deessListen
-                              ? Color(red: 0.88, green: 0.70, blue: 0.23)
-                              : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(channel.deessListen
-                                ? Color(red: 0.88, green: 0.70, blue: 0.23)
-                                : Color(white: 0.35).opacity(0.6), lineWidth: 1)
-                )
+            DSPBevelPillLabel(
+                title: "LISTEN",
+                lit: channel.deessListen,
+                kind: channel.deessListen ? .gold : .off,
+                fontSize: 8,
+                horizontal: 7,
+                vertical: 2
+            )
         }
         .buttonStyle(.plain)
         .help("Monitor only: this channel’s output becomes the de-ess band at FREQ and WIDTH. Not recorded, not exported, and it turns off when a session loads.")
@@ -341,14 +325,13 @@ struct SelectedChannelPanel: View {
             expands: true,
             fillsBody: true
         ) {
-            HardwareKnob(
+            DSPPanelKnob(
                 value: $channel.voice.deVerb,
                 range: 0...1,
                 label: "AMOUNT",
                 valueText: { String(format: "%.0f%%", $0 * 100) },
-                diameter: deVerbDiameter,
-                defaultValue: 0,
-                tight: true
+                diameter: cardKnob,
+                defaultValue: 0
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         }
@@ -365,20 +348,21 @@ struct SelectedChannelPanel: View {
             fillsBody: true
         ) {
             HStack(alignment: .center, spacing: 6) {
-                HardwareKnob(
+                DSPPanelKnob(
                     value: $channel.voice.wetter,
                     range: 0...1,
                     label: "AMOUNT",
                     valueText: { String(format: "%.0f%%", $0 * 100) },
-                    diameter: ambienceDiameter,
-                    defaultValue: 0,
-                    tight: true
+                    diameter: cardKnob,
+                    defaultValue: 0
                 )
-                VStack(spacing: 3) {
-                    ForEach(WetterRoom.allCases) { mode in
-                        wetterRoomButton(mode)
-                    }
-                }
+                DSPSegmentedSelector(
+                    options: Array(WetterRoom.allCases),
+                    title: { $0.title },
+                    isSelected: { channel.voice.wetterRoom == $0 },
+                    help: { $0.help },
+                    select: { channel.voice.wetterRoom = $0 }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -413,7 +397,7 @@ struct SelectedChannelPanel: View {
     }
 
     private var driveKnob: some View {
-        HardwareKnob(
+        DSPPanelKnob(
             value: Binding(
                 get: { channel.voice.levelerDriveDb },
                 set: {
@@ -424,15 +408,14 @@ struct SelectedChannelPanel: View {
             range: 0...24,
             label: "DRIVE",
             valueText: { String(format: "%+.1f", $0) },
-            diameter: bandKnob,
-            defaultValue: 0,
-            tight: true
+            diameter: cardKnob,
+            defaultValue: 0
         )
         .frame(maxWidth: .infinity)
     }
 
     private var limiterKnob: some View {
-        HardwareKnob(
+        DSPPanelKnob(
             value: Binding(
                 get: { channel.voice.levelerLimiterDb },
                 set: {
@@ -443,9 +426,8 @@ struct SelectedChannelPanel: View {
             range: -24...0,
             label: "LIMITER",
             valueText: { String(format: "%+.1f", $0) },
-            diameter: bandKnob,
-            defaultValue: 0,
-            tight: true
+            diameter: cardKnob,
+            defaultValue: 0
         )
         .frame(maxWidth: .infinity)
     }
@@ -455,48 +437,17 @@ struct SelectedChannelPanel: View {
         return Button {
             channel.voice.levelerGate.toggle()
         } label: {
-            Text("GATE")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 6)
-                .foregroundStyle(on ? Color.black : APILook.label)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.6), lineWidth: 1)
-                )
+            DSPBevelPillLabel(
+                title: "GATE",
+                lit: on,
+                kind: on ? .blue : .off,
+                fontSize: 9,
+                vertical: 3,
+                expands: true
+            )
         }
         .buttonStyle(.plain)
         .help("On: a gentle gate under DRIVE so silence and room noise are not boosted. Default on.")
-    }
-
-    private func wetterRoomButton(_ mode: WetterRoom) -> some View {
-        let on = channel.voice.wetterRoom == mode
-        return Button {
-            channel.voice.wetterRoom = mode
-        } label: {
-            Text(mode.title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.3)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 4)
-                .foregroundStyle(on ? Color.black : APILook.label)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.55), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .help(mode.help)
     }
 
     /// Fixed card. The number is this channel’s strip order. Cards themselves do not move.
@@ -542,12 +493,32 @@ struct SelectedChannelPanel: View {
         .frame(maxWidth: .infinity, maxHeight: expands ? .infinity : nil, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(bypass.wrappedValue ? Color(white: 0.07) : APILook.panelFill)
+                .fill(
+                    LinearGradient(
+                        colors: bypass.wrappedValue
+                            ? [Color(white: 0.09), Color(white: 0.055)]
+                            : [
+                                Color(red: 0.15, green: 0.16, blue: 0.185),
+                                Color(red: 0.09, green: 0.10, blue: 0.115)
+                            ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.38), radius: 2.5, y: 1)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(APILook.border, lineWidth: 1)
         )
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(bypass.wrappedValue ? 0.06 : 0.28))
+                .frame(height: 1)
+                .padding(.horizontal, 7)
+                .padding(.top, 1)
+                .allowsHitTesting(false)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(Color.black.opacity(bypass.wrappedValue ? 0.22 : 0))
@@ -556,8 +527,7 @@ struct SelectedChannelPanel: View {
     }
 }
 
-/// Card ON/BYP. About 30% larger than the old 28×18 compact pill.
-/// Strips and DSP ALL keep `BypassToggle`.
+/// Card ON/BYP. Smaller bevelled capsule. Strips and DSP ALL keep `BypassToggle`.
 private struct CardBypassPill: View {
     @Binding var bypass: Bool
 
@@ -565,18 +535,13 @@ private struct CardBypassPill: View {
         Button {
             bypass.toggle()
         } label: {
-            Text(bypass ? "BYP" : "ON")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .frame(width: 36, height: 23)
-                .foregroundStyle(MixerTheme.bgBottom)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(bypass ? MixerTheme.danger : MixerTheme.meterGreen)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                )
+            DSPBevelPillLabel(
+                title: bypass ? "BYP" : "ON",
+                lit: true,
+                kind: bypass ? .red : .green,
+                fontSize: 8,
+                fixedSize: CGSize(width: 32, height: 17)
+            )
         }
         .buttonStyle(.plain)
         .help(bypass ? "Bypassed — click to engage" : "Engaged — click to bypass")
@@ -633,16 +598,11 @@ private struct LevelerDynMeter: View {
 
     var body: some View {
         VStack(spacing: 2) {
-            GeometryReader { geo in
-                let fill = CGFloat(min(1, max(0, db / max(0.001, maxDb))))
-                ZStack(alignment: fromBottom ? .bottom : .top) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.black.opacity(0.55))
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(fromBottom ? APILook.ledGreen : APILook.ledYellow)
-                        .frame(height: max(1, geo.size.height * fill))
-                }
-            }
+            DSPLEDSlot(
+                fraction: CGFloat(min(1, max(0, db / max(0.001, maxDb)))),
+                color: fromBottom ? APILook.ledGreen : APILook.ledYellow,
+                fromBottom: fromBottom
+            )
             .frame(width: 21)
             .frame(maxHeight: .infinity)
             Text(String(format: fromBottom ? "%+.1f" : "%.1f", max(0, db)))
@@ -677,17 +637,16 @@ struct DeEsserView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 4) {
-            HardwareKnob(
+            DSPPanelKnob(
                 value: logFreq,
                 range: log2(ChannelDeEsser.minHz)...log2(ChannelDeEsser.maxHz),
                 label: "FREQ",
                 valueText: { Self.freqLabel(hz: exp2($0)) },
                 diameter: knob,
                 defaultValue: log2(Float(6_000)),
-                dragSensitivity: 0.32,
-                tight: true
+                dragSensitivity: 0.32
             )
-            HardwareKnob(
+            DSPPanelKnob(
                 value: Binding(
                     get: { deess.thresholdDb },
                     set: {
@@ -700,15 +659,16 @@ struct DeEsserView: View {
                 valueText: { String(format: "%+.0f", $0) },
                 diameter: knob,
                 defaultValue: -24,
-                dragSensitivity: 0.45,
-                tight: true
+                dragSensitivity: 0.45
             )
             DeEssGRMeter(grDb: grDb)
-            VStack(spacing: 3) {
-                ForEach(ParaEQWidth.allCases) { mode in
-                    widthButton(mode)
-                }
-            }
+            DSPSegmentedSelector(
+                options: Array(ParaEQWidth.allCases),
+                title: { $0.title },
+                isSelected: { deess.width == $0 },
+                help: { _ in "Detection / reduction bandwidth — carries split vs wideband" },
+                select: { deess.width = $0 }
+            )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -721,31 +681,6 @@ struct DeEsserView: View {
         case .narrow: return "Split leaning · voice ess. LISTEN solos this band."
         case .wide: return "Wideband leaning · broader. LISTEN solos this band."
         }
-    }
-
-    private func widthButton(_ mode: ParaEQWidth) -> some View {
-        let on = deess.width == mode
-        return Button {
-            deess.width = mode
-        } label: {
-            Text(mode.title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 3)
-                .foregroundStyle(on ? Color.black : APILook.label)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .help("Detection / reduction bandwidth — carries split vs wideband")
     }
 
     private static func freqLabel(hz: Float) -> String {
@@ -764,25 +699,20 @@ private struct DeEssGRMeter: View {
     var body: some View {
         let active = grDb > 0.15
         VStack(spacing: 2) {
-            Text("GR")
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(APILook.labelDim)
-            GeometryReader { geo in
-                let fill = CGFloat(min(1, max(0, grDb / maxDisplay)))
-                ZStack(alignment: .top) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Color.black.opacity(0.55))
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(active ? APILook.ledYellow : Color(white: 0.34))
-                        .frame(height: max(1, geo.size.height * fill))
-                }
-            }
+            DSPLEDSlot(
+                fraction: CGFloat(min(1, max(0, grDb / maxDisplay))),
+                color: active ? APILook.ledYellow : Color(white: 0.34),
+                fromBottom: false
+            )
             .frame(width: 12, height: 52)
             Text(String(format: "%.1f", max(0, grDb)))
                 .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(active ? APILook.ledYellow : APILook.labelDim)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
+            Text("GR")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
         }
         .frame(width: 30)
         .help("De-ess gain reduction, 0–12 dB")
@@ -872,17 +802,16 @@ struct ParaEQView: View {
                 Spacer(minLength: 0)
             }
             HStack(alignment: .center, spacing: 4) {
-                HardwareKnob(
+                DSPPanelKnob(
                     value: logFreq,
                     range: log2(ChannelParaEQ.minHz)...log2(ChannelParaEQ.maxHz),
                     label: "FREQ",
                     valueText: { Self.freqLabel(hz: exp2($0)) },
                     diameter: knob,
                     defaultValue: log2(Float(1_000)),
-                    dragSensitivity: 0.32,
-                    tight: true
+                    dragSensitivity: 0.32
                 )
-                HardwareKnob(
+                DSPPanelKnob(
                     value: Binding(
                         get: { para.gainDb },
                         set: {
@@ -896,13 +825,15 @@ struct ParaEQView: View {
                     diameter: knob,
                     defaultValue: 0,
                     dragSensitivity: 0.45,
-                    tight: true
+                    bipolar: true
                 )
-                VStack(spacing: 3) {
-                    ForEach(ParaEQWidth.allCases) { mode in
-                        widthButton(mode)
-                    }
-                }
+                DSPSegmentedSelector(
+                    options: Array(ParaEQWidth.allCases),
+                    title: { $0.title },
+                    isSelected: { para.width == $0 },
+                    help: { _ in "How quickly the band narrows as you boost or cut" },
+                    select: { para.width = $0 }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -930,48 +861,17 @@ struct ParaEQView: View {
         return Button {
             para.placement = mode
         } label: {
-            Text(mode.title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .tracking(0.3)
-                .foregroundStyle(on ? APILook.charcoal : APILook.label)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-                )
+            DSPBevelPillLabel(
+                title: mode.title,
+                lit: on,
+                kind: on ? .blue : .off,
+                fontSize: 8,
+                horizontal: 7,
+                vertical: 2
+            )
         }
         .buttonStyle(.plain)
         .help(mode.help)
-    }
-
-    private func widthButton(_ mode: ParaEQWidth) -> some View {
-        let on = para.width == mode
-        return Button {
-            para.width = mode
-        } label: {
-            Text(mode.title)
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.vertical, 3)
-                .foregroundStyle(on ? Color.black : APILook.label)
-                .background(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(on ? APILook.accentBlue : Color(white: 0.16))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .stroke(on ? APILook.accentBlue : Color(white: 0.35).opacity(0.5), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
-        .help("How quickly the band narrows as you boost or cut")
     }
 
     private static func freqLabel(hz: Float) -> String {
@@ -1060,5 +960,446 @@ struct MixerLabeledSlider: View {
             }
         }
         .help("Double-click to reset")
+    }
+}
+
+// MARK: - DSP panel chrome
+// Used only by the selected-channel cards. Master and strip controls keep HardwareKnob / BypassToggle.
+
+private enum DSPPanelStyle {
+    static let cyan = Color(red: 0.28, green: 0.86, blue: 0.94)
+    static let label = Color(white: 0.76)
+}
+
+/// One machined rotary for the DSP cards. Drag, fine-drag, and double-click match `HardwareKnob`.
+private struct DSPPanelKnob: View {
+    @Binding var value: Float
+    var range: ClosedRange<Float>
+    var label: String
+    var valueText: (Float) -> String
+    var diameter: CGFloat = 34
+    var stops: [Float]? = nil
+    var defaultValue: Float = 0
+    var dragSensitivity: Float = 1
+    /// Arc grows from the centre of the travel. GAIN uses this. Other knobs grow from the minimum.
+    var bipolar: Bool = false
+
+    @State private var dragStartValue: Float = 0
+
+    private let sweepStart: Double = -140
+    private let sweep: Double = 280
+
+    private var displayValue: Float {
+        if let stops, !stops.isEmpty {
+            return stops.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
+        }
+        return value
+    }
+
+    private var normalized: Double {
+        if let stops, stops.count > 1,
+           let idx = stops.enumerated().min(by: { abs($0.element - value) < abs($1.element - value) })?.offset {
+            return Double(idx) / Double(stops.count - 1)
+        }
+        return Double((value - range.lowerBound) / max(0.0001, range.upperBound - range.lowerBound))
+    }
+
+    private var pointerDegrees: Double { sweepStart + normalized * sweep }
+
+    private var arcStart: Double { bipolar ? sweepStart + sweep / 2 : sweepStart }
+
+    var body: some View {
+        let column = diameter + 8
+        VStack(spacing: 2) {
+            Text(valueText(displayValue))
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundStyle(DSPPanelStyle.cyan)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)
+                .frame(width: column, height: 13)
+
+            face
+                .frame(width: column, height: diameter + 8)
+
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(1.15)
+                .textCase(.uppercase)
+                .foregroundStyle(DSPPanelStyle.label)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .frame(width: column, height: 12)
+        }
+        .help("Double-click to reset · Option-drag for fine")
+    }
+
+    private var face: some View {
+        let art = diameter + 8
+        let showArc = abs(pointerDegrees - arcStart) > 0.8
+        return ZStack {
+            if showArc {
+                DSPKnobArc(from: arcStart, to: pointerDegrees)
+                    .stroke(DSPPanelStyle.cyan, style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
+                    .frame(width: art, height: art)
+                    .shadow(color: DSPPanelStyle.cyan.opacity(0.55), radius: 2)
+            }
+
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(white: 0.42),
+                            Color(white: 0.22),
+                            Color(white: 0.08),
+                            Color(white: 0.13)
+                        ],
+                        center: UnitPoint(x: 0.48, y: 0.38),
+                        startRadius: 1,
+                        endRadius: diameter * 0.62
+                    )
+                )
+                .overlay(
+                    Circle()
+                        .fill(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.22),
+                                    Color.black.opacity(0.28),
+                                    Color.white.opacity(0.08),
+                                    Color.black.opacity(0.34),
+                                    Color.white.opacity(0.16)
+                                ],
+                                center: .center
+                            )
+                        )
+                        .blendMode(.softLight)
+                        .allowsHitTesting(false)
+                )
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.55),
+                                    Color.black.opacity(0.45),
+                                    Color.white.opacity(0.20),
+                                    Color.black.opacity(0.55),
+                                    Color.white.opacity(0.40)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 1.15
+                        )
+                )
+                .overlay(
+                    Ellipse()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.20), Color.clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: diameter * 0.58, height: diameter * 0.20)
+                        .offset(y: -diameter * 0.18)
+                        .allowsHitTesting(false)
+                )
+                .frame(width: diameter, height: diameter)
+                .shadow(color: Color.black.opacity(0.55), radius: 3, y: 2)
+
+            Capsule()
+                .fill(Color.white)
+                .frame(width: 1.7, height: diameter * 0.36)
+                .shadow(color: Color.black.opacity(0.5), radius: 0.4, y: 0.4)
+                .offset(y: -diameter * 0.15)
+                .rotationEffect(.degrees(pointerDegrees))
+        }
+        .frame(width: art, height: art)
+        .contentShape(Circle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    if g.translation == .zero {
+                        dragStartValue = value
+                    }
+                    let fine: Float = NSEvent.modifierFlags.contains(.option) ? 0.22 : 1
+                    let delta = -Float(g.translation.height) * 0.012 * dragSensitivity * fine
+                    if let stops, stops.count > 1 {
+                        let startIdx = Float(
+                            stops.enumerated().min(by: {
+                                abs($0.element - dragStartValue) < abs($1.element - dragStartValue)
+                            })?.offset ?? 0
+                        )
+                        let next = startIdx + delta * Float(stops.count)
+                        let i = max(0, min(stops.count - 1, Int(next.rounded())))
+                        value = stops[i]
+                    } else {
+                        let span = range.upperBound - range.lowerBound
+                        value = max(range.lowerBound, min(range.upperBound, dragStartValue + delta * span * 2.2))
+                    }
+                }
+        )
+        .onTapGesture(count: 2) {
+            if let stops, !stops.isEmpty {
+                value = stops.min(by: { abs($0 - defaultValue) < abs($1 - defaultValue) }) ?? defaultValue
+            } else {
+                value = max(range.lowerBound, min(range.upperBound, defaultValue))
+            }
+        }
+    }
+}
+
+/// Knob degrees: 0 is straight up, positive is clockwise. Matches `HardwareKnob`’s −140…+140 sweep.
+private struct DSPKnobArc: Shape {
+    var from: Double
+    var to: Double
+
+    func path(in rect: CGRect) -> Path {
+        let radius = min(rect.width, rect.height) / 2 - 0.9
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        var path = Path()
+        path.addArc(
+            center: center,
+            radius: max(1, radius),
+            startAngle: .degrees(from - 90),
+            endAngle: .degrees(to - 90),
+            // SwiftUI’s clockwise flag runs opposite the knob’s on-screen direction.
+            clockwise: to < from
+        )
+        return path
+    }
+}
+
+private enum DSPBevelKind {
+    case off, blue, green, red, gold
+
+    var text: Color {
+        switch self {
+        case .off: return Color(white: 0.86)
+        default: return Color(white: 0.06)
+        }
+    }
+
+    var top: Color {
+        switch self {
+        case .off: return Color(white: 0.26)
+        case .blue: return Color(red: 0.48, green: 0.70, blue: 0.93)
+        case .green: return Color(red: 0.64, green: 0.98, blue: 0.78)
+        case .red: return Color(red: 1.0, green: 0.55, blue: 0.56)
+        case .gold: return Color(red: 0.96, green: 0.82, blue: 0.42)
+        }
+    }
+
+    var bottom: Color {
+        switch self {
+        case .off: return Color(white: 0.12)
+        case .blue: return Color(red: 0.24, green: 0.44, blue: 0.73)
+        case .green: return Color(red: 0.29, green: 0.66, blue: 0.42)
+        case .red: return Color(red: 0.72, green: 0.16, blue: 0.20)
+        case .gold: return Color(red: 0.72, green: 0.52, blue: 0.12)
+        }
+    }
+
+    var glow: Color {
+        switch self {
+        case .off: return .clear
+        case .blue: return Color(red: 0.35, green: 0.60, blue: 0.92)
+        case .green: return Color(red: 0.30, green: 0.85, blue: 0.50)
+        case .red: return MixerTheme.danger
+        case .gold: return Color(red: 0.88, green: 0.70, blue: 0.23)
+        }
+    }
+}
+
+/// Smaller bevelled pill. Lit fills carry a top highlight. Off stays a dark recess.
+private struct DSPBevelPillLabel: View {
+    var title: String
+    var lit: Bool
+    var kind: DSPBevelKind
+    var fontSize: CGFloat = 9
+    var horizontal: CGFloat = 8
+    var vertical: CGFloat = 3
+    var expands: Bool = false
+    var fixedSize: CGSize? = nil
+
+    var body: some View {
+        let plate = lit ? kind : DSPBevelKind.off
+        Text(title)
+            .font(.system(size: fontSize, weight: .bold, design: .rounded))
+            .tracking(0.45)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .foregroundStyle(plate.text)
+            .padding(.horizontal, fixedSize == nil ? horizontal : 0)
+            .padding(.vertical, fixedSize == nil ? vertical : 0)
+            .frame(width: fixedSize?.width, height: fixedSize?.height)
+            .frame(maxWidth: expands ? .infinity : nil)
+            .background {
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [plate.top, plate.bottom],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(alignment: .top) {
+                        Capsule()
+                            .fill(Color.white.opacity(lit ? 0.70 : 0.22))
+                            .frame(height: 1)
+                            .padding(.horizontal, 5)
+                            .padding(.top, 1)
+                    }
+                    .overlay(
+                        Capsule()
+                            .stroke(Color.black.opacity(0.30), lineWidth: 0.6)
+                    )
+                    .shadow(
+                        color: lit ? plate.glow.opacity(0.50) : Color.black.opacity(0.35),
+                        radius: lit ? 2.5 : 1,
+                        y: 1
+                    )
+            }
+            .contentShape(Capsule())
+    }
+}
+
+/// NOTCH / NARROW / WIDE and DRUM / STUDIO / STAGE. About 60% of the row, centred.
+private struct DSPSegmentedSelector<ID: Hashable>: View {
+    var options: [ID]
+    var title: (ID) -> String
+    var isSelected: (ID) -> Bool
+    var help: (ID) -> String
+    var select: (ID) -> Void
+
+    var body: some View {
+        GeometryReader { geo in
+            let trackH = min(geo.size.height, max(40, geo.size.height * 0.60))
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                VStack(spacing: 0) {
+                    ForEach(options, id: \.self) { option in
+                        segment(option)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: trackH)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(white: 0.035), Color(white: 0.075)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Color.black.opacity(0.85), lineWidth: 1)
+                )
+                .overlay(alignment: .top) {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.45))
+                        .frame(height: 2)
+                        .blur(radius: 0.5)
+                        .padding(.horizontal, 5)
+                        .padding(.top, 1)
+                        .allowsHitTesting(false)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    private func segment(_ option: ID) -> some View {
+        let on = isSelected(option)
+        return Button {
+            select(option)
+        } label: {
+            Text(title(option))
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.7)
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .foregroundStyle(on ? Color(white: 0.05) : Color(white: 0.46))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background {
+                    if on {
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color(red: 0.50, green: 0.72, blue: 0.95),
+                                        Color(red: 0.36, green: 0.58, blue: 0.86),
+                                        Color(red: 0.24, green: 0.44, blue: 0.73)
+                                    ],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .overlay(alignment: .top) {
+                                Rectangle()
+                                    .fill(Color.white.opacity(0.55))
+                                    .frame(height: 1)
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, 1)
+                            }
+                            .shadow(color: Color(red: 0.35, green: 0.62, blue: 0.95).opacity(0.75), radius: 4)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 2)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(help(option))
+    }
+}
+
+/// Recessed slot with a segmented LED fill. Colour and direction are chosen by the caller.
+private struct DSPLEDSlot: View {
+    var fraction: CGFloat
+    var color: Color
+    var fromBottom: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset: CGFloat = 2
+            let innerH = max(4, geo.size.height - inset * 2)
+            let innerW = max(2, geo.size.width - inset * 2)
+            let count = max(6, Int((innerH / 3.5).rounded()))
+            let gap: CGFloat = 1.15
+            let segH = max(1, (innerH - gap * CGFloat(count - 1)) / CGFloat(count))
+            let clamped = min(1, max(0, fraction))
+            let lit = clamped <= 0.001 ? 0 : min(count, Int((clamped * CGFloat(count)).rounded(.up)))
+            ZStack {
+                RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    .fill(Color.black.opacity(0.78))
+                RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.7)
+                VStack(spacing: gap) {
+                    ForEach(0..<count, id: \.self) { i in
+                        let fromStart = fromBottom ? (count - 1 - i) : i
+                        let on = fromStart < lit
+                        RoundedRectangle(cornerRadius: 0.4, style: .continuous)
+                            .fill(on ? color : Color(white: 0.09))
+                            .frame(width: innerW, height: segH)
+                            .shadow(color: on ? color.opacity(0.65) : .clear, radius: on ? 1.2 : 0)
+                    }
+                }
+                .padding(inset)
+            }
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    colors: [Color.black.opacity(0.50), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: min(7, geo.size.height * 0.22))
+                .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+                .allowsHitTesting(false)
+            }
+        }
     }
 }
