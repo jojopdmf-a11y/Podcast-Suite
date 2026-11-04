@@ -24,6 +24,8 @@ struct LevelMeter: View {
     /// Strip meters: bar matches the fader track, with the same readout spacer above
     /// and the same label slot below. Nil keeps the master column’s flexible meter.
     var barHeight: CGFloat? = nil
+    /// Recessed LED segments and spaced caps. Master leaves this off.
+    var stripChrome: Bool = false
 
     private var dbNorm: CGFloat {
         let db = 20 * log10(max(level, 1e-5))
@@ -50,28 +52,94 @@ struct LevelMeter: View {
         }
     }
 
+    @ViewBuilder
     private func meterBar(height: CGFloat) -> some View {
-        ZStack(alignment: .bottom) {
-            RoundedRectangle(cornerRadius: 2)
-                .fill(MixerTheme.cyanFaint)
-            RoundedRectangle(cornerRadius: 2)
-                .fill(meterColor)
-                .frame(height: max(0, height * dbNorm))
-                .shadow(color: meterColor.opacity(0.5), radius: 3)
+        if stripChrome {
+            StripLEDMeter(fraction: dbNorm)
+                .frame(width: 8, height: height)
+        } else {
+            ZStack(alignment: .bottom) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(MixerTheme.cyanFaint)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(meterColor)
+                    .frame(height: max(0, height * dbNorm))
+                    .shadow(color: meterColor.opacity(0.5), radius: 3)
+            }
+            .frame(width: 8, height: height)
         }
-        .frame(width: 8, height: height)
     }
 
+    @ViewBuilder
     private var meterLabel: some View {
-        Text(label)
-            .font(.system(size: 8, weight: .bold, design: .rounded))
-            .foregroundStyle(MixerTheme.cyanDim)
+        if stripChrome {
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.7)
+                .foregroundStyle(MixerTheme.cyanDim)
+        } else {
+            Text(label)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+        }
     }
 
     private var meterColor: Color {
         // 60 dB meter: yellow was −18, red −6. Shift both +6 dB.
         if dbNorm >= 1.0 { return MixerTheme.meterRed }
         if dbNorm > 0.8 { return MixerTheme.meterYellow }
+        return MixerTheme.meterGreen
+    }
+}
+
+/// Strip IN/OUT. Segments use the same thresholds as `LevelMeter.meterColor`:
+/// red at 0 dBFS, yellow above −12 dB, green below that.
+private struct StripLEDMeter: View {
+    var fraction: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            let inset: CGFloat = 1.5
+            let innerH = max(4, geo.size.height - inset * 2)
+            let innerW = max(2, geo.size.width - inset * 2)
+            let count = max(8, Int((innerH / 3.2).rounded()))
+            let gap: CGFloat = 1
+            let segH = max(1, (innerH - gap * CGFloat(count - 1)) / CGFloat(count))
+            ZStack {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.black.opacity(0.78))
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 0.7)
+                VStack(spacing: gap) {
+                    ForEach(0..<count, id: \.self) { i in
+                        let bottom = CGFloat(count - 1 - i) / CGFloat(count)
+                        let top = CGFloat(count - i) / CGFloat(count)
+                        let on = fraction > bottom + 0.0001
+                        let color = segmentColor(top)
+                        RoundedRectangle(cornerRadius: 0.4, style: .continuous)
+                            .fill(on ? color : Color(white: 0.09))
+                            .frame(width: innerW, height: segH)
+                            .shadow(color: on ? color.opacity(0.65) : .clear, radius: on ? 1.1 : 0)
+                    }
+                }
+                .padding(inset)
+            }
+            .overlay(alignment: .top) {
+                LinearGradient(
+                    colors: [Color.black.opacity(0.45), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: min(6, geo.size.height * 0.18))
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private func segmentColor(_ topNorm: CGFloat) -> Color {
+        if topNorm >= 1 { return MixerTheme.meterRed }
+        if topNorm > 0.8 { return MixerTheme.meterYellow }
         return MixerTheme.meterGreen
     }
 }
@@ -87,6 +155,8 @@ struct VerticalFader: View {
     /// Strip faders: exact slot height. dB position is a fraction of this slot, so the
     /// taper stays put when the window gives the strip a different travel.
     var trackHeight: CGFloat? = nil
+    /// Recessed slot, dB ticks, machined cap. Master leaves this off.
+    var stripChrome: Bool = false
 
     /// Cap-center travel never goes below this. Slot height is travel plus the cap.
     static let minTravel: CGFloat = 90
@@ -149,11 +219,20 @@ struct VerticalFader: View {
             .foregroundStyle(accent)
     }
 
+    @ViewBuilder
     private var captionReadout: some View {
-        Text(caption ?? "FADER")
-            .font(.system(size: 8, weight: .bold, design: .rounded))
-            .foregroundStyle(MixerTheme.cyanDim)
-            .padding(.bottom, 1)
+        if stripChrome {
+            Text(caption ?? "FADER")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.7)
+                .foregroundStyle(MixerTheme.cyanDim)
+                .padding(.bottom, 1)
+        } else {
+            Text(caption ?? "FADER")
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .foregroundStyle(MixerTheme.cyanDim)
+                .padding(.bottom, 1)
+        }
     }
 
     /// Y of cap center: 1 = top of the range, 0 = bottom.
@@ -170,6 +249,34 @@ struct VerticalFader: View {
     }
 
     private func track(height trackHeight: CGFloat) -> some View {
+        Group {
+            if stripChrome {
+                consoleTrack(height: trackHeight)
+            } else {
+                classicTrack(height: trackHeight)
+            }
+        }
+        .frame(width: 36, height: trackHeight)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { g in
+                    let y = min(trackHeight, max(0, g.location.y))
+                    let travel = trackHeight - Self.capHeight
+                    let n = 1 - ((y - Self.capHeight / 2) / max(travel, 1))
+                    let clamped = Float(min(1, max(0, n)))
+                    let span = range.upperBound - range.lowerBound
+                    valueDb = range.lowerBound + clamped * span
+                }
+        )
+        .onTapGesture(count: 2) {
+            valueDb = defaultValue
+        }
+        .help("Double-click to zero")
+    }
+
+    /// Master column. Slot, zero tick, and cap position are unchanged.
+    private func classicTrack(height trackHeight: CGFloat) -> some View {
         ZStack(alignment: .top) {
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(
@@ -212,23 +319,95 @@ struct VerticalFader: View {
                 .position(x: 18, y: capCenterY(trackHeight: trackHeight))
                 .shadow(color: .black.opacity(0.55), radius: 2, y: 1.5)
         }
-        .frame(width: 36, height: trackHeight)
-        .contentShape(Rectangle())
-        .gesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { g in
-                    let y = min(trackHeight, max(0, g.location.y))
-                    let travel = trackHeight - Self.capHeight
-                    let n = 1 - ((y - Self.capHeight / 2) / max(travel, 1))
-                    let clamped = Float(min(1, max(0, n)))
-                    let span = range.upperBound - range.lowerBound
-                    valueDb = range.lowerBound + clamped * span
+    }
+
+    /// Strip slot. Same cap travel as `classicTrack`. The well, ticks, and cap are paint only.
+    private func consoleTrack(height trackHeight: CGFloat) -> some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(white: 0.05), Color(white: 0.015), Color(white: 0.06)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 36, height: trackHeight)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+                )
+                .overlay(alignment: .top) {
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.55), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: min(14, trackHeight * 0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .allowsHitTesting(false)
                 }
-        )
-        .onTapGesture(count: 2) {
-            valueDb = defaultValue
+
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(Color.black.opacity(0.92))
+                .frame(width: 5, height: trackHeight - 8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.10), Color.clear, Color.white.opacity(0.05)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            ),
+                            lineWidth: 0.8
+                        )
+                )
+                .offset(y: 4)
+
+            stripFaderTicks(trackHeight: trackHeight)
+                .allowsHitTesting(false)
+
+            FaderCap(accent: accent, autoDriven: autoDriven, machined: true)
+                .frame(width: capWidth, height: Self.capHeight)
+                .position(x: 18, y: capCenterY(trackHeight: trackHeight))
+                .shadow(color: .black.opacity(0.55), radius: 2, y: 1.5)
         }
-        .help("Double-click to zero")
+    }
+
+    /// Side ticks on the cap’s travel, every 12 dB, plus the ends of the strip range.
+    private func stripFaderTicks(trackHeight: CGFloat) -> some View {
+        let marks: [Float] = [12, 0, -12, -24, -36, -48, -60]
+        return ZStack {
+            ForEach(Array(marks.enumerated()), id: \.offset) { _, db in
+                if range.contains(db) {
+                    tickPair(db: db, trackHeight: trackHeight)
+                }
+            }
+        }
+        .frame(width: 36, height: trackHeight)
+    }
+
+    private func tickPair(db: Float, trackHeight: CGFloat) -> some View {
+        let y = tickCenterY(db: db, trackHeight: trackHeight)
+        let ink = Color.white.opacity(db == 0 ? 0.40 : 0.16)
+        return ZStack {
+            Capsule()
+                .fill(ink)
+                .frame(width: 4, height: 1)
+                .position(x: 3, y: y)
+            Capsule()
+                .fill(ink)
+                .frame(width: 4, height: 1)
+                .position(x: 33, y: y)
+        }
+        .frame(width: 36, height: trackHeight)
+    }
+
+    private func tickCenterY(db: Float, trackHeight: CGFloat) -> CGFloat {
+        let span = range.upperBound - range.lowerBound
+        let n = CGFloat((db - range.lowerBound) / max(span, 0.0001))
+        let travel = trackHeight - Self.capHeight
+        return (1 - n) * travel + Self.capHeight / 2
     }
 }
 
@@ -236,8 +415,68 @@ struct VerticalFader: View {
 private struct FaderCap: View {
     var accent: Color
     var autoDriven: Bool
+    /// Strip cap: machined metal and one centre line. Master keeps the ridged cap.
+    var machined: Bool = false
 
     var body: some View {
+        if machined {
+            machinedBody
+        } else {
+            classicBody
+        }
+    }
+
+    private var machinedBody: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(white: 0.84),
+                            Color(white: 0.64),
+                            Color(white: 0.42),
+                            Color(white: 0.56),
+                            Color(white: 0.34)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.75), Color.black.opacity(0.45)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.8
+                        )
+                )
+
+            Rectangle()
+                .fill(accent.opacity(0.95))
+                .frame(height: 1.4)
+                .padding(.horizontal, 4)
+                .shadow(color: accent.opacity(0.45), radius: 1)
+
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.42), Color.clear],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(height: 5)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.horizontal, 2)
+                .padding(.top, 1.5)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var classicBody: some View {
         ZStack {
             // Cap body
             RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -313,6 +552,7 @@ private struct CenterOutPanSlider: View {
             HStack {
                 Text("PAN")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.8)
                     .foregroundStyle(MixerTheme.cyanDim)
                 Spacer(minLength: 0)
                 Text(panReadout == 0 ? "0" : String(format: "%+d", panReadout))
@@ -333,7 +573,17 @@ private struct CenterOutPanSlider: View {
 
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.black.opacity(0.45))
+                        .fill(
+                            LinearGradient(
+                                colors: [Color(white: 0.02), Color(white: 0.08)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.white.opacity(0.10), lineWidth: 0.6)
+                        )
                         .frame(height: trackH)
                         .frame(maxWidth: .infinity)
                         .position(x: w / 2, y: h / 2)
@@ -350,13 +600,24 @@ private struct CenterOutPanSlider: View {
 
                     Circle()
                         .fill(
-                            LinearGradient(
-                                colors: [Color.white.opacity(0.95), Color(white: 0.7)],
-                                startPoint: .top,
-                                endPoint: .bottom
+                            RadialGradient(
+                                colors: [Color(white: 0.84), Color(white: 0.55), Color(white: 0.32)],
+                                center: UnitPoint(x: 0.38, y: 0.32),
+                                startRadius: 0.4,
+                                endRadius: thumbW * 0.7
                             )
                         )
-                        .overlay(Circle().stroke(Color.black.opacity(0.35), lineWidth: 0.8))
+                        .overlay(
+                            Circle().stroke(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.7), Color.black.opacity(0.45)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 0.7
+                            )
+                        )
+                        .shadow(color: .black.opacity(0.45), radius: 1, y: 0.5)
                         .frame(width: thumbW, height: thumbW)
                         .position(x: thumbX, y: h / 2)
                 }
@@ -481,18 +742,20 @@ private struct FXChipButton: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.4)
+                .tracking(0.6)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 6)
                 .foregroundStyle(chipForeground)
-                .background(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(chipFill)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                )
+                .background { StripRecessedPlate(active: active, bypassed: bypassed) }
+                .overlay(alignment: .leading) {
+                    if active && !bypassed {
+                        Circle()
+                            .fill(MixerTheme.lime)
+                            .frame(width: 4.5, height: 4.5)
+                            .shadow(color: MixerTheme.lime.opacity(0.85), radius: 2)
+                            .padding(.leading, 5)
+                    }
+                }
                 .opacity(bypassed ? 0.55 : 1)
         }
         .buttonStyle(.plain)
@@ -501,12 +764,73 @@ private struct FXChipButton: View {
 
     private var chipForeground: Color {
         if bypassed { return MixerTheme.textSecondary }
-        return active ? MixerTheme.bgBottom : MixerTheme.cyan
+        return MixerTheme.cyan
+    }
+}
+
+/// Slim recessed chip. Active (the processor is changing the sound) is a lime edge and LED, not a fill.
+private struct StripRecessedPlate: View {
+    var active: Bool
+    var bypassed: Bool
+
+    private var glowing: Bool { active && !bypassed }
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: bypassed
+                        ? [Color(white: 0.07), Color(white: 0.045)]
+                        : [Color(white: 0.04), Color(white: 0.085)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Color.black.opacity(0.85), lineWidth: 1)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(hairline, lineWidth: glowing ? 1.15 : 0.8)
+            )
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+                    .frame(height: 2)
+                    .blur(radius: 0.4)
+                    .padding(.horizontal, 5)
+                    .padding(.top, 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: glowing ? MixerTheme.lime.opacity(0.45) : Color.black.opacity(0.35), radius: glowing ? 3 : 1, y: 1)
     }
 
-    private var chipFill: Color {
-        if bypassed { return MixerTheme.panelRaised }
-        return active ? MixerTheme.lime : MixerTheme.panelRaised
+    private var hairline: Color {
+        if bypassed { return Color.white.opacity(0.08) }
+        if glowing { return MixerTheme.lime.opacity(0.9) }
+        return DSPPanelStyle.cyan.opacity(0.7)
+    }
+}
+
+/// Strip ON/BYP. Same 28×26 slot as `BypassToggle`. Master and DSP ALL keep that control.
+private struct StripBypassPill: View {
+    @Binding var bypass: Bool
+
+    var body: some View {
+        Button {
+            bypass.toggle()
+        } label: {
+            DSPBevelPillLabel(
+                title: bypass ? "BYP" : "ON",
+                lit: true,
+                kind: bypass ? .red : .green,
+                fontSize: 8,
+                fixedSize: CGSize(width: 28, height: 26)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(bypass ? "Bypassed — click to engage" : "Engaged — click to bypass")
     }
 }
 
@@ -520,7 +844,7 @@ private struct FXRow: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            BypassToggle(bypass: $bypass)
+            StripBypassPill(bypass: $bypass)
             FXChipButton(title: title, active: active && !bypass, bypassed: bypass, action: onSelect)
             if reorderable {
                 Image(systemName: "line.3.horizontal")
@@ -587,7 +911,7 @@ struct ChannelStripView: View {
                 HStack(alignment: .center, spacing: 4) {
                     channelNameLabel
                     Spacer(minLength: 2)
-                    SelectChannelButton(isSelected: isSelected, action: onSelect)
+                    SelectChannelButton(isSelected: isSelected, chrome: .bevel, action: onSelect)
                         .help("Select this channel for the waveform timeline")
                 }
                 Text(channel.fileURL?.lastPathComponent ?? "— empty —")
@@ -616,21 +940,14 @@ struct ChannelStripView: View {
             if !channel.isStereo {
                 // Global DSP bypass — speaker channels only
                 HStack(spacing: 4) {
-                    BypassToggle(bypass: $channel.dspBypass)
+                    StripBypassPill(bypass: $channel.dspBypass)
                     Text("DSP")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .tracking(0.5)
+                        .tracking(0.6)
                         .foregroundStyle(channel.dspBypass ? MixerTheme.textSecondary : MixerTheme.cyan)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(MixerTheme.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
-                        )
+                        .background { StripRecessedPlate(active: false, bypassed: channel.dspBypass) }
                         .opacity(channel.dspBypass ? 0.55 : 1)
                 }
                 .help("Bypass all EQ / FX on this channel (fader & pan still active)")
@@ -673,7 +990,9 @@ struct ChannelStripView: View {
                 if canReorderDSP {
                     Text("DRAG TO REORDER")
                         .font(.system(size: 7, weight: .bold, design: .rounded))
-                        .tracking(0.5)
+                        .tracking(0.7)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                         .foregroundStyle(MixerTheme.cyanDim)
                         .frame(maxWidth: .infinity)
                 }
@@ -718,47 +1037,24 @@ struct ChannelStripView: View {
                       : "Channel level")
 
             HStack(spacing: 6) {
-                Button {
+                stripBevelButton(
+                    title: channel.mute ? "MUTED" : "MUTE",
+                    lit: channel.mute,
+                    kind: .mute,
+                    help: "Mutes the whole strip. Linked monos share mute. To punch a cough, select this strip and Shift-drag on the waveform."
+                ) {
                     channel.mute.toggle()
                     onChange()
-                } label: {
-                    Text(channel.mute ? "MUTED" : "MUTE")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(channel.mute ? MixerTheme.bgBottom : MixerTheme.cyan)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(channel.mute ? MixerTheme.danger : MixerTheme.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
-                        )
                 }
-                .buttonStyle(.plain)
-                .help("Mutes the whole strip. Linked monos share mute. To punch a cough, select this strip and Shift-drag on the waveform.")
-
-                Button {
+                stripBevelButton(
+                    title: channel.solo ? "SOLO●" : "SOLO",
+                    lit: channel.solo,
+                    kind: .solo,
+                    help: "Hear this strip alone. Turn SOLO on more than one to hear those together. MUTE still silences a strip."
+                ) {
                     channel.solo.toggle()
                     onChange()
-                } label: {
-                    Text(channel.solo ? "SOLO●" : "SOLO")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .foregroundStyle(channel.solo ? MixerTheme.bgBottom : MixerTheme.cyan)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .fill(channel.solo ? MixerTheme.meterYellow : MixerTheme.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                .stroke(MixerTheme.cyan.opacity(0.4), lineWidth: 1)
-                        )
                 }
-                .buttonStyle(.plain)
-                .help("Hear this strip alone. Turn SOLO on more than one to hear those together. MUTE still silences a strip.")
             }
 
             CenterOutPanSlider(pan: Binding(
@@ -801,14 +1097,32 @@ struct ChannelStripView: View {
         .padding(8)
         .frame(width: Self.stripWidth, alignment: .top)
         .frame(maxHeight: .infinity, alignment: .top)
-        .mixerPanel(glow: isSelected || channel.fileURL != nil)
+        .background {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(red: 0.12, green: 0.15, blue: 0.18),
+                            Color(red: 0.065, green: 0.085, blue: 0.105)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .shadow(color: Color.black.opacity(0.40), radius: 2.5, y: 1)
+        }
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(Color.white.opacity(0.22))
+                .frame(height: 1)
+                .padding(.horizontal, 14)
+                .padding(.top, 1)
+                .allowsHitTesting(false)
+        }
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isReorderDropTarget ? MixerTheme.lime : (isSelected ? MixerTheme.lime : .clear),
-                    lineWidth: isReorderDropTarget ? 3 : 2
-                )
-                .shadow(color: (isReorderDropTarget || isSelected) ? MixerTheme.lime.opacity(0.45) : .clear, radius: 6)
+                .stroke(stripOutlineColor, lineWidth: stripOutlineWidth)
+                .shadow(color: stripOutlineGlow, radius: (isReorderDropTarget || isSelected) ? 6 : 0)
         )
         .modifier(
             StripReorderDrag(
@@ -852,9 +1166,9 @@ struct ChannelStripView: View {
         )
         return VStack(spacing: 2) {
             HStack(alignment: .top, spacing: 6) {
-                LevelMeter(level: channel.prePeak, label: "IN", barHeight: track)
-                VerticalFader(valueDb: faderDb, autoDriven: false, trackHeight: track)
-                LevelMeter(level: channel.postPeak, label: "OUT", barHeight: track)
+                LevelMeter(level: channel.prePeak, label: "IN", barHeight: track, stripChrome: true)
+                VerticalFader(valueDb: faderDb, autoDriven: false, trackHeight: track, stripChrome: true)
+                LevelMeter(level: channel.postPeak, label: "OUT", barHeight: track, stripChrome: true)
             }
             if autoDriven, let g = autoGainDb {
                 Text(String(format: "%+.1f", g))
@@ -870,26 +1184,12 @@ struct ChannelStripView: View {
         HStack(spacing: 4) {
             Text("IN")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.7)
                 .foregroundStyle(MixerTheme.cyanDim)
-            Picker(
-                "Input",
-                selection: Binding(
-                    get: { channel.inputChannel.map { $0 + 1 } ?? 0 },
-                    set: { channel.inputChannel = $0 == 0 ? nil : $0 - 1 }
-                )
-            ) {
-                Text("—").tag(0)
-                if hardwareInputChannels > 0 {
-                    ForEach(1...hardwareInputChannels, id: \.self) { n in
-                        Text("\(n)").tag(n)
-                    }
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity)
-            .disabled(isRecording || hardwareInputChannels <= 0)
-            .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
+            inputPicker
+                .frame(maxWidth: .infinity)
+                .disabled(isRecording || hardwareInputChannels <= 0)
+                .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
             if isRecording, channel.inputChannel != nil {
                 Text("REC")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -899,6 +1199,71 @@ struct ChannelStripView: View {
                     .background(Capsule().fill(MixerTheme.danger))
             }
         }
+    }
+
+    /// Same choices as the old menu picker. The closed control is a recessed field.
+    private var inputPicker: some View {
+        let current = channel.inputChannel
+        return Menu {
+            Button {
+                channel.inputChannel = nil
+            } label: {
+                if current == nil {
+                    Label("—", systemImage: "checkmark")
+                } else {
+                    Text("—")
+                }
+            }
+            if hardwareInputChannels > 0 {
+                ForEach(1...hardwareInputChannels, id: \.self) { n in
+                    Button {
+                        channel.inputChannel = n - 1
+                    } label: {
+                        if current == n - 1 {
+                            Label("\(n)", systemImage: "checkmark")
+                        } else {
+                            Text("\(n)")
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(current.map { "\($0 + 1)" } ?? "—")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(MixerTheme.cyan)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(MixerTheme.cyanDim)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity)
+            .background {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.035), Color(white: 0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.7)
+            )
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(Color.black.opacity(0.45))
+                    .frame(height: 1)
+                    .padding(.horizontal, 4)
+                    .allowsHitTesting(false)
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
     }
 
     @ViewBuilder
@@ -951,6 +1316,48 @@ struct ChannelStripView: View {
         DispatchQueue.main.async {
             NSApp.keyWindow?.makeFirstResponder(nil)
         }
+    }
+
+    private var stripOutlineColor: Color {
+        if isReorderDropTarget { return MixerTheme.lime }
+        if isSelected { return MixerTheme.lime.opacity(0.72) }
+        return Color.white.opacity(0.07)
+    }
+
+    private var stripOutlineWidth: CGFloat {
+        if isReorderDropTarget { return 2.5 }
+        if isSelected { return 1.35 }
+        return 1
+    }
+
+    private var stripOutlineGlow: Color {
+        if isReorderDropTarget { return MixerTheme.lime.opacity(0.50) }
+        if isSelected { return MixerTheme.lime.opacity(0.28) }
+        return .clear
+    }
+
+    /// MUTE / SOLO. Same font and vertical padding as the old rectangles, drawn as a bevelled pill.
+    private func stripBevelButton(
+        title: String,
+        lit: Bool,
+        kind: DSPBevelKind,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        let plate = lit ? kind : DSPBevelKind.off
+        return Button(action: action) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(0.4)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .foregroundStyle(plate.text)
+                .background { DSPBevelPlate(lit: lit, kind: kind) }
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     private func isSlotActive(_ slot: ChannelDSPSlot) -> Bool {

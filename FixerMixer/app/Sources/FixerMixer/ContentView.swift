@@ -506,30 +506,14 @@ struct ContentView: View {
         Button {
             session.toggleMonoLink(between: leftID, and: rightID)
         } label: {
-            Text("link")
-                .font(.system(size: 9, weight: .bold, design: .rounded))
-                .tracking(0.4)
-                .foregroundStyle(
-                    lit ? MixerTheme.bgBottom
-                        : (dark ? MixerTheme.cyanDim.opacity(0.35) : MixerTheme.cyan)
-                )
-                .frame(width: Self.monoLinkSeamWidth, height: Self.monoLinkSeamHeight)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(
-                            lit ? MixerTheme.lime
-                                : (dark ? Color(white: 0.08) : MixerTheme.panelRaised)
-                        )
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(
-                            lit ? MixerTheme.lime
-                                : (dark ? Color.white.opacity(0.08) : MixerTheme.cyan.opacity(0.45)),
-                            lineWidth: 1
-                        )
-                )
-                .opacity(dark ? 0.55 : 1)
+            DSPBevelPillLabel(
+                title: "link",
+                lit: lit && !dark,
+                kind: .lime,
+                fontSize: 9,
+                fixedSize: CGSize(width: Self.monoLinkSeamWidth, height: Self.monoLinkSeamHeight)
+            )
+            .opacity(dark ? 0.55 : 1)
         }
         .buttonStyle(.plain)
         .disabled(!canToggle || session.isRecording)

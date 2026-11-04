@@ -100,42 +100,79 @@ struct MixerStandbyButtonStyle: ButtonStyle {
 /// Shared SEL control — selected = solid lime fill, black “SEL” + black dot (Julie’s style).
 /// Sized ~66% smaller than the original 11/28/54 chrome so channel names get the width.
 struct SelectChannelButton: View {
+    enum Chrome {
+        /// Master column. Flat lime fill.
+        case classic
+        /// Channel strips. Bevelled pill, same slot.
+        case bevel
+    }
+
     var isSelected: Bool
     /// Master strip uses a full-width SEL; channel strips stay compact.
     var expandsHorizontally: Bool = false
+    var chrome: Chrome = .classic
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 2) {
-                Text("SEL")
-                    .font(.system(size: 7, weight: .bold, design: .rounded))
-                    .tracking(0.3)
-                Circle()
-                    .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
-                    .frame(width: 3, height: 3)
+            if chrome == .bevel {
+                bevelLabel
+            } else {
+                classicLabel
             }
-            .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
-            .frame(maxWidth: expandsHorizontally ? .infinity : nil)
-            .frame(minWidth: expandsHorizontally ? nil : 18, minHeight: 10)
-            .padding(.horizontal, expandsHorizontally ? 0 : 3)
-            .padding(.vertical, 2)
-            .background(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .stroke(
-                        isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45),
-                        lineWidth: isSelected ? 1.2 : 0.8
-                    )
-            )
-            // Invisible hit padding — keep ≥ ~22pt target without growing the chrome.
-            .padding(.horizontal, expandsHorizontally ? 0 : 2)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+
+    private var classicLabel: some View {
+        HStack(spacing: 2) {
+            Text("SEL")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .tracking(0.3)
+            Circle()
+                .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
+                .frame(width: 3, height: 3)
+        }
+        .foregroundStyle(isSelected ? MixerTheme.bgBottom : MixerTheme.cyan)
+        .frame(maxWidth: expandsHorizontally ? .infinity : nil)
+        .frame(minWidth: expandsHorizontally ? nil : 18, minHeight: 10)
+        .padding(.horizontal, expandsHorizontally ? 0 : 3)
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .fill(isSelected ? MixerTheme.lime : MixerTheme.panelRaised)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                .stroke(
+                    isSelected ? MixerTheme.lime : MixerTheme.cyan.opacity(0.45),
+                    lineWidth: isSelected ? 1.2 : 0.8
+                )
+        )
+        // Invisible hit padding — keep ≥ ~22pt target without growing the chrome.
+        .padding(.horizontal, expandsHorizontally ? 0 : 2)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+
+    private var bevelLabel: some View {
+        let plate = isSelected ? DSPBevelKind.lime : DSPBevelKind.off
+        return HStack(spacing: 2) {
+            Text("SEL")
+                .font(.system(size: 7, weight: .bold, design: .rounded))
+                .tracking(0.3)
+            Circle()
+                .fill(isSelected ? MixerTheme.bgBottom : Color.clear)
+                .frame(width: 3, height: 3)
+        }
+        .foregroundStyle(plate.text)
+        .frame(maxWidth: expandsHorizontally ? .infinity : nil)
+        .frame(minWidth: expandsHorizontally ? nil : 18, minHeight: 10)
+        .padding(.horizontal, expandsHorizontally ? 0 : 3)
+        .padding(.vertical, 2)
+        .background { DSPBevelPlate(lit: isSelected, kind: .lime) }
+        .padding(.horizontal, expandsHorizontally ? 0 : 2)
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
     }
 }
