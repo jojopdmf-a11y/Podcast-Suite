@@ -792,7 +792,7 @@ struct ContentView: View {
                     .foregroundStyle(MixerTheme.cyanDim)
                     .frame(maxWidth: .infinity)
                 HStack(alignment: .bottom, spacing: 6) {
-                    LevelMeter(level: session.masterPeakL, label: "L")
+                    LevelMeter(level: session.masterPeakL, label: "L", stripChrome: true)
                         .frame(maxHeight: .infinity)
                     VerticalFader(
                         valueDb: Binding(
@@ -807,7 +807,7 @@ struct ContentView: View {
                         caption: "OUT",
                         expands: true
                     )
-                    LevelMeter(level: session.masterPeakR, label: "R")
+                    LevelMeter(level: session.masterPeakR, label: "R", stripChrome: true)
                         .frame(maxHeight: .infinity)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)

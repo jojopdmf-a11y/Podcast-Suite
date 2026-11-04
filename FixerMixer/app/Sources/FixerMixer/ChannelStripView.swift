@@ -24,7 +24,7 @@ struct LevelMeter: View {
     /// Strip meters: bar matches the fader track, with the same readout spacer above
     /// and the same label slot below. Nil keeps the master column’s flexible meter.
     var barHeight: CGFloat? = nil
-    /// Recessed LED segments and spaced caps. Master leaves this off.
+    /// Recessed segmented LEDs, the same drawing as strip IN/OUT. Master L/R pass true.
     var stripChrome: Bool = false
 
     private var dbNorm: CGFloat {
