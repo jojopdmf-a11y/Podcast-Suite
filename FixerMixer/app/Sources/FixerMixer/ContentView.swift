@@ -17,12 +17,25 @@ struct ContentView: View {
     @State private var reorderDropID: Int?
     @State private var confirmRemoveStrip = false
     @State private var showInputPicker = false
+    /// Voice-strip fader block, so stereo beds use the same throw.
+    @State private var voiceFaderSectionHeight: CGFloat = VerticalFader.minSectionHeight
+    /// Link-gap center in the strip cluster. Negative until the first layout.
+    @State private var linkGapMidY: CGFloat = -1
 
     /// Half/half seam control between adjacent mono strips (no gutter).
     private static let monoLinkSeamWidth: CGFloat = 36
-    /// Vertical center in the open gap between last DSP chip (LEVELER) and the fader row.
-    private static let monoLinkSeamY: CGFloat = 308
     private static let monoLinkSeamHeight: CGFloat = 22
+    /// Content height that fits a voice strip at `VerticalFader.minTravel`.
+    /// Measured from the live layout: chrome outside the desk 80, one-track
+    /// waveform 140, column spacing 10, strip 556, cluster padding 8.
+    /// 80 + 140 + 10 + 556 + 8 = 794. The 600 pt DSP floor is inside this.
+    private static let minimumContentHeight: CGFloat = 794
+    private static let oneTrackWaveformHeight: CGFloat = 140
+    /// All-tracks panel with its 220 pt stack cap. 147 pt taller than one track.
+    private static let allTracksWaveformHeight: CGFloat = 287
+    /// Voice strip at minimum fader travel, plus the cluster's 8 pt of vertical padding.
+    private static let minimumStripBayHeight: CGFloat = 564
+    private static let stripColumnSpacing: CGFloat = 10
 
     var body: some View {
         ZStack {
@@ -56,21 +69,18 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
-        // Min height fits the selected-channel DSP column. Strips can shorten before that panel clips.
+        // Min height keeps the fader throw usable and the DSP column on screen.
         .frame(
             minWidth: 960,
             idealWidth: 1100,
             maxWidth: .infinity,
-            minHeight: 800,
+            minHeight: Self.minimumContentHeight,
             idealHeight: 820,
             maxHeight: .infinity,
             alignment: .top
         )
         .preferredColorScheme(.dark)
-        .onAppear {
-            session.bindEngine()
-            installSpacebarMonitor()
-        }
+        .onAppear(perform: startSession)
         .onChange(of: session.hasSession) { _, open in
             if open {
                 session.refreshInputDevices()
@@ -171,6 +181,11 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func startSession() {
+        session.bindEngine()
+        installSpacebarMonitor()
     }
 
     private func installSpacebarMonitor() {
@@ -316,14 +331,8 @@ struct ContentView: View {
     /// Waveform over the strips; selected-channel DSP and master share the column to the right.
     private var sessionDesk: some View {
         HStack(alignment: .top, spacing: 10) {
-            VStack(alignment: .leading, spacing: 10) {
-                waveformPane
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                stripBay
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            stripColumn
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
 
             selectedChannelPane
                 .frame(maxHeight: .infinity, alignment: .top)
@@ -331,6 +340,27 @@ struct ContentView: View {
 
             masterStrip
                 .layoutPriority(1)
+        }
+    }
+
+    /// Waveform keeps its height until the strip would drop below its minimum.
+    /// All Tracks then scrolls in a shorter box so the fader, meters, and the
+    /// rows under them stay on screen.
+    private var stripColumn: some View {
+        GeometryReader { geo in
+            let available = max(0, geo.size.height)
+            let waveIdeal = showAllWaveforms ? Self.allTracksWaveformHeight : Self.oneTrackWaveformHeight
+            let room = max(0, available - Self.stripColumnSpacing)
+            let bay = min(room, max(Self.minimumStripBayHeight, room - waveIdeal))
+            let wave = room - bay
+            VStack(alignment: .leading, spacing: Self.stripColumnSpacing) {
+                waveformPane
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: max(0, wave))
+                stripBay
+                    .frame(maxWidth: .infinity)
+                    .frame(height: max(0, bay))
+            }
         }
     }
 
@@ -363,22 +393,16 @@ struct ContentView: View {
         }
     }
 
-    /// Strips keep their height when the column is tall enough. When the window is short,
-    /// this bay shrinks and clips the strips so the DSP panel (higher priority) stays whole.
+    /// Strips fill this bay from the top. Fader travel absorbs the height; the rest of
+    /// the strip stays put. Extra channels scroll sideways.
     private var stripBay: some View {
         GeometryReader { geo in
-            let full = ChannelStripView.stripHeight + 8
-            let visible = min(full, max(0, geo.size.height))
             let cluster = mixerClusterWidth
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                ScrollView(.horizontal, showsIndicators: cluster > geo.size.width + 1) {
-                    stripCluster
-                }
-                .frame(width: max(0, geo.size.width), height: full, alignment: .topLeading)
-                .frame(height: visible, alignment: .top)
-                .clipped()
+            ScrollView(.horizontal, showsIndicators: cluster > geo.size.width + 1) {
+                stripCluster
+                    .frame(height: max(0, geo.size.height), alignment: .top)
             }
+            .frame(width: max(0, geo.size.width), height: max(0, geo.size.height))
         }
     }
 
@@ -402,9 +426,19 @@ struct ContentView: View {
                 monoLinkSeamButton(leftID: leftID, rightID: rightID)
                     .offset(
                         x: linkSeamCenterX(afterStripIndex: index) - Self.monoLinkSeamWidth / 2,
-                        y: Self.monoLinkSeamY
+                        y: linkGapMidY - Self.monoLinkSeamHeight / 2
                     )
+                    .opacity(linkGapMidY >= 0 ? 1 : 0)
             }
+        }
+        .coordinateSpace(name: "stripCluster")
+        .onPreferenceChange(StripFaderSectionKey.self) { height in
+            guard height > 1, abs(height - voiceFaderSectionHeight) > 0.5 else { return }
+            voiceFaderSectionHeight = height
+        }
+        .onPreferenceChange(StripLinkGapKey.self) { y in
+            guard y >= 0, abs(y - linkGapMidY) > 0.5 else { return }
+            linkGapMidY = y
         }
     }
 
@@ -548,7 +582,8 @@ struct ContentView: View {
                 onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
                 onReorderTargeted: { targeted in
                     reorderDropID = targeted ? id : (reorderDropID == id ? nil : reorderDropID)
-                }
+                },
+                alignedFaderSectionHeight: voiceFaderSectionHeight
             )
         }
     }

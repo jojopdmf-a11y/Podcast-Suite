@@ -1,9 +1,29 @@
 import AppKit
 import SwiftUI
 
+/// Mid-Y of the voice-strip link gap, in the `stripCluster` coordinate space.
+struct StripLinkGapKey: PreferenceKey {
+    static let defaultValue: CGFloat = -1
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next >= 0 { value = next }
+    }
+}
+
+/// Height of the flexible fader block on a voice strip (track + readout + caption).
+struct StripFaderSectionKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
 struct LevelMeter: View {
     var level: Float
     var label: String
+    /// Strip meters: bar matches the fader track, with the same readout spacer above
+    /// and the same label slot below. Nil keeps the master column’s flexible meter.
+    var barHeight: CGFloat? = nil
 
     private var dbNorm: CGFloat {
         let db = 20 * log10(max(level, 1e-5))
@@ -12,22 +32,40 @@ struct LevelMeter: View {
     }
 
     var body: some View {
-        VStack(spacing: 2) {
-            GeometryReader { geo in
-                ZStack(alignment: .bottom) {
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(MixerTheme.cyanFaint)
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(meterColor)
-                        .frame(height: geo.size.height * dbNorm)
-                        .shadow(color: meterColor.opacity(0.5), radius: 3)
-                }
+        if let barHeight {
+            VStack(spacing: VerticalFader.stackSpacing) {
+                Color.clear.frame(height: VerticalFader.readoutHeight)
+                meterBar(height: barHeight)
+                meterLabel
+                    .frame(height: VerticalFader.captionHeight)
             }
-            .frame(width: 8)
-            Text(label)
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .foregroundStyle(MixerTheme.cyanDim)
+        } else {
+            VStack(spacing: 2) {
+                GeometryReader { geo in
+                    meterBar(height: geo.size.height)
+                }
+                .frame(width: 8)
+                meterLabel
+            }
         }
+    }
+
+    private func meterBar(height: CGFloat) -> some View {
+        ZStack(alignment: .bottom) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(MixerTheme.cyanFaint)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(meterColor)
+                .frame(height: max(0, height * dbNorm))
+                .shadow(color: meterColor.opacity(0.5), radius: 3)
+        }
+        .frame(width: 8, height: height)
+    }
+
+    private var meterLabel: some View {
+        Text(label)
+            .font(.system(size: 8, weight: .bold, design: .rounded))
+            .foregroundStyle(MixerTheme.cyanDim)
     }
 
     private var meterColor: Color {
@@ -44,11 +82,24 @@ struct VerticalFader: View {
     var defaultValue: Float = 0
     var range: ClosedRange<Float> = -60...12
     var caption: String? = nil
-    /// Master column: the track grows to the height the parent proposes. Strip faders stay 110 pt.
+    /// Master column: the track grows to the height the parent proposes.
     var expands: Bool = false
+    /// Strip faders: exact slot height. dB position is a fraction of this slot, so the
+    /// taper stays put when the window gives the strip a different travel.
+    var trackHeight: CGFloat? = nil
+
+    /// Cap-center travel never goes below this. Slot height is travel plus the cap.
+    static let minTravel: CGFloat = 90
+    static let capHeight: CGFloat = 22
+    static var minTrackHeight: CGFloat { minTravel + capHeight }
+    /// Fixed chrome around the moving slot (dB readout, gaps, FADER caption).
+    static let readoutHeight: CGFloat = 13
+    static let captionHeight: CGFloat = 13
+    static let stackSpacing: CGFloat = 4
+    static var columnChrome: CGFloat { readoutHeight + captionHeight + stackSpacing * 2 }
+    static var minSectionHeight: CGFloat { minTrackHeight + columnChrome }
 
     private let fixedTrackHeight: CGFloat = 110
-    private let capHeight: CGFloat = 22
     private let capWidth: CGFloat = 28
 
     private var normalized: CGFloat {
@@ -75,6 +126,14 @@ struct VerticalFader: View {
             }
             .frame(width: 36)
             .frame(maxHeight: .infinity)
+        } else if let trackHeight {
+            VStack(spacing: Self.stackSpacing) {
+                valueReadout
+                    .frame(height: Self.readoutHeight)
+                track(height: trackHeight)
+                captionReadout
+                    .frame(height: Self.captionHeight)
+            }
         } else {
             VStack(spacing: 4) {
                 valueReadout
@@ -99,8 +158,8 @@ struct VerticalFader: View {
 
     /// Y of cap center: 1 = top of the range, 0 = bottom.
     private func capCenterY(trackHeight: CGFloat) -> CGFloat {
-        let travel = trackHeight - capHeight
-        return (1 - normalized) * travel + capHeight / 2
+        let travel = trackHeight - Self.capHeight
+        return (1 - normalized) * travel + Self.capHeight / 2
     }
 
     private func zeroTickOffset(trackHeight: CGFloat) -> CGFloat {
@@ -149,7 +208,7 @@ struct VerticalFader: View {
                 .offset(y: 4)
 
             FaderCap(accent: accent, autoDriven: autoDriven)
-                .frame(width: capWidth, height: capHeight)
+                .frame(width: capWidth, height: Self.capHeight)
                 .position(x: 18, y: capCenterY(trackHeight: trackHeight))
                 .shadow(color: .black.opacity(0.55), radius: 2, y: 1.5)
         }
@@ -159,8 +218,8 @@ struct VerticalFader: View {
             DragGesture(minimumDistance: 0)
                 .onChanged { g in
                     let y = min(trackHeight, max(0, g.location.y))
-                    let travel = trackHeight - capHeight
-                    let n = 1 - ((y - capHeight / 2) / max(travel, 1))
+                    let travel = trackHeight - Self.capHeight
+                    let n = 1 - ((y - Self.capHeight / 2) / max(travel, 1))
                     let clamped = Float(min(1, max(0, n)))
                     let span = range.upperBound - range.lowerBound
                     valueDb = range.lowerBound + clamped * span
@@ -505,8 +564,13 @@ struct ChannelStripView: View {
 
     /// 15% narrower than the original 156pt desk.
     static let stripWidth: CGFloat = 133
-    /// Keeps music strip the same height as full speaker strips.
+    /// Nominal full-strip height from the fixed layout. The bay may grow past this;
+    /// the extra goes into fader travel.
     static let stripHeight: CGFloat = 548
+    /// Open slot between the last DSP chip and the fader. The link seam sits here.
+    static let linkGap: CGFloat = 22
+    /// Stereo beds pin their fader block to the voice strips so the faders line up.
+    var alignedFaderSectionHeight: CGFloat? = nil
 
     @State private var dropTargetSlot: ChannelDSPSlot?
     @State private var isRenaming = false
@@ -617,7 +681,20 @@ struct ChannelStripView: View {
             .opacity(fxDimmed ? 0.4 : 1)
             .allowsHitTesting(!fxDimmed)
 
-            Spacer(minLength: 0)
+            if channel.isStereo {
+                Spacer(minLength: 0)
+            } else {
+                Color.clear
+                    .frame(height: Self.linkGap)
+                    .background {
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: StripLinkGapKey.self,
+                                value: geo.frame(in: .named("stripCluster")).midY
+                            )
+                        }
+                    }
+            }
 
             if showAutoInclude, !channel.isStereo {
                 Toggle(isOn: Binding(
@@ -635,24 +712,10 @@ struct ChannelStripView: View {
                 .help("Include this mono in Auto Mix / Auto Duck. Unchecked = bypass (unity).")
             }
 
-            HStack(spacing: 6) {
-                LevelMeter(level: channel.prePeak, label: "IN")
-                VStack(spacing: 2) {
-                    // Fader always shows baseline weighting; auto ride is the readout below.
-                    VerticalFader(valueDb: faderDb, autoDriven: false)
-                    if autoDriven, let g = autoGainDb {
-                        Text(String(format: "%+.1f", g))
-                            .font(.system(size: 8, weight: .bold, design: .monospaced))
-                            .foregroundStyle(MixerTheme.lime.opacity(0.9))
-                            .help("Applied auto-mix / auto-duck gain (dB). Fader = baseline weighting.")
-                    }
-                }
-                LevelMeter(level: channel.postPeak, label: "OUT")
-            }
-            .frame(height: autoDriven && autoGainDb != nil ? 148 : 130)
-            .help(autoDriven
-                  ? "Fader sets baseline weighting while Auto Mix / Auto Duck is on. Live ride is the readout under the fader."
-                  : "Channel level")
+            faderSection
+                .help(autoDriven
+                      ? "Fader sets baseline weighting while Auto Mix / Auto Duck is on. Live ride is the readout under the fader."
+                      : "Channel level")
 
             HStack(spacing: 6) {
                 Button {
@@ -736,7 +799,8 @@ struct ChannelStripView: View {
             }
         }
         .padding(8)
-        .frame(width: Self.stripWidth, height: Self.stripHeight, alignment: .top)
+        .frame(width: Self.stripWidth, alignment: .top)
+        .frame(maxHeight: .infinity, alignment: .top)
         .mixerPanel(glow: isSelected || channel.fileURL != nil)
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -760,6 +824,46 @@ struct ChannelStripView: View {
             )
         )
         .onChange(of: channel) { _, _ in onChange() }
+    }
+
+    /// Travel plus the fixed readout and caption. Grows and shrinks with the bay.
+    /// The dB law uses this slot’s height, so +0 stays at the same fraction of the throw.
+    private var faderSection: some View {
+        let autoExtra: CGFloat = (autoDriven && autoGainDb != nil) ? 14 : 0
+        return Group {
+            if let pinned = alignedFaderSectionHeight {
+                faderColumn(sectionHeight: max(VerticalFader.minSectionHeight, pinned), autoExtra: autoExtra)
+                    .frame(height: max(VerticalFader.minSectionHeight, pinned), alignment: .top)
+            } else {
+                GeometryReader { geo in
+                    faderColumn(sectionHeight: geo.size.height, autoExtra: autoExtra)
+                        .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+                        .preference(key: StripFaderSectionKey.self, value: geo.size.height)
+                }
+                .frame(minHeight: VerticalFader.minSectionHeight + autoExtra, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private func faderColumn(sectionHeight: CGFloat, autoExtra: CGFloat) -> some View {
+        let track = max(
+            VerticalFader.minTrackHeight,
+            sectionHeight - VerticalFader.columnChrome - autoExtra
+        )
+        return VStack(spacing: 2) {
+            HStack(alignment: .top, spacing: 6) {
+                LevelMeter(level: channel.prePeak, label: "IN", barHeight: track)
+                VerticalFader(valueDb: faderDb, autoDriven: false, trackHeight: track)
+                LevelMeter(level: channel.postPeak, label: "OUT", barHeight: track)
+            }
+            if autoDriven, let g = autoGainDb {
+                Text(String(format: "%+.1f", g))
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(MixerTheme.lime.opacity(0.9))
+                    .frame(height: 12)
+                    .help("Applied auto-mix / auto-duck gain (dB). Fader = baseline weighting.")
+            }
+        }
     }
 
     private var inputRow: some View {
@@ -1213,14 +1317,16 @@ struct OverviewWaveformView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
-            ScrollView(.vertical, showsIndicators: stackHeight > maxStackHeight) {
-                VStack(spacing: laneGap) {
-                    ForEach(lanes) { lane in
-                        laneRow(lane)
+            GeometryReader { geo in
+                ScrollView(.vertical, showsIndicators: stackHeight > geo.size.height + 1) {
+                    VStack(spacing: laneGap) {
+                        ForEach(lanes) { lane in
+                            laneRow(lane)
+                        }
                     }
                 }
             }
-            .frame(height: min(stackHeight, maxStackHeight))
+            .frame(maxHeight: min(stackHeight, maxStackHeight))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
