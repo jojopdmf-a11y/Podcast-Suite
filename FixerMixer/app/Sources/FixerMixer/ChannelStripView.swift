@@ -1365,7 +1365,9 @@ struct ChannelStripView: View {
         case .eq:
             return channel.eq.gains.contains { abs($0) > 0.05 } || channel.para.isActive || channel.eq.hpfIsActive
         case .deess:
-            return channel.deess.isActive
+            // Engaged and actually able to reduce. 0 dB THRESH is the top of the knob, so it
+            // must not light the chip. `ChannelDeEsser.isActive` stays “not bypassed”.
+            return !channel.deess.bypass && channel.deess.thresholdDb < -0.05
         case .deVerb:
             return channel.voice.deVerb > 0.02
         case .wetter:

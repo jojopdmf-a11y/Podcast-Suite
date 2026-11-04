@@ -215,11 +215,16 @@ enum MixerMixFile {
         if snap.deessFreqHz != nil || snap.deessWidth != nil || snap.deessThresholdDb != nil || snap.deessBypass != nil {
             ch.deess.freqHz = snap.deessFreqHz ?? ch.deess.freqHz
             ch.deess.width = ParaEQWidth(rawValue: snap.deessWidth ?? "") ?? ch.deess.width
-            ch.deess.thresholdDb = snap.deessThresholdDb ?? ch.deess.thresholdDb
+            // A stored threshold always wins. A missing key keeps −24 dB, the default from
+            // before new strips started at 0. This channel was just built, so `ch.deess.thresholdDb`
+            // is now 0 and must not be the fallback. Not a new-strip path.
+            ch.deess.thresholdDb = snap.deessThresholdDb ?? -24
             ch.deess.bypass = snap.deessBypass ?? true
             ch.deess.clamp()
         } else {
+            // No de-ess keys at all (older mixes). Same quiet defaults as before: bypassed, −24 dB.
             ch.deess = ChannelDeEsser()
+            ch.deess.thresholdDb = -24
         }
         ch.voice.deVerb = snap.deVerb
         ch.voice.deVerbBypass = snap.deVerbBypass

@@ -662,7 +662,7 @@ struct DeEsserView: View {
                 label: "THRESH",
                 valueText: { String(format: "%+.0f", $0) },
                 diameter: knob,
-                defaultValue: -24,
+                defaultValue: 0,
                 dragSensitivity: 0.45
             )
             DeEssGRMeter(grDb: grDb)
@@ -829,8 +829,10 @@ struct ParaEQView: View {
                     diameter: knob,
                     defaultValue: 0,
                     dragSensitivity: 0.45,
+                    step: 0.5,
                     bipolar: true
                 )
+                .help("±18 dB. Double-click to reset to 0. Option-drag for fine. Drag snaps to 0.5 dB.")
                 DSPSegmentedSelector(
                     options: Array(ParaEQWidth.allCases),
                     title: { $0.title },

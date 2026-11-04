@@ -154,7 +154,9 @@ struct ChannelDeEsser: Equatable {
 
     var freqHz: Float = 6_000
     var width: ParaEQWidth = .narrow
-    var thresholdDb: Float = -24
+    /// New strips start at 0 dB (top of the knob, no reduction). Mix files that omit the key
+    /// still load −24; see `MixerMixFile`.
+    var thresholdDb: Float = 0
     /// Default bypassed so older projects and new strips stay quiet until engaged.
     var bypass: Bool = true
 
