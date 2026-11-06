@@ -1,0 +1,41 @@
+import SwiftUI
+
+@main
+struct PodLoungeApp: App {
+    @StateObject private var session = ProjectSession()
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .environmentObject(session)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 1280, height: 840)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("New Project") { session.newProject() }
+                    .keyboardShortcut("n")
+                Button("Open Project…") { session.openProject() }
+                    .keyboardShortcut("o")
+            }
+            CommandGroup(replacing: .saveItem) {
+                Button("Save Project") { session.saveShowingError() }
+                    .keyboardShortcut("s")
+                    .disabled(session.package == nil || !session.isDirty)
+                Button("Save Project As…") { session.saveAs() }
+                    .keyboardShortcut("S")
+                    .disabled(session.package == nil)
+                Button("Save Result") {}
+                    .disabled(true)
+            }
+            CommandGroup(after: .sidebar) {
+                Button("Back to Lounge") { session.leaveWorkspace() }
+                    .keyboardShortcut(.leftArrow, modifiers: [.command])
+                    .disabled(session.activeWorkspace == nil)
+            }
+            CommandGroup(replacing: .appInfo) {
+                Button("About Pod Lounge") { session.showAbout = true }
+            }
+        }
+    }
+}

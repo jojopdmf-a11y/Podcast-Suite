@@ -1,8 +1,8 @@
 name: Mac compile
 
 # This Linux coding box cannot build the SwiftUI apps. GitHub’s Mac runners can.
-# A broken Lil Leveler / Mixer / Stripper compile should fail here, not on
-# Update *.command after merge.
+# A broken Lil Leveler / Mixer / Stripper / Pod Lounge compile should fail here, not on
+# Update *.command after merge. Pod Lounge has no Update launcher.
 on:
   pull_request:
   push:
@@ -33,3 +33,11 @@ jobs:
       - name: Podcast Stripper
         working-directory: Podcast Stripper/app
         run: swift build -c release --product PodcastStripper
+
+      - name: Pod Lounge tests
+        working-directory: PodLounge/app
+        run: swift test
+
+      - name: Pod Lounge
+        working-directory: PodLounge/app
+        run: swift build -c release --product PodLounge
