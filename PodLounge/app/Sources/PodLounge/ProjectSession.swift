@@ -136,6 +136,14 @@ final class ProjectSession: ObservableObject {
         do {
             applyMetadata(to: package)
             let copy = try package.saveAs(to: folder)
+            // The copy takes the name typed in the Save As box, so the
+            // project name at the top of the Lounge matches the new file.
+            copy.manifest.projectName = folder.deletingPathExtension().lastPathComponent
+            do {
+                try copy.save()
+            } catch {
+                alertMessage = error.localizedDescription
+            }
             adopt(copy)
         } catch {
             alertMessage = error.localizedDescription
