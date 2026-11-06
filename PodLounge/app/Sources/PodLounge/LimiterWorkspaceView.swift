@@ -34,11 +34,12 @@ struct LimiterWorkspaceView: View {
                 output: outputBinding,
                 resultName: resultNameBinding,
                 resultNameFollowsSource: followsBinding,
-                onSaveToDepot: { url, name in
-                    try session.importLimiterResult(from: url, displayName: name)
-                },
-                onControlsChanged: syncControls
-            )
+                    onSaveToDepot: { url, name in
+                        try session.importLimiterResult(from: url, displayName: name)
+                    },
+                    onControlsChanged: syncControls,
+                    onPlaybackWillStart: { session.stopDepotPlayback() }
+                )
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -46,6 +47,9 @@ struct LimiterWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             session.endLimiterPlayback = { leveler.teardown() }
+            session.stopLimiterPlayback = {
+                leveler.stopTransportIfPlaying()
+            }
             leveler.applyControls(controlSnapshot)
             loadSelected()
             acceptControlEdits = true
@@ -53,6 +57,8 @@ struct LimiterWorkspaceView: View {
         .onDisappear {
             leveler.teardown()
             session.endLimiterPlayback = nil
+            session.stopLimiterPlayback = nil
+            session.stopDepotPlayback()
         }
         .onChange(of: session.selectedAssetID) { _, _ in
             loadSelected()

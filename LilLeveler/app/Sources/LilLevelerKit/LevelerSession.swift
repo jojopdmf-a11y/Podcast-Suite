@@ -586,6 +586,12 @@ public final class LevelerSession: ObservableObject {
         playheadFrame = 0
     }
 
+    /// Stops the transport only when it is running, so a paused playhead stays put.
+    public func stopTransportIfPlaying() {
+        guard isPlaying else { return }
+        stopPlayback()
+    }
+
     static func formatTime(seconds: Double) -> String {
         let safe = max(0, seconds)
         let total = Int(safe.rounded(.down))

@@ -28,6 +28,9 @@ final class ProjectSession: ObservableObject {
 
     /// Set by the Limiter workspace so leaving the card stops playback.
     var endLimiterPlayback: (() -> Void)?
+    /// Stops Limiter transport without unloading the file. Depot preview calls this.
+    var stopLimiterPlayback: (() -> Void)?
+    let depotPlayer = DepotPreviewPlayer()
 
     private var pending: PendingNavigation?
     private var savedName = ""
@@ -54,6 +57,33 @@ final class ProjectSession: ObservableObject {
 
     func select(_ asset: DepotAsset) {
         selectedAssetID = asset.id
+    }
+
+    /// Plays the depot file as stored. A second file, or the same file again, stops the first.
+    func toggleDepotPlayback(_ asset: DepotAsset) {
+        if depotPlayer.playingAssetID == asset.id {
+            stopDepotPlayback()
+            return
+        }
+        guard health(of: asset) == .present,
+              let package,
+              let url = try? package.resolvedURL(for: asset)
+        else {
+            stopDepotPlayback()
+            alertMessage = "That depot file can't be played."
+            return
+        }
+        stopLimiterPlayback?()
+        do {
+            try depotPlayer.play(assetID: asset.id, url: url)
+        } catch {
+            stopDepotPlayback()
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func stopDepotPlayback() {
+        depotPlayer.stop()
     }
 
     func newProject() {
@@ -192,6 +222,9 @@ final class ProjectSession: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if depotPlayer.playingAssetID == asset.id {
+            stopDepotPlayback()
+        }
         do {
             applyMetadata(to: package)
             try package.writeLimiterSettings(limiterSettings)
@@ -205,6 +238,7 @@ final class ProjectSession: ObservableObject {
     /// Navigation only. Stops Limiter playback. Does not delete depot audio.
     /// Does not stop a Fixer take — there is no recorder in this build.
     func leaveWorkspace() {
+        stopDepotPlayback()
         if activeWorkspace == .limiter {
             endLimiterPlayback?()
         }
@@ -299,6 +333,7 @@ final class ProjectSession: ObservableObject {
     }
 
     private func adopt(_ package: ProjectPackage, keepWorkspace: Bool = false) {
+        let rootChanged = self.package?.rootURL != package.rootURL
         let workspace = keepWorkspace ? activeWorkspace : nil
         if activeWorkspace == .limiter, workspace != .limiter {
             endLimiterPlayback?()
@@ -316,6 +351,11 @@ final class ProjectSession: ObservableObject {
         mismatchedAssetIDs = package.mismatchedAssetIDs
         activeWorkspace = workspace
         markClean()
+        if rootChanged {
+            stopDepotPlayback()
+        } else if let playing = depotPlayer.playingAssetID, assets.contains(where: { $0.id == playing }) == false {
+            stopDepotPlayback()
+        }
     }
 
     private func markClean() {

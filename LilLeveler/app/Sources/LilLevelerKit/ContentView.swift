@@ -31,6 +31,8 @@ public struct LevelerRootView: View {
     var resultNameFollowsSource: Binding<Bool>
     var onSaveToDepot: ((URL, String) async throws -> Void)?
     var onControlsChanged: (() -> Void)?
+    /// Lounge calls this before PLAY so depot preview stops first.
+    var onPlaybackWillStart: (() -> Void)?
 
     @State private var isDropTargeted = false
     @State private var showAbout = false
@@ -43,7 +45,8 @@ public struct LevelerRootView: View {
         resultName: Binding<String> = .constant(""),
         resultNameFollowsSource: Binding<Bool> = .constant(true),
         onSaveToDepot: ((URL, String) async throws -> Void)? = nil,
-        onControlsChanged: (() -> Void)? = nil
+        onControlsChanged: (() -> Void)? = nil,
+        onPlaybackWillStart: (() -> Void)? = nil
     ) {
         self.session = session
         self.mode = mode
@@ -52,6 +55,7 @@ public struct LevelerRootView: View {
         self.resultNameFollowsSource = resultNameFollowsSource
         self.onSaveToDepot = onSaveToDepot
         self.onControlsChanged = onControlsChanged
+        self.onPlaybackWillStart = onPlaybackWillStart
     }
 
     public var body: some View {
@@ -583,6 +587,9 @@ public struct LevelerRootView: View {
         VStack(alignment: .leading, spacing: mode == .lounge ? 6 : 10) {
             HStack(spacing: 12) {
                 Button(session.isPlaying ? "PAUSE" : "PLAY") {
+                    if !session.isPlaying {
+                        onPlaybackWillStart?()
+                    }
                     session.togglePlayback()
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())

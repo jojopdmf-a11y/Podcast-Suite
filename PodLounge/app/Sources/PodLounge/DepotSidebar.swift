@@ -50,6 +50,7 @@ struct DepotSidebar: View {
     private var assetList: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
+                Color.clear.frame(width: 22)
                 Text("NAME")
                     .frame(maxWidth: .infinity, alignment: .leading)
                 Text("KIND")
@@ -151,46 +152,84 @@ struct DepotSidebar: View {
 
 private struct DepotRow: View {
     @EnvironmentObject private var session: ProjectSession
+    @EnvironmentObject private var player: DepotPreviewPlayer
     let asset: DepotAsset
     @State private var length = "—"
 
+    private var playing: Bool { player.playingAssetID == asset.id }
+
     var body: some View {
         let selected = session.selectedAssetID == asset.id
-        Button {
-            session.select(asset)
-        } label: {
-            HStack(spacing: 6) {
-                Text(asset.displayName)
-                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(asset.kind.label)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(asset.kind == .original ? LoungeTheme.original : LoungeTheme.result)
-                    .frame(width: 72, alignment: .leading)
-                Text(length)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(LoungeTheme.textDim)
-                    .frame(width: 52, alignment: .trailing)
+        VStack(spacing: 0) {
+            HStack(spacing: 4) {
+                Button {
+                    session.toggleDepotPlayback(asset)
+                } label: {
+                    Image(systemName: playing ? "stop.fill" : "play.fill")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(canPlay ? LoungeTheme.cyan : LoungeTheme.textDim)
+                        .frame(width: 22, height: 22)
+                        .background(
+                            Circle().fill(LoungeTheme.cyan.opacity(playing ? 0.22 : 0.08))
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canPlay)
+                .help(playing ? "Stop" : "Play this file as it is, with no processing")
+                .accessibilityLabel(playing ? "Stop \(asset.displayName)" : "Play \(asset.displayName)")
+
+                Button {
+                    session.select(asset)
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(asset.displayName)
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(asset.kind.label)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(asset.kind == .original ? LoungeTheme.original : LoungeTheme.result)
+                            .frame(width: 72, alignment: .leading)
+                        Text(length)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(LoungeTheme.textDim)
+                            .frame(width: 52, alignment: .trailing)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(selected ? LoungeTheme.cyan.opacity(0.12) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(selected ? LoungeTheme.cyan.opacity(0.7) : Color.clear, lineWidth: 1)
-            )
+            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
         }
-        .buttonStyle(.plain)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(selected ? LoungeTheme.cyan.opacity(0.12) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(selected ? LoungeTheme.cyan.opacity(0.7) : Color.clear, lineWidth: 1)
+        )
+        .overlay(alignment: .bottom) {
+            if playing {
+                Capsule()
+                    .fill(LoungeTheme.cyan)
+                    .frame(height: 2)
+                    .scaleEffect(x: max(0.02, CGFloat(player.progress)), y: 1, anchor: .leading)
+                    .padding(.horizontal, 6)
+                    .allowsHitTesting(false)
+            }
+        }
         .contextMenu {
             Button("Delete from Project…") { session.deleteAsset(asset) }
         }
         .task(id: asset.id) {
             length = await loadLength()
         }
+    }
+
+    private var canPlay: Bool {
+        session.package != nil && session.health(of: asset) == .present
     }
 
     private func loadLength() async -> String {

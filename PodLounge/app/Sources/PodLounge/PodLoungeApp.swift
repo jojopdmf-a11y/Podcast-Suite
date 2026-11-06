@@ -8,6 +8,7 @@ struct PodLoungeApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(session)
+                .environmentObject(session.depotPlayer)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1280, height: 840)

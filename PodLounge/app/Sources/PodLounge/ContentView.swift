@@ -50,6 +50,9 @@ struct ContentView: View {
         .background(LoungeTheme.background)
         .foregroundStyle(LoungeTheme.text)
         .frame(minWidth: 1100, minHeight: 700)
+        .onChange(of: session.activeWorkspace) { _, _ in
+            session.stopDepotPlayback()
+        }
         .alert("Pod Lounge", isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { session.alertMessage = nil }
         } message: {
