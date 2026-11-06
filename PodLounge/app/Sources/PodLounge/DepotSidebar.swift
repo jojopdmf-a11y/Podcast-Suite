@@ -5,76 +5,83 @@ struct DepotSidebar: View {
     @EnvironmentObject private var session: ProjectSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("DEPOT")
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(LoungeTheme.textDim)
-                    Text("Project audio")
-                        .font(.system(size: 16, weight: .semibold))
+        GeometryReader { geo in
+            // A long list scrolls. A short one stays as tall as its rows.
+            let listCap = max(72, geo.size.height - 360)
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("DEPOT")
+                            .font(.system(size: 11, weight: .semibold))
+                            .tracking(1.2)
+                            .foregroundStyle(LoungeTheme.textDim)
+                        Text("Project audio")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                    Spacer(minLength: 8)
+                    Button("Import Audio") { session.importAudio() }
+                        .buttonStyle(LoungeButtonStyle(prominent: true))
+                        .disabled(session.package == nil)
                 }
-                Spacer()
-                Button("Import Audio") { session.importAudio() }
-                    .buttonStyle(LoungeButtonStyle(prominent: true))
-                    .disabled(session.package == nil)
-            }
-            Text("Files live inside this project. Import copies once. Save Project does not copy them again.")
-                .font(.system(size: 11))
-                .foregroundStyle(LoungeTheme.textDim)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if session.package == nil {
-                Text("Create or open a project to keep audio in the package.")
-                    .font(.system(size: 13))
+                Text("Files live inside this project. Import copies once. Save Project does not copy them again.")
+                    .font(.system(size: 11))
                     .foregroundStyle(LoungeTheme.textDim)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.top, 12)
-            } else {
-                assetList
-                selectedSection
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if session.package == nil {
+                    Text("Create or open a project to keep audio in the package.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        columnHeader
+                        if session.assets.count > 8 {
+                            ScrollView { assetRows }
+                                .frame(height: listCap)
+                        } else {
+                            assetRows
+                        }
+                    }
+                    .fixedSize(horizontal: false, vertical: session.assets.count <= 8)
+                    selectedSection
+                }
+                savingNotes
+                Spacer(minLength: 0)
             }
-            savingNotes
+            .padding(16)
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
-        .padding(16)
-        .frame(maxHeight: .infinity, alignment: .top)
         .background(LoungeTheme.backgroundRaised)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(LoungeTheme.cyan.opacity(0.18))
-                .frame(width: 1)
-        }
     }
 
-    private var assetList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Color.clear.frame(width: 22)
-                Text("NAME")
+    private var columnHeader: some View {
+        HStack {
+            Color.clear.frame(width: 22)
+            Text("NAME")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text("KIND")
+                .frame(width: 72, alignment: .leading)
+            Text("LENGTH")
+                .frame(width: 52, alignment: .trailing)
+        }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(LoungeTheme.textDim)
+    }
+
+    private var assetRows: some View {
+        VStack(spacing: 4) {
+            if session.assets.isEmpty {
+                Text("No audio yet.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(LoungeTheme.textDim)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("KIND")
-                    .frame(width: 72, alignment: .leading)
-                Text("LENGTH")
-                    .frame(width: 52, alignment: .trailing)
+                    .padding(.vertical, 8)
             }
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(LoungeTheme.textDim)
-            ScrollView {
-                VStack(spacing: 4) {
-                    if session.assets.isEmpty {
-                        Text("No audio yet.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(LoungeTheme.textDim)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.vertical, 8)
-                    }
-                    ForEach(session.assets) { asset in
-                        DepotRow(asset: asset)
-                    }
-                }
+            ForEach(session.assets) { asset in
+                DepotRow(asset: asset)
             }
-            .frame(maxHeight: .infinity)
         }
     }
 

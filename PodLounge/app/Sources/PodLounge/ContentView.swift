@@ -1,4 +1,5 @@
 import AppKit
+import LilLevelerKit
 import PodLoungeCore
 import SwiftUI
 
@@ -16,8 +17,14 @@ struct ContentView: View {
     @AppStorage(DepotChrome.hiddenKey) private var depotHidden = false
     @State private var depotDragStart: CGFloat?
 
-    private var depotWidth: CGFloat {
-        min(DepotChrome.maxWidth, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
+    private func depotMax(in containerWidth: CGFloat) -> CGFloat {
+        guard session.activeWorkspace == .limiter else { return DepotChrome.maxWidth }
+        return LevelerPaneMath.depotMaximum(
+            container: containerWidth,
+            reserved: LevelerPaneMetrics.limiterWorkspaceMinimum,
+            minimum: DepotChrome.minWidth,
+            cap: DepotChrome.maxWidth
+        )
     }
 
     var body: some View {
@@ -26,30 +33,38 @@ struct ContentView: View {
             Rectangle()
                 .fill(LoungeTheme.cyan.opacity(0.18))
                 .frame(height: 1)
-            HStack(spacing: 0) {
-                Group {
-                    if let workspace = session.activeWorkspace {
-                        if workspace == .limiter {
-                            LimiterWorkspaceView()
+            GeometryReader { geo in
+                let maxDepot = depotMax(in: geo.size.width)
+                let width = min(maxDepot, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
+                HStack(spacing: 0) {
+                    Group {
+                        if let workspace = session.activeWorkspace {
+                            if workspace == .limiter {
+                                LimiterWorkspaceView()
+                            } else {
+                                WorkspaceScaffoldView(workspace: workspace)
+                            }
                         } else {
-                            WorkspaceScaffoldView(workspace: workspace)
+                            LoungeHomeView()
                         }
-                    } else {
-                        LoungeHomeView()
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if !depotHidden {
+                        DepotSidebar()
+                            .frame(width: width)
+                            .overlay(alignment: .leading) {
+                                depotResizeHandle(current: width, maximum: maxDepot)
+                            }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if !depotHidden {
-                    DepotSidebar()
-                        .frame(width: depotWidth)
-                        .overlay(alignment: .leading) { depotResizeHandle }
-                }
             }
-            .animation(.easeInOut(duration: 0.18), value: depotHidden)
         }
         .background(LoungeTheme.background)
         .foregroundStyle(LoungeTheme.text)
-        .frame(minWidth: 1100, minHeight: 700)
+        .frame(
+            minWidth: LevelerPaneMetrics.limiterWorkspaceMinimum + DepotChrome.minWidth,
+            minHeight: 800
+        )
         .onChange(of: session.activeWorkspace) { _, _ in
             session.stopDepotPlayback()
         }
@@ -157,7 +172,9 @@ struct ContentView: View {
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.package == nil)
             Button(depotHidden ? "Show Depot" : "Hide Depot") {
-                depotHidden.toggle()
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    depotHidden.toggle()
+                }
             }
             .buttonStyle(LoungeButtonStyle())
             .help(depotHidden ? "Show the project depot" : "Hide the project depot")
@@ -167,37 +184,21 @@ struct ContentView: View {
         .background(LoungeTheme.backgroundRaised)
     }
 
-    private var depotResizeHandle: some View {
-        ZStack {
-            Rectangle()
-                .fill(Color.clear)
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(LoungeTheme.cyan.opacity(0.55))
-                .frame(width: 3, height: 36)
+    private func depotResizeHandle(current: CGFloat, maximum: CGFloat) -> some View {
+        LevelerPaneDivider(
+            axis: .vertical,
+            help: "Drag to resize the depot. Double-click to reset."
+        ) { delta in
+            if depotDragStart == nil { depotDragStart = current }
+            let next = (depotDragStart ?? current) - delta
+            let clamped = min(maximum, max(DepotChrome.minWidth, next))
+            depotWidthStorage = Double(clamped)
+        } onDragEnded: {
+            depotDragStart = nil
+        } onReset: {
+            depotWidthStorage = DepotChrome.defaultWidth
+            depotDragStart = nil
         }
-        .frame(width: 10)
-        .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if depotDragStart == nil { depotDragStart = depotWidth }
-                        let next = (depotDragStart ?? depotWidth) - value.translation.width
-                        let clamped = min(DepotChrome.maxWidth, max(DepotChrome.minWidth, next))
-                        depotWidthStorage = Double(clamped)
-                    }
-                    .onEnded { _ in
-                        depotDragStart = nil
-                    }
-            )
-            .onHover { inside in
-                if inside {
-                    NSCursor.resizeLeftRight.push()
-                } else {
-                    NSCursor.pop()
-                }
-            }
-            .help("Drag to resize the depot")
-            .accessibilityLabel("Resize depot")
     }
 }
 
