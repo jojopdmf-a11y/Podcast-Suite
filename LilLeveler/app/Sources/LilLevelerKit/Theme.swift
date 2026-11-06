@@ -22,7 +22,7 @@ enum LevelerTheme {
     }
 }
 
-/// Desk size is fixed. Width hugs the platform column + Dorrough meters.
+/// Desk size is the standalone minimum. A larger window gives the extra space to the meters.
 enum LevelerLayout {
     static let windowPadding: CGFloat = 18
     static let presetColumnWidth: CGFloat = 220

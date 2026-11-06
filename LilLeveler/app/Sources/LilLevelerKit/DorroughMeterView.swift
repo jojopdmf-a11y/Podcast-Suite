@@ -33,12 +33,19 @@ enum DorroughLook {
 
 struct DorroughMeterDeck: View {
     @ObservedObject var session: LevelerSession
-    /// Lounge column. Shorter buttons and a flexible LED stack so the deck
-    /// fits the Pod Lounge window. Standalone PodLeveler leaves this false.
+    /// Lounge column. Shorter buttons so the deck fits beside the presets.
+    /// Standalone PodLeveler leaves this false.
     var compact: Bool = false
+    /// Draw the same scale at whatever size the parent offers. Ballistics stay put.
+    var expands: Bool = false
+
+    private var controlWidth: CGFloat {
+        if expands { return compact ? 104 : LevelerLayout.meterControlsWidth }
+        return compact ? 92 : LevelerLayout.meterControlsWidth
+    }
 
     var body: some View {
-        HStack(alignment: compact ? .top : .center, spacing: compact ? 8 : LevelerLayout.meterDeckSpacing) {
+        HStack(alignment: .center, spacing: compact ? 8 : LevelerLayout.meterDeckSpacing) {
             DorroughFaceplate(
                 title: "PRE",
                 sample: session.livePre,
@@ -47,7 +54,8 @@ struct DorroughMeterDeck: View {
                 overs: session.preOvers,
                 mode: session.meterMode,
                 active: true,
-                compact: compact
+                compact: compact,
+                expands: expands
             )
             DorroughFaceplate(
                 title: "POST",
@@ -57,12 +65,16 @@ struct DorroughMeterDeck: View {
                 overs: session.postOvers,
                 mode: session.meterMode,
                 active: session.hasResult || session.liveMaximizerActive,
-                compact: compact
+                compact: compact,
+                expands: expands
             )
             meterControls
         }
         .padding(compact ? 8 : LevelerLayout.meterDeckPadding)
-        .frame(maxWidth: compact ? .infinity : nil, maxHeight: compact ? .infinity : nil, alignment: .top)
+        .frame(
+            maxWidth: (compact || expands) ? .infinity : nil,
+            maxHeight: (compact || expands) ? .infinity : nil
+        )
         .levelerPanel()
     }
 
@@ -123,11 +135,11 @@ struct DorroughMeterDeck: View {
                 }
             }
 
-            if !compact {
+            if !compact && !expands {
                 Spacer(minLength: 0)
             }
         }
-        .frame(width: compact ? 92 : LevelerLayout.meterControlsWidth)
+        .frame(width: controlWidth)
         .padding(.vertical, compact ? 0 : 4)
     }
 
@@ -166,9 +178,13 @@ struct DorroughFaceplate: View {
     var mode: LevelerMeterMode
     var active: Bool
     var compact: Bool = false
+    var expands: Bool = false
 
     private var live: (Float, Float) { sample.display(mode: mode) }
-    private var scaleWidth: CGFloat { compact ? 16 : LevelerLayout.scaleWidth }
+    private var scaleWidth: CGFloat {
+        if expands { return compact ? 30 : LevelerLayout.scaleWidth + 8 }
+        return compact ? 16 : LevelerLayout.scaleWidth
+    }
 
     var body: some View {
         VStack(spacing: compact ? 4 : 8) {
@@ -177,10 +193,12 @@ struct DorroughFaceplate: View {
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .tracking(1.6)
                     .foregroundStyle(DorroughLook.silk)
+                    .lineLimit(1)
                 Spacer()
                 Text(mode.unit)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(DorroughLook.scale.opacity(0.8))
+                    .lineLimit(1)
             }
 
             HStack(alignment: .top, spacing: compact ? 2 : 3) {
@@ -189,9 +207,9 @@ struct DorroughFaceplate: View {
                 ledColumn(level: live.1, hold: holdR)
                 scaleColumn(align: .leading)
             }
-            .frame(maxHeight: compact ? .infinity : nil)
-            .frame(height: compact ? nil : LevelerLayout.meterStackHeight)
-            .frame(minHeight: compact ? 56 : nil)
+            .frame(maxHeight: (compact || expands) ? .infinity : nil)
+            .frame(height: (compact || expands) ? nil : LevelerLayout.meterStackHeight)
+            .frame(minHeight: (compact || expands) ? 56 : nil)
             .opacity(active ? 1 : 0.38)
 
             HStack {
@@ -207,8 +225,13 @@ struct DorroughFaceplate: View {
             readout
         }
         .padding(compact ? 6 : 8)
-        .frame(maxWidth: compact ? .infinity : nil, maxHeight: compact ? .infinity : nil, alignment: .top)
-        .frame(width: compact ? nil : LevelerLayout.faceplateWidth)
+        .frame(
+            minWidth: expands ? 110 : nil,
+            maxWidth: (compact || expands) ? .infinity : nil,
+            maxHeight: (compact || expands) ? .infinity : nil,
+            alignment: .top
+        )
+        .frame(width: (compact || expands) ? nil : LevelerLayout.faceplateWidth)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
@@ -278,11 +301,12 @@ struct DorroughFaceplate: View {
     private func scaleColumn(align: Alignment) -> some View {
         let marks: [Float] = [3, 0, -3, -6, -9, -12, -18, -24, -30, -40]
         return GeometryReader { geo in
-            ForEach(marks, id: \.self) { db in
+            let placed = readableScaleMarks(marks, height: geo.size.height)
+            ForEach(placed, id: \.self) { db in
                 let y = DorroughLook.verticalInset
                     + (geo.size.height - 2 * DorroughLook.verticalInset)
                     * (1 - DorroughLook.fraction(db: db))
-                HStack(spacing: 3) {
+                HStack(spacing: 2) {
                     if align == .leading, db == 0 {
                         Text("FS")
                             .foregroundStyle(DorroughLook.ledYellow)
@@ -295,11 +319,31 @@ struct DorroughFaceplate: View {
                     }
                 }
                 .font(.system(size: 8, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(width: geo.size.width, alignment: align)
                 .position(x: geo.size.width / 2, y: y)
             }
         }
         .frame(width: scaleWidth)
+    }
+
+    /// Same dB positions as the LED scale. A mark is omitted only when it would
+    /// sit on top of a mark that is already drawn, which happens on a short meter.
+    private func readableScaleMarks(_ marks: [Float], height: CGFloat) -> [Float] {
+        let inner = max(1, height - 2 * DorroughLook.verticalInset)
+        func y(_ db: Float) -> CGFloat {
+            DorroughLook.verticalInset + inner * (1 - DorroughLook.fraction(db: db))
+        }
+        let priority: [Float] = [0, 3, -12, -24, -40, -6, -18, -30, -9, -3]
+        var kept: [Float] = []
+        for db in priority where marks.contains(db) {
+            let markY = y(db)
+            if kept.allSatisfy({ abs(y($0) - markY) >= 11 }) {
+                kept.append(db)
+            }
+        }
+        return kept
     }
 
     private func scaleLabel(_ db: Float) -> String {
@@ -310,9 +354,9 @@ struct DorroughFaceplate: View {
 
     @ViewBuilder
     private func ledColumn(level: Float, hold: Float) -> some View {
-        if compact {
+        if compact || expands {
             ledWell(level: level, hold: hold)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ledWell(level: level, hold: hold)
                 .frame(width: LevelerLayout.ledColumnWidth)
@@ -363,9 +407,10 @@ struct DorroughFaceplate: View {
         }
         .padding(3)
         .frame(
-            minWidth: compact ? 10 : LevelerLayout.ledColumnWidth,
-            idealWidth: compact ? 18 : LevelerLayout.ledColumnWidth,
-            maxWidth: compact ? .infinity : LevelerLayout.ledColumnWidth
+            minWidth: (compact || expands) ? 14 : LevelerLayout.ledColumnWidth,
+            idealWidth: (compact || expands) ? 28 : LevelerLayout.ledColumnWidth,
+            maxWidth: (compact || expands) ? .infinity : LevelerLayout.ledColumnWidth,
+            maxHeight: .infinity
         )
         .background(
             RoundedRectangle(cornerRadius: 3, style: .continuous)
@@ -524,6 +569,8 @@ struct LoudnessCompareBoard: View {
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(0.8)
                     .foregroundStyle(LevelerTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             VStack(spacing: compact ? 2 : 4) {
@@ -551,6 +598,8 @@ struct LoudnessCompareBoard: View {
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.4)
                 .foregroundStyle(LevelerTheme.textSecondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 4)
             Text(value)
                 .font(.system(size: compact ? 11 : 12, weight: .bold, design: .monospaced))

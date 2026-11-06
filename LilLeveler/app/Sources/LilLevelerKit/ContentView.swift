@@ -37,6 +37,12 @@ public struct LevelerRootView: View {
     @State private var isDropTargeted = false
     @State private var showAbout = false
     @State private var showExportOptions = false
+    @AppStorage(LevelerPaneMetrics.presetKey) private var presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
+    @AppStorage(LevelerPaneMetrics.outputKey) private var outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
+    @AppStorage(LevelerPaneMetrics.loudnessExtraKey) private var loudnessExtraStorage = 0.0
+    @State private var presetDragOrigin: CGFloat?
+    @State private var outputDragOrigin: CGFloat?
+    @State private var loudnessDragOrigin: CGFloat?
 
     public init(
         session: LevelerSession,
@@ -103,65 +109,155 @@ public struct LevelerRootView: View {
         .preferredColorScheme(.dark)
     }
 
+    private var columnLock: LevelerPaneMath.ColumnLock {
+        if presetDragOrigin != nil { return .output }
+        if outputDragOrigin != nil { return .preset }
+        return .none
+    }
+
+    private func columnSplit(in size: CGSize) -> LevelerColumnSplit {
+        let loaded = session.sourceURL != nil
+        return LevelerPaneMath.columns(
+            available: size.width,
+            preset: CGFloat(presetWidthStorage),
+            output: CGFloat(outputWidthStorage),
+            showsPreset: loaded,
+            presetMin: LevelerPaneMetrics.presetMin,
+            presetMax: LevelerPaneMetrics.presetMax,
+            outputMin: LevelerPaneMetrics.outputMin,
+            outputMax: LevelerPaneMetrics.outputMax,
+            centerMin: loaded ? LevelerPaneMetrics.centerMin : 160,
+            divider: LevelerPaneMetrics.divider,
+            lock: columnLock
+        )
+    }
+
     private func loungeColumns(in size: CGSize) -> some View {
-        let gap: CGFloat = 8
-        let outputW = min(270, max(214, size.width * 0.27))
-        let presetW = min(200, max(148, size.width * 0.19))
-        return HStack(alignment: .top, spacing: gap) {
-            if session.sourceURL == nil {
-                loungeEmpty
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+        let split = columnSplit(in: size)
+        let loaded = session.sourceURL != nil
+        return HStack(alignment: .top, spacing: 0) {
+            if loaded {
                 presetColumn
-                    .frame(width: presetW)
-                loungeCenter
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .frame(width: split.preset, height: size.height, alignment: .top)
+                paneDivider(axis: .vertical, help: "Drag to resize presets. Double-click to reset.") {
+                    if presetDragOrigin == nil { presetDragOrigin = split.preset }
+                    presetWidthStorage = Double((presetDragOrigin ?? split.preset) + $0)
+                } onEnded: {
+                    presetWidthStorage = Double(split.preset)
+                    presetDragOrigin = nil
+                } onReset: {
+                    presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
+                    presetDragOrigin = nil
+                }
+            }
+            loungeCenter
+                .frame(width: loaded ? split.center : nil, height: size.height, alignment: .top)
+                .frame(maxWidth: loaded ? nil : .infinity)
+            paneDivider(axis: .vertical, help: "Drag to resize Output. Double-click to reset.") {
+                if outputDragOrigin == nil { outputDragOrigin = split.output }
+                outputWidthStorage = Double((outputDragOrigin ?? split.output) - $0)
+            } onEnded: {
+                outputWidthStorage = Double(split.output)
+                outputDragOrigin = nil
+            } onReset: {
+                outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
+                outputDragOrigin = nil
             }
             loungeOutput
-                .frame(width: outputW)
+                .frame(width: split.output, height: size.height, alignment: .top)
         }
         .frame(width: size.width, height: size.height, alignment: .top)
     }
 
+    private func paneDivider(
+        axis: LevelerPaneDivider.Axis,
+        help: String,
+        onDrag: @escaping (CGFloat) -> Void,
+        onEnded: @escaping () -> Void,
+        onReset: @escaping () -> Void
+    ) -> some View {
+        LevelerPaneDivider(axis: axis, help: help, onDrag: onDrag, onDragEnded: onEnded, onReset: onReset)
+    }
+
     private var loungeCenter: some View {
+        Group {
+            if session.sourceURL == nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    loungeEmpty
+                    loungeFooter
+                }
+            } else {
+                LevelerCenterLayout(
+                    extra: CGFloat(loudnessExtraStorage),
+                    meterMin: LevelerPaneMetrics.meterMin,
+                    spacing: 6
+                ) {
+                    fileRow
+                    GeometryReader { proxy in
+                        DorroughMeterDeck(session: session, compact: true, expands: true)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    }
+                    paneDivider(
+                        axis: .horizontal,
+                        help: "Drag to resize the meters. Double-click to reset."
+                    ) {
+                        if loudnessDragOrigin == nil { loudnessDragOrigin = CGFloat(loudnessExtraStorage) }
+                        let next = (loudnessDragOrigin ?? CGFloat(loudnessExtraStorage)) + $0
+                        loudnessExtraStorage = Double(min(400, max(0, next)))
+                    } onEnded: {
+                        loudnessDragOrigin = nil
+                    } onReset: {
+                        loudnessExtraStorage = 0
+                        loudnessDragOrigin = nil
+                    }
+                    LoudnessCompareBoard(
+                        before: session.before,
+                        after: session.after,
+                        hasResult: session.hasResult,
+                        targetLUFS: session.activeTargetLUFS,
+                        targetTP: session.activeTruePeak,
+                        isMaximizer: session.preset.isMaximizer,
+                        maximizerMakeupDb: session.musicMakeupDb,
+                        compact: true
+                    )
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    loungeFooter
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var loungeFooter: some View {
         VStack(alignment: .leading, spacing: 6) {
-            fileRow
-                .fixedSize(horizontal: false, vertical: true)
-            DorroughMeterDeck(session: session, compact: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(minHeight: 148, maxHeight: 250)
-                .layoutPriority(-1)
-            LoudnessCompareBoard(
-                before: session.before,
-                after: session.after,
-                hasResult: session.hasResult,
-                targetLUFS: session.activeTargetLUFS,
-                targetTP: session.activeTruePeak,
-                isMaximizer: session.preset.isMaximizer,
-                maximizerMakeupDb: session.musicMakeupDb,
-                compact: true
-            )
-            .fixedSize(horizontal: false, vertical: true)
             transportRow
-                .fixedSize(horizontal: false, vertical: true)
             statusBar
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
+            Button(action: saveToDepot) {
+                Text(session.isBusy ? "WORKING…" : "Save Result to Depot")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(LevelerPrimaryButtonStyle())
+            .disabled(!session.canExportLeveled || onSaveToDepot == nil || output.container == .mp3)
+            .help("Render the leveled file into the project. The original is not changed.")
         }
     }
 
     private var loungeOutput: some View {
-        LevelerOutputPanel(
-            session: session,
-            settings: $output,
-            resultName: resultName,
-            followsSource: resultNameFollowsSource,
-            primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
-            primaryHelp: "Render the leveled file into the project. The original is not changed.",
-            primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
-            primaryAction: saveToDepot,
-            fillsColumn: true
-        )
+        VStack(alignment: .leading, spacing: 0) {
+            LevelerOutputPanel(
+                session: session,
+                settings: $output,
+                resultName: resultName,
+                followsSource: resultNameFollowsSource,
+                primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
+                primaryHelp: "Render the leveled file into the project. The original is not changed.",
+                primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
+                primaryAction: saveToDepot,
+                fillsColumn: false,
+                includesPrimaryButton: false
+            )
+            Spacer(minLength: 0)
+        }
     }
 
     private var levelerBackdrop: some View {
@@ -200,9 +296,16 @@ public struct LevelerRootView: View {
                 exportOverlay
             }
         }
-        // Keep this view in the title-bar safe area. Ignoring safe area here
-        // slides PODLEVELER under the traffic lights and clips the status line.
-        .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
+        // Minimum is the old desk size. Extra space goes to the meters.
+        // Ignoring the safe area slides PODLEVELER under the traffic lights.
+        .frame(
+            minWidth: LevelerLayout.windowWidth,
+            idealWidth: LevelerLayout.windowWidth,
+            maxWidth: .infinity,
+            minHeight: LevelerLayout.windowHeight,
+            idealHeight: LevelerLayout.windowHeight,
+            maxHeight: .infinity
+        )
         .background { levelerBackdrop }
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
@@ -379,7 +482,11 @@ public struct LevelerRootView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 fileRow
-                DorroughMeterDeck(session: session)
+                GeometryReader { proxy in
+                    DorroughMeterDeck(session: session, expands: true)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 LoudnessCompareBoard(
                     before: session.before,
                     after: session.after,
@@ -391,9 +498,9 @@ public struct LevelerRootView: View {
                 )
                 transportRow
             }
-            .frame(width: LevelerLayout.meterDeckWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var presetColumn: some View {
@@ -433,9 +540,11 @@ public struct LevelerRootView: View {
                                     Text(p.title)
                                         .font(.system(size: 11, weight: .bold, design: .rounded))
                                         .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom : LevelerTheme.cyan)
+                                        .lineLimit(1)
                                     Text(p.subtitle)
                                         .font(.system(size: 9, weight: .medium, design: .rounded))
                                         .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom.opacity(0.75) : LevelerTheme.textSecondary)
+                                        .lineLimit(1)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, mode == .lounge ? 8 : 10)

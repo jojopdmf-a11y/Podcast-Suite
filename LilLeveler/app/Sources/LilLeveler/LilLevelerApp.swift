@@ -8,7 +8,7 @@ struct LilLevelerApp: App {
             LevelerAppRoot()
                 .preferredColorScheme(.dark)
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(replacing: .appInfo) {

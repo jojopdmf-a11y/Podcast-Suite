@@ -11,8 +11,10 @@ struct LevelerOutputPanel: View {
     var primaryHelp: String
     var primaryDisabled: Bool
     var primaryAction: () -> Void
-    /// Stretch the card and pin the save button to the bottom of the Lounge column.
+    /// Stretch the card and pin the save button to the bottom of the column.
     var fillsColumn: Bool = false
+    /// Lounge draws Save Result under the transport. Export keeps the button here.
+    var includesPrimaryButton: Bool = true
 
     private var sourceRate: Double {
         session.sourceSampleRate > 0 ? session.sourceSampleRate : 48_000
@@ -106,7 +108,7 @@ struct LevelerOutputPanel: View {
                 }
             }
 
-            if fillsColumn {
+            if fillsColumn, includesPrimaryButton {
                 Spacer(minLength: 8)
             }
 
@@ -119,10 +121,12 @@ struct LevelerOutputPanel: View {
                     .lineLimit(2)
             }
 
-            Button(primaryTitle, action: primaryAction)
-                .buttonStyle(LevelerPrimaryButtonStyle())
-                .disabled(primaryDisabled || settings.container == .mp3)
-                .help(primaryHelp)
+            if includesPrimaryButton {
+                Button(primaryTitle, action: primaryAction)
+                    .buttonStyle(LevelerPrimaryButtonStyle())
+                    .disabled(primaryDisabled || settings.container == .mp3)
+                    .help(primaryHelp)
+            }
         }
         .padding(fillsColumn ? 10 : 12)
         .frame(maxWidth: .infinity, maxHeight: fillsColumn ? .infinity : nil, alignment: .top)
