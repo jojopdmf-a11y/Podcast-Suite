@@ -1,14 +1,11 @@
+import LilLevelerKit
 import SwiftUI
-
-extension Notification.Name {
-    static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
-}
 
 @main
 struct LilLevelerApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            LevelerAppRoot()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentSize)

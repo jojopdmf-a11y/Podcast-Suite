@@ -7,11 +7,17 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "LilLevelerKit", targets: ["LilLevelerKit"]),
         .executable(name: "LilLeveler", targets: ["LilLeveler"]),
     ],
     targets: [
+        .target(
+            name: "LilLevelerKit",
+            path: "Sources/LilLevelerKit"
+        ),
         .executableTarget(
             name: "LilLeveler",
+            dependencies: ["LilLevelerKit"],
             path: "Sources/LilLeveler"
         ),
     ]

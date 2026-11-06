@@ -2,6 +2,19 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+public extension Notification.Name {
+    static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
+}
+
+/// Standalone PodLeveler window. The Limiter workspace hosts the same view.
+public struct LevelerAppRoot: View {
+    public init() {}
+
+    public var body: some View {
+        ContentView()
+    }
+}
+
 struct ContentView: View {
     @StateObject private var session = LevelerSession()
     @State private var isDropTargeted = false
