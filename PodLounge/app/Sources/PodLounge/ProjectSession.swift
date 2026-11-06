@@ -152,10 +152,10 @@ final class ProjectSession: ObservableObject {
         panel.prompt = "Import"
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "A copy is stored in the project. The original file is left where it is."
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        importFile(url)
+        panel.allowsMultipleSelection = true
+        panel.message = "Choose one or more files. A copy of each is stored in the project. The originals are left where they are."
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        importFiles(panel.urls)
     }
 
     /// Navigation only. Does not stop a take — there is no recorder in this build.
@@ -203,14 +203,27 @@ final class ProjectSession: ObservableObject {
         }
     }
 
-    private func importFile(_ url: URL) {
+    /// Imports each chosen file in turn. One bad file does not stop the rest;
+    /// any failures are listed by file name afterwards.
+    private func importFiles(_ urls: [URL]) {
         guard let package else { return }
-        do {
-            applyMetadata(to: package)
-            _ = try package.importMedia(from: url, kind: .original, producedBy: nil, select: true)
+        applyMetadata(to: package)
+        var failures: [String] = []
+        var importedAny = false
+        for url in urls {
+            do {
+                _ = try package.importMedia(from: url, kind: .original, producedBy: nil, select: true)
+                importedAny = true
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        if importedAny {
             adopt(package, keepWorkspace: true)
-        } catch {
-            alertMessage = error.localizedDescription
+        }
+        if !failures.isEmpty {
+            let header = failures.count == 1 ? "1 file could not be imported:" : "\(failures.count) files could not be imported:"
+            alertMessage = ([header] + failures).joined(separator: "\n")
         }
     }
 
