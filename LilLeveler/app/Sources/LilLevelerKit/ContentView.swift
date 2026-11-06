@@ -567,10 +567,7 @@ public struct LevelerRootView: View {
     }
 
     private var automaticResultName: String {
-        let raw = session.sourceName.isEmpty ? "Audio" : session.sourceName
-        let base = (raw as NSString).deletingPathExtension
-        let stem = base.isEmpty ? "Audio" : base
-        return "\(stem) – Leveled (\(session.activePresetTitle))"
+        LevelerResultName.suggested(sourceName: session.sourceName, presetTitle: session.activePresetTitle)
     }
 
     private func saveToDepot() {

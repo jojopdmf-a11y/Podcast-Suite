@@ -80,9 +80,7 @@ struct LimiterWorkspaceView: View {
     private var suggestedResultName: String {
         let asset = session.assets.first { $0.id == session.selectedAssetID }
         let raw = asset?.displayName ?? "Audio"
-        let base = (raw as NSString).deletingPathExtension
-        let stem = base.isEmpty ? "Audio" : base
-        return "\(stem) – Leveled (\(leveler.activePresetTitle))"
+        return LevelerResultName.suggested(sourceName: raw, presetTitle: leveler.activePresetTitle)
     }
 
     private var outputBinding: Binding<LevelerOutputSettings> {
