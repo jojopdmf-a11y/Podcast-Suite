@@ -166,6 +166,26 @@ final class ProjectSession: ObservableObject {
         importFiles(panel.urls)
     }
 
+    /// Asks first, then removes the file from the depot and saves the project.
+    func deleteAsset(_ asset: DepotAsset) {
+        guard let package else { return }
+        let alert = NSAlert()
+        alert.messageText = "Delete \u{201C}\(asset.displayName)\u{201D} from this project?"
+        alert.informativeText = "The copy inside the project is deleted and the project is saved. Your original file outside the project is not touched. This can't be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do {
+            applyMetadata(to: package)
+            try package.removeAsset(id: asset.id)
+            adopt(package, keepWorkspace: true)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
     /// Navigation only. Does not stop a take — there is no recorder in this build.
     func leaveWorkspace() {
         activeWorkspace = nil

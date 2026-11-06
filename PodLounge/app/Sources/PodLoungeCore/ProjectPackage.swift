@@ -237,6 +237,38 @@ public final class ProjectPackage {
         return asset
     }
 
+    /// Removes an asset from the project: the manifest is saved without it,
+    /// then its copy inside the depot is deleted. Files outside the project
+    /// (the user's originals) are never touched. If the manifest save fails,
+    /// nothing changes on disk or in memory.
+    public func removeAsset(id: String) throws {
+        guard let index = manifest.assets.firstIndex(where: { $0.id == id }) else {
+            throw PackageError.operationFailed("That file is not in this project's depot.")
+        }
+        let asset = manifest.assets[index]
+        let fileURL = try? resolvedURL(for: asset)
+        let snapshot = manifest
+        manifest.assets.remove(at: index)
+        if manifest.selectedAssetID == id {
+            manifest.selectedAssetID = nil
+        }
+        do {
+            try save()
+        } catch {
+            manifest = snapshot
+            throw error
+        }
+        missingAssetIDs.remove(id)
+        mismatchedAssetIDs.remove(id)
+        if let fileURL {
+            let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+            let target = fileURL.standardizedFileURL.resolvingSymlinksInPath()
+            if Self.isInsideOrEqual(target, root: root), target.path != root.path {
+                try? FileManager.default.removeItem(at: fileURL)
+            }
+        }
+    }
+
     public func resolvedURL(for asset: DepotAsset) throws -> URL {
         try Self.locate(relativePath: asset.relativePath, kind: asset.kind, in: rootURL)
     }

@@ -348,3 +348,40 @@ private func expect<T: Error & Equatable>(
     let located = ProjectPackage.locateRoot(from: package.manifestURL)
     #expect(located?.resolvingSymlinksInPath().path == package.rootURL.resolvingSymlinksInPath().path)
 }
+
+@Test func removeAssetDeletesDepotCopyAndSurvivesReopen() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let original = try scratch.file("keep-me.wav", "AUDIO-A")
+    let other = try scratch.file("other.wav", "AUDIO-B")
+    let folder = scratch.root.appendingPathComponent("Delete.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Delete Test")
+    let a = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    let b = try package.importMedia(from: other, kind: .original, producedBy: nil)
+    let copyA = try package.resolvedURL(for: a)
+    #expect(FileManager.default.fileExists(atPath: copyA.path))
+
+    try package.removeAsset(id: a.id)
+    #expect(package.manifest.assets.map(\.id) == [b.id])
+    #expect(package.manifest.selectedAssetID == nil)
+    #expect(!FileManager.default.fileExists(atPath: copyA.path))
+    #expect(FileManager.default.fileExists(atPath: original.path))
+    #expect(FileManager.default.fileExists(atPath: try package.resolvedURL(for: b).path))
+
+    let reopened = try ProjectPackage.open(at: folder)
+    #expect(reopened.manifest.assets.map(\.id) == [b.id])
+}
+
+@Test func removeAssetRollsBackWhenSaveFails() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("a.wav", "AUDIO")
+    let folder = scratch.root.appendingPathComponent("Rollback.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Rollback")
+    let a = try package.importMedia(from: source, kind: .original, producedBy: nil, select: true)
+    package.failNextSaveForTesting = true
+    #expect(throws: (any Error).self) { try package.removeAsset(id: a.id) }
+    #expect(package.manifest.assets.map(\.id) == [a.id])
+    #expect(package.manifest.selectedAssetID == a.id)
+    #expect(FileManager.default.fileExists(atPath: try package.resolvedURL(for: a).path))
+}

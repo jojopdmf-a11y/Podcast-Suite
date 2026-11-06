@@ -96,6 +96,9 @@ struct DepotSidebar: View {
                         .foregroundStyle(LoungeTheme.cyan.opacity(0.85))
                         .lineLimit(2)
                     healthLabel(session.health(of: asset))
+                    Button("Delete from Project") { session.deleteAsset(asset) }
+                        .buttonStyle(LoungeButtonStyle())
+                        .padding(.top, 4)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,6 +185,9 @@ private struct DepotRow: View {
             )
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            Button("Delete from Project…") { session.deleteAsset(asset) }
+        }
         .task(id: asset.id) {
             length = await loadLength()
         }
