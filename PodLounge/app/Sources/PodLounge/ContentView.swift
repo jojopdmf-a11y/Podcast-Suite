@@ -1,8 +1,24 @@
+import AppKit
 import PodLoungeCore
 import SwiftUI
 
+enum DepotChrome {
+    static let minWidth: CGFloat = 260
+    static let maxWidth: CGFloat = 560
+    static let defaultWidth: Double = 332
+    static let widthKey = "podlounge.depotWidth"
+    static let hiddenKey = "podlounge.depotHidden"
+}
+
 struct ContentView: View {
     @EnvironmentObject private var session: ProjectSession
+    @AppStorage(DepotChrome.widthKey) private var depotWidthStorage = DepotChrome.defaultWidth
+    @AppStorage(DepotChrome.hiddenKey) private var depotHidden = false
+    @State private var depotDragStart: CGFloat?
+
+    private var depotWidth: CGFloat {
+        min(DepotChrome.maxWidth, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,9 +39,13 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                DepotSidebar()
-                    .frame(width: 332)
+                if !depotHidden {
+                    DepotSidebar()
+                        .frame(width: depotWidth)
+                        .overlay(alignment: .leading) { depotResizeHandle }
+                }
             }
+            .animation(.easeInOut(duration: 0.18), value: depotHidden)
         }
         .background(LoungeTheme.background)
         .foregroundStyle(LoungeTheme.text)
@@ -133,10 +153,48 @@ struct ContentView: View {
             Button("Save As") { session.saveAs() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.package == nil)
+            Button(depotHidden ? "Show Depot" : "Hide Depot") {
+                depotHidden.toggle()
+            }
+            .buttonStyle(LoungeButtonStyle())
+            .help(depotHidden ? "Show the project depot" : "Hide the project depot")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(LoungeTheme.backgroundRaised)
+    }
+
+    private var depotResizeHandle: some View {
+        ZStack {
+            Rectangle()
+                .fill(Color.clear)
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                .fill(LoungeTheme.cyan.opacity(0.55))
+                .frame(width: 3, height: 36)
+        }
+        .frame(width: 10)
+        .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if depotDragStart == nil { depotDragStart = depotWidth }
+                        let next = (depotDragStart ?? depotWidth) - value.translation.width
+                        let clamped = min(DepotChrome.maxWidth, max(DepotChrome.minWidth, next))
+                        depotWidthStorage = Double(clamped)
+                    }
+                    .onEnded { _ in
+                        depotDragStart = nil
+                    }
+            )
+            .onHover { inside in
+                if inside {
+                    NSCursor.resizeLeftRight.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .help("Drag to resize the depot")
+            .accessibilityLabel("Resize depot")
     }
 }
 
