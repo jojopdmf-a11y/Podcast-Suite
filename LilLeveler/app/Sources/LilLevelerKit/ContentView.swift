@@ -55,20 +55,18 @@ public struct LevelerRootView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            chrome
+        Group {
             if mode == .lounge {
-                LevelerOutputPanel(
-                    session: session,
-                    settings: $output,
-                    resultName: resultName,
-                    followsSource: resultNameFollowsSource,
-                    primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
-                    primaryHelp: "Render the leveled file into the project. The original is not changed.",
-                    primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
-                    primaryAction: saveToDepot
-                )
-                .frame(width: LevelerLayout.windowWidth)
+                loungeLayout
+                    .onDisappear { session.stopPlayback() }
+                    .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
+                        showAbout = true
+                    }
+                    .onExitCommand {
+                        if showAbout { showAbout = false }
+                    }
+            } else {
+                chrome
             }
         }
         .onChange(of: session.preset) { _, _ in onControlsChanged?() }
@@ -78,6 +76,100 @@ public struct LevelerRootView: View {
         .onChange(of: session.meterMode) { _, _ in onControlsChanged?() }
         .onChange(of: session.peakHold) { _, _ in onControlsChanged?() }
         .onChange(of: session.playAfter) { _, _ in onControlsChanged?() }
+    }
+
+    /// One screen inside Pod Lounge: presets, meters and loudness, output column.
+    /// The fixed `LevelerLayout` window stays on the standalone app.
+    private var loungeLayout: some View {
+        ZStack {
+            VStack(alignment: .leading, spacing: 6) {
+                header
+                GeometryReader { geo in
+                    loungeColumns(in: geo.size)
+                }
+            }
+            .padding(8)
+
+            if showAbout {
+                aboutOverlay
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background { levelerBackdrop }
+        .preferredColorScheme(.dark)
+    }
+
+    private func loungeColumns(in size: CGSize) -> some View {
+        let gap: CGFloat = 8
+        let outputW = min(270, max(214, size.width * 0.27))
+        let presetW = min(200, max(148, size.width * 0.19))
+        return HStack(alignment: .top, spacing: gap) {
+            if session.sourceURL == nil {
+                loungeEmpty
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                presetColumn
+                    .frame(width: presetW)
+                loungeCenter
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            loungeOutput
+                .frame(width: outputW)
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+    }
+
+    private var loungeCenter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            fileRow
+                .fixedSize(horizontal: false, vertical: true)
+            DorroughMeterDeck(session: session, compact: true)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minHeight: 148, maxHeight: 250)
+                .layoutPriority(-1)
+            LoudnessCompareBoard(
+                before: session.before,
+                after: session.after,
+                hasResult: session.hasResult,
+                targetLUFS: session.activeTargetLUFS,
+                targetTP: session.activeTruePeak,
+                isMaximizer: session.preset.isMaximizer,
+                maximizerMakeupDb: session.musicMakeupDb,
+                compact: true
+            )
+            .fixedSize(horizontal: false, vertical: true)
+            transportRow
+                .fixedSize(horizontal: false, vertical: true)
+            statusBar
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var loungeOutput: some View {
+        LevelerOutputPanel(
+            session: session,
+            settings: $output,
+            resultName: resultName,
+            followsSource: resultNameFollowsSource,
+            primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
+            primaryHelp: "Render the leveled file into the project. The original is not changed.",
+            primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
+            primaryAction: saveToDepot,
+            fillsColumn: true
+        )
+    }
+
+    private var levelerBackdrop: some View {
+        ZStack {
+            LevelerTheme.windowBackground
+            RadialGradient(
+                colors: [LevelerTheme.cyan.opacity(0.06), .clear],
+                center: .top,
+                startRadius: 10,
+                endRadius: 480
+            )
+        }
     }
 
     private var chrome: some View {
@@ -107,17 +199,7 @@ public struct LevelerRootView: View {
         // Keep this view in the title-bar safe area. Ignoring safe area here
         // slides PODLEVELER under the traffic lights and clips the status line.
         .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
-        .background {
-            ZStack {
-                LevelerTheme.windowBackground
-                RadialGradient(
-                    colors: [LevelerTheme.cyan.opacity(0.06), .clear],
-                    center: .top,
-                    startRadius: 10,
-                    endRadius: 480
-                )
-            }
-        }
+        .background { levelerBackdrop }
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
@@ -133,26 +215,29 @@ public struct LevelerRootView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
+        let lounge = mode == .lounge
+        return HStack(alignment: .center, spacing: lounge ? 8 : 10) {
+            VStack(alignment: .leading, spacing: lounge ? 1 : 3) {
                 Text("PODLEVELER")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .tracking(1.1)
+                    .font(.system(size: lounge ? 16 : 22, weight: .bold, design: .rounded))
+                    .tracking(lounge ? 0.8 : 1.1)
                     .foregroundStyle(LevelerTheme.cyan)
                     .shadow(color: LevelerTheme.cyan.opacity(0.35), radius: 6)
                     .lineLimit(1)
-                    .padding(.vertical, 2)
-                    .fixedSize()
+                    .padding(.vertical, lounge ? 0 : 2)
+                    .fixedSize(horizontal: !lounge, vertical: true)
                 Text("Final mix → platform loudness")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: lounge ? 10 : 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                     .lineLimit(1)
-                    .fixedSize()
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: !lounge, vertical: true)
                 Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(.system(size: lounge ? 9 : 10, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary.opacity(0.85))
                     .lineLimit(1)
-                    .fixedSize()
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: !lounge, vertical: true)
             }
             .layoutPriority(1)
 
@@ -308,15 +393,33 @@ public struct LevelerRootView: View {
     }
 
     private var presetColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let lounge = mode == .lounge
+        return VStack(alignment: .leading, spacing: lounge ? 6 : 8) {
             Text("PLATFORM TARGET LEVEL")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(.system(size: lounge ? 9 : 10, weight: .bold, design: .rounded))
                 .tracking(0.6)
                 .foregroundStyle(LevelerTheme.cyanDim)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+            if lounge {
+                ViewThatFits(in: .vertical) {
+                    presetList
+                    ScrollView { presetList }
+                }
+            } else {
+                ScrollView { presetList }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(lounge ? 8 : 12)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .levelerPanel(glow: true)
+    }
+
+    private var presetList: some View {
+        let lounge = mode == .lounge
+        return VStack(alignment: .leading, spacing: lounge ? 4 : 8) {
                     ForEach(session.listedPresets) { p in
                         HStack(spacing: 6) {
                             Button {
@@ -331,8 +434,8 @@ public struct LevelerRootView: View {
                                         .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom.opacity(0.75) : LevelerTheme.textSecondary)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, mode == .lounge ? 8 : 10)
+                                .padding(.vertical, mode == .lounge ? 4 : 8)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(session.preset.id == p.id ? LevelerTheme.lime : LevelerTheme.panelRaised)
@@ -392,14 +495,7 @@ public struct LevelerRootView: View {
                         }
                         .padding(.top, 4)
                     }
-                }
-            }
-
-            Spacer(minLength: 0)
         }
-        .padding(12)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .levelerPanel(glow: true)
     }
 
     /// L1-style: one threshold slider + a readable GR meter. Ceiling is fixed.
@@ -475,14 +571,16 @@ public struct LevelerRootView: View {
                 Text(String(format: "GAIN %+.1f dB", session.appliedGainDb))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.lime)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
-        .padding(12)
+        .padding(mode == .lounge ? 8 : 12)
         .levelerPanel()
     }
 
     private var transportRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: mode == .lounge ? 6 : 10) {
             HStack(spacing: 12) {
                 Button(session.isPlaying ? "PAUSE" : "PLAY") {
                     session.togglePlayback()
@@ -534,7 +632,7 @@ public struct LevelerRootView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: mode == .lounge ? 112 : 150)
                 .disabled(!session.canListenPost)
                 .help("PRE is the file you dropped. POST is the live maximizer (MUSIC LOUD) or the leveled file. Time stays put when you flip.")
 
@@ -542,9 +640,8 @@ public struct LevelerRootView: View {
                     .buttonStyle(LevelerGhostButtonStyle())
                     .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
 
-                Spacer()
-
                 if mode == .application {
+                    Spacer()
                     Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
                         showExportOptions = true
                     }
@@ -554,7 +651,7 @@ public struct LevelerRootView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(mode == .lounge ? 8 : 12)
         .levelerPanel()
     }
 

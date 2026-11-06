@@ -11,6 +11,8 @@ struct LevelerOutputPanel: View {
     var primaryHelp: String
     var primaryDisabled: Bool
     var primaryAction: () -> Void
+    /// Stretch the card and pin the save button to the bottom of the Lounge column.
+    var fillsColumn: Bool = false
 
     private var sourceRate: Double {
         session.sourceSampleRate > 0 ? session.sourceSampleRate : 48_000
@@ -21,7 +23,7 @@ struct LevelerOutputPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: fillsColumn ? 8 : 10) {
             Text("OUTPUT")
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(0.6)
@@ -88,7 +90,8 @@ struct LevelerOutputPanel: View {
                         .foregroundStyle(LevelerTheme.cyanDim)
                     TextField("Result name", text: resultNameBinding(resultName))
                         .textFieldStyle(.plain)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .lineLimit(1)
                         .foregroundStyle(LevelerTheme.textPrimary)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 8)
@@ -101,6 +104,10 @@ struct LevelerOutputPanel: View {
                                 .stroke(LevelerTheme.cyan.opacity(0.35), lineWidth: 1)
                         )
                 }
+            }
+
+            if fillsColumn {
+                Spacer(minLength: 8)
             }
 
             if session.isBusy, session.renderFraction > 0 {
@@ -117,7 +124,8 @@ struct LevelerOutputPanel: View {
                 .disabled(primaryDisabled || settings.container == .mp3)
                 .help(primaryHelp)
         }
-        .padding(12)
+        .padding(fillsColumn ? 10 : 12)
+        .frame(maxWidth: .infinity, maxHeight: fillsColumn ? .infinity : nil, alignment: .top)
         .levelerPanel(glow: true)
         .onChange(of: settings.container) { _, container in
             guard container == .m4a else { return }
@@ -137,9 +145,13 @@ struct LevelerOutputPanel: View {
             VStack(spacing: 2) {
                 Text(container.title)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 if container == .mp3 {
                     Text("coming next")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -170,9 +182,13 @@ struct LevelerOutputPanel: View {
             VStack(spacing: 2) {
                 Text(title)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
                 if let detail {
                     Text(detail)
                         .font(.system(size: 8, weight: .medium, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
             }
             .frame(maxWidth: .infinity)

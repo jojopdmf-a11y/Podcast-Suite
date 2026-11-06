@@ -10,38 +10,38 @@ struct LimiterWorkspaceView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .center, spacing: 14) {
+            HStack(alignment: .center, spacing: 10) {
                 Button("← Lounge") { session.leaveWorkspace() }
                     .buttonStyle(LoungeButtonStyle())
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text("Limiter")
-                        .font(.system(size: 22, weight: .semibold))
+                        .font(.system(size: 18, weight: .semibold))
                     Text("The selected depot file is the source. Pick another in the list without leaving. Back to Lounge stops playback.")
-                        .font(.system(size: 12))
+                        .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.65)
                 }
                 Spacer(minLength: 8)
             }
-            .padding(.horizontal, 18)
-            .padding(.top, 14)
-            .padding(.bottom, 6)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
 
-            ScrollView([.vertical, .horizontal]) {
-                LevelerRootView(
-                    session: leveler,
-                    mode: .lounge,
-                    output: outputBinding,
-                    resultName: resultNameBinding,
-                    resultNameFollowsSource: followsBinding,
-                    onSaveToDepot: { url, name in
-                        try session.importLimiterResult(from: url, displayName: name)
-                    },
-                    onControlsChanged: syncControls
-                )
-                .padding(.horizontal, 18)
-                .padding(.bottom, 22)
-            }
+            LevelerRootView(
+                session: leveler,
+                mode: .lounge,
+                output: outputBinding,
+                resultName: resultNameBinding,
+                resultNameFollowsSource: followsBinding,
+                onSaveToDepot: { url, name in
+                    try session.importLimiterResult(from: url, displayName: name)
+                },
+                onControlsChanged: syncControls
+            )
+            .padding(.horizontal, 8)
+            .padding(.bottom, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
