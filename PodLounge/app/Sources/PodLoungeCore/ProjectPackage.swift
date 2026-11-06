@@ -237,6 +237,62 @@ public final class ProjectPackage {
         return asset
     }
 
+    /// Copies a rendered file into `depot/results` and selects it.
+    /// The source file is only read. A second atomic save stores the display name.
+    @discardableResult
+    public func importResult(
+        from source: URL,
+        producedBy: String,
+        displayName: String
+    ) throws -> DepotAsset {
+        let asset = try importMedia(from: source, kind: .result, producedBy: producedBy, select: true)
+        let cleaned = Self.sanitizedDisplayName(displayName)
+        guard let index = manifest.assets.firstIndex(where: { $0.id == asset.id }) else {
+            return asset
+        }
+        if manifest.assets[index].displayName == cleaned {
+            return manifest.assets[index]
+        }
+        let previousName = manifest.assets[index].displayName
+        manifest.assets[index].displayName = cleaned
+        do {
+            try save()
+        } catch {
+            manifest.assets[index].displayName = previousName
+            throw error
+        }
+        return manifest.assets[index]
+    }
+
+    public var limiterSettingsURL: URL {
+        Self.appending("workspaces/limiter.json", to: rootURL)
+    }
+
+    /// `{}` and unreadable files become defaults. Opening a project never fails on this file.
+    public func readLimiterSettings() -> LimiterWorkspaceSettings {
+        guard let data = try? Data(contentsOf: limiterSettingsURL), !data.isEmpty else {
+            return .defaults
+        }
+        let trimmed = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "{}" { return .defaults }
+        return (try? JSONDecoder().decode(LimiterWorkspaceSettings.self, from: data)) ?? .defaults
+    }
+
+    public func writeLimiterSettings(_ settings: LimiterWorkspaceSettings) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        let data = try encoder.encode(settings)
+        var text = String(decoding: data, as: UTF8.self)
+        if !text.hasSuffix("\n") { text += "\n" }
+        do {
+            try AtomicFile.write(Data(text.utf8), to: limiterSettingsURL)
+        } catch let error as PackageError {
+            throw error
+        } catch {
+            throw PackageError.atomicWriteFailed(error.localizedDescription)
+        }
+    }
+
     /// Removes an asset from the project: the manifest is saved without it,
     /// then its copy inside the depot is deleted. Files outside the project
     /// (the user's originals) are never touched. If the manifest save fails,
@@ -472,7 +528,11 @@ public final class ProjectPackage {
     }
 
     static func displayName(for source: URL) -> String {
-        let scalars = source.lastPathComponent.unicodeScalars.filter { scalar in
+        sanitizedDisplayName(source.lastPathComponent)
+    }
+
+    static func sanitizedDisplayName(_ raw: String) -> String {
+        let scalars = raw.unicodeScalars.filter { scalar in
             scalar != "/" && scalar != "\\" && !CharacterSet.controlCharacters.contains(scalar)
         }
         let text = String(String.UnicodeScalarView(scalars)).trimmingCharacters(in: .whitespacesAndNewlines)

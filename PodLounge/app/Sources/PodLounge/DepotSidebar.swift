@@ -122,7 +122,7 @@ struct DepotSidebar: View {
             Button("Save Result") {}
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(true)
-            Text("Save Result stays off until a tool can write a finished file into depot/results.")
+            Text("In Limiter, Save Result to Depot adds a new file under depot/results. The original is not changed.")
                 .font(.system(size: 11))
                 .foregroundStyle(LoungeTheme.textDim)
                 .fixedSize(horizontal: false, vertical: true)

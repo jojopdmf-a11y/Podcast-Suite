@@ -10,6 +10,12 @@ let package = Package(
         .library(name: "PodLoungeCore", targets: ["PodLoungeCore"]),
         .executable(name: "PodLounge", targets: ["PodLounge"]),
     ],
+    dependencies: [
+        // The package lives in LilLeveler/app. Depending on that folder directly
+        // would name it "app", which collides with this package. The symlink
+        // gives it its own name.
+        .package(path: "../../LilLeveler/LilLevelerKit"),
+    ],
     targets: [
         .target(
             name: "PodLoungeCore",
@@ -17,7 +23,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PodLounge",
-            dependencies: ["PodLoungeCore"],
+            dependencies: [
+                "PodLoungeCore",
+                .product(name: "LilLevelerKit", package: "LilLevelerKit"),
+            ],
             path: "Sources/PodLounge",
             resources: [
                 .process("Resources"),

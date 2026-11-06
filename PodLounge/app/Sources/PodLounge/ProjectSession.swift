@@ -24,14 +24,22 @@ final class ProjectSession: ObservableObject {
     @Published var alertMessage: String?
     @Published var confirmDiscard = false
     @Published var showAbout = false
+    @Published var limiterSettings = LimiterWorkspaceSettings.defaults
+
+    /// Set by the Limiter workspace so leaving the card stops playback.
+    var endLimiterPlayback: (() -> Void)?
 
     private var pending: PendingNavigation?
     private var savedName = ""
     private var savedNotes: [WorkspaceID: String] = [:]
     private var savedSelection: String?
+    private var savedLimiterSettings = LimiterWorkspaceSettings.defaults
 
     var isDirty: Bool {
-        projectName != savedName || notes != savedNotes || selectedAssetID != savedSelection
+        projectName != savedName
+            || notes != savedNotes
+            || selectedAssetID != savedSelection
+            || limiterSettings != savedLimiterSettings
     }
 
     var assets: [DepotAsset] {
@@ -114,6 +122,7 @@ final class ProjectSession: ObservableObject {
             throw PackageError.operationFailed("Create or open a project before saving.")
         }
         applyMetadata(to: package)
+        try package.writeLimiterSettings(limiterSettings)
         try package.save()
         markClean()
         missingAssetIDs = package.missingAssetIDs
@@ -136,6 +145,12 @@ final class ProjectSession: ObservableObject {
         do {
             applyMetadata(to: package)
             let copy = try package.saveAs(to: folder)
+            do {
+                try copy.writeLimiterSettings(limiterSettings)
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw error
+            }
             // The copy takes the name typed in the Save As box, so the
             // project name at the top of the Lounge matches the new file.
             copy.manifest.projectName = folder.deletingPathExtension().lastPathComponent
@@ -179,6 +194,7 @@ final class ProjectSession: ObservableObject {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         do {
             applyMetadata(to: package)
+            try package.writeLimiterSettings(limiterSettings)
             try package.removeAsset(id: asset.id)
             adopt(package, keepWorkspace: true)
         } catch {
@@ -186,9 +202,25 @@ final class ProjectSession: ObservableObject {
         }
     }
 
-    /// Navigation only. Does not stop a take — there is no recorder in this build.
+    /// Navigation only. Stops Limiter playback. Does not delete depot audio.
+    /// Does not stop a Fixer take — there is no recorder in this build.
     func leaveWorkspace() {
+        if activeWorkspace == .limiter {
+            endLimiterPlayback?()
+        }
         activeWorkspace = nil
+    }
+
+    /// Renders nothing itself. The Limiter workspace passes a finished file.
+    /// The original depot bytes are not rewritten.
+    func importLimiterResult(from url: URL, displayName: String) throws {
+        guard let package else {
+            throw PackageError.operationFailed("Create or open a project before saving a result.")
+        }
+        applyMetadata(to: package)
+        try package.writeLimiterSettings(limiterSettings)
+        _ = try package.importResult(from: url, producedBy: "limiter", displayName: displayName)
+        adopt(package, keepWorkspace: true)
     }
 
     // MARK: - Private
@@ -236,6 +268,7 @@ final class ProjectSession: ObservableObject {
     private func importFiles(_ urls: [URL]) {
         guard let package else { return }
         applyMetadata(to: package)
+        try? package.writeLimiterSettings(limiterSettings)
         var failures: [String] = []
         var importedAny = false
         for url in urls {
@@ -267,6 +300,9 @@ final class ProjectSession: ObservableObject {
 
     private func adopt(_ package: ProjectPackage, keepWorkspace: Bool = false) {
         let workspace = keepWorkspace ? activeWorkspace : nil
+        if activeWorkspace == .limiter, workspace != .limiter {
+            endLimiterPlayback?()
+        }
         self.package = package
         projectName = package.manifest.projectName
         var nextNotes: [WorkspaceID: String] = [:]
@@ -275,6 +311,7 @@ final class ProjectSession: ObservableObject {
         }
         notes = nextNotes
         selectedAssetID = package.manifest.selectedAssetID
+        limiterSettings = package.readLimiterSettings()
         missingAssetIDs = package.missingAssetIDs
         mismatchedAssetIDs = package.mismatchedAssetIDs
         activeWorkspace = workspace
@@ -285,12 +322,14 @@ final class ProjectSession: ObservableObject {
         savedName = projectName
         savedNotes = notes
         savedSelection = selectedAssetID
+        savedLimiterSettings = limiterSettings
     }
 
     private func discardUnsavedEdits() {
         projectName = savedName
         notes = savedNotes
         selectedAssetID = savedSelection
+        limiterSettings = savedLimiterSettings
         guard let package else { return }
         package.manifest.projectName = savedName
         package.manifest.selectedAssetID = savedSelection

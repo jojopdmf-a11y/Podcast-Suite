@@ -13,7 +13,11 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 Group {
                     if let workspace = session.activeWorkspace {
-                        WorkspaceScaffoldView(workspace: workspace)
+                        if workspace == .limiter {
+                            LimiterWorkspaceView()
+                        } else {
+                            WorkspaceScaffoldView(workspace: workspace)
+                        }
                     } else {
                         LoungeHomeView()
                     }
@@ -34,7 +38,7 @@ struct ContentView: View {
         .alert("About Pod Lounge", isPresented: aboutIsPresented) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. This build stores a project package and opens workspace scaffolds. It does not record or process audio.")
+            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Limiter levels the selected depot file and can save a new result. Stripper, Fixer, and Trimmer do not process audio in this build.")
         }
         .confirmationDialog(
             "This project has unsaved changes.",
@@ -45,7 +49,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest only. Depot audio stays as it is.")
+            Text("Save Project writes the manifest and Limiter settings. It does not rewrite depot audio.")
         }
     }
 

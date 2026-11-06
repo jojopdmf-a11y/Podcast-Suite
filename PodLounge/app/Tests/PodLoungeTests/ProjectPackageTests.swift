@@ -372,6 +372,82 @@ private func expect<T: Error & Equatable>(
     #expect(reopened.manifest.assets.map(\.id) == [b.id])
 }
 
+@Test func limiterSettingsRoundTripAndOldProjectsOpen() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let folder = scratch.root.appendingPathComponent("Show.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Show")
+    #expect(package.readLimiterSettings() == .defaults)
+    let stub = try String(contentsOf: package.limiterSettingsURL, encoding: .utf8)
+    #expect(stub == "{}\n")
+
+    var settings = LimiterWorkspaceSettings.defaults
+    settings.presetID = "spotify"
+    settings.customLUFS = -14
+    settings.customTruePeak = -1
+    settings.musicThresholdDb = -6
+    settings.meterMode = "RMS"
+    settings.peakHold = false
+    settings.listenPost = true
+    settings.container = "aiff"
+    settings.bitDepth = "16"
+    settings.sampleRate = 96_000
+    settings.resultName = "Episode – Leveled (SPOTIFY).aiff"
+    settings.resultNameFollowsSource = false
+    try package.writeLimiterSettings(settings)
+
+    let reopened = try ProjectPackage.open(at: folder)
+    #expect(reopened.readLimiterSettings() == settings)
+    #expect(reopened.manifest.projectName == "Show")
+
+    try Data("{}\n".utf8).write(to: reopened.limiterSettingsURL)
+    let empty = try ProjectPackage.open(at: folder)
+    #expect(empty.readLimiterSettings() == .defaults)
+
+    try Data("{\"presetID\":\"apple\"}".utf8).write(to: empty.limiterSettingsURL)
+    let partial = try ProjectPackage.open(at: folder)
+    let partialSettings = partial.readLimiterSettings()
+    #expect(partialSettings.presetID == "apple")
+    #expect(partialSettings.bitDepth == "24")
+    #expect(partialSettings.container == "wav")
+    #expect(partialSettings.sampleRate == nil)
+
+    try Data("not-json".utf8).write(to: partial.limiterSettingsURL)
+    let broken = try ProjectPackage.open(at: folder)
+    #expect(broken.readLimiterSettings() == .defaults)
+    #expect(broken.manifest.projectName == "Show")
+}
+
+@Test func importResultAddsAssetAndLeavesOriginalUntouched() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let original = try scratch.file("episode.wav", "ORIGINAL-BYTES")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let source = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    let originalURL = try package.resolvedURL(for: source)
+    let originalBytes = try Data(contentsOf: originalURL)
+    let rendered = try scratch.file("rendered.wav", "LEVELED-BYTES")
+    let result = try package.importResult(
+        from: rendered,
+        producedBy: "limiter",
+        displayName: "Episode – Leveled (UNIVERSAL).wav"
+    )
+    #expect(result.kind == .result)
+    #expect(result.producedBy == "limiter")
+    #expect(result.displayName == "Episode – Leveled (UNIVERSAL).wav")
+    #expect(result.relativePath == "depot/results/\(result.id).wav")
+    #expect(package.manifest.selectedAssetID == result.id)
+    #expect(package.manifest.assets.count == 2)
+    #expect(try Data(contentsOf: package.resolvedURL(for: result)) == Data("LEVELED-BYTES".utf8))
+    #expect(try Data(contentsOf: originalURL) == originalBytes)
+    #expect(try Data(contentsOf: original) == Data("ORIGINAL-BYTES".utf8))
+
+    let reopened = try ProjectPackage.open(at: package.rootURL)
+    #expect(reopened.manifest.assets.map(\.id) == [source.id, result.id])
+    #expect(reopened.manifest.selectedAssetID == result.id)
+    #expect(try Data(contentsOf: reopened.resolvedURL(for: source)) == originalBytes)
+}
+
 @Test func removeAssetRollsBackWhenSaveFails() throws {
     let scratch = try Scratch()
     defer { scratch.cleanup() }
