@@ -7,7 +7,7 @@ PodStudio is three processing apps plus one shared Python engine, and a Pod Loun
 | `Podcast Stripper/` | **PodStripper** | One mixed episode → one aligned track per speaker + a Music/SFX track. Has a Python engine (`engine/`) and a SwiftUI app (`app/`). |
 | `FixerMixer/` | **PodProducer** | Stems → polish → bounce. SwiftUI app only. |
 | `LilLeveler/` | **PodLeveler** | Final mix → platform loudness. SwiftUI app only. |
-| `PodLounge/` | **Pod Lounge** | Project home for Stripper, Fixer, Trimmer, and Limiter. SwiftUI shell and a `.podlounge` package. No processing engine. |
+| `PodLounge/` | **Pod Lounge** | Project home for Stripper, Fixer, Trimmer, and Limiter. SwiftUI shell and a `.podlounge` package. The Limiter workspace hosts PodLeveler (loudness, true peak, playback, and saving a result into the depot). |
 
 Folder names on disk intentionally differ from the product names; do not rename them (updates and saved files depend on the paths).
 
@@ -73,7 +73,7 @@ cd FixerMixer/app && swift build -c release --product FixerMixer
 cd LilLeveler/app && swift build -c release --product LilLeveler
 ./scripts/build_app.sh          # -> LilLeveler/dist/PodLeveler.app
 
-# Pod Lounge (project shell — no engine)
+# Pod Lounge (Limiter hosts PodLeveler)
 cd PodLounge/app && swift test
 ./scripts/build_app.sh          # -> PodLounge/dist/PodLounge.app
 ```
