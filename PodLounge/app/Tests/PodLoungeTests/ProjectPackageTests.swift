@@ -1,0 +1,387 @@
+import Foundation
+import Testing
+@testable import PodLoungeCore
+
+struct Scratch {
+    let root: URL
+    private let fm = FileManager.default
+
+    init() throws {
+        root = fm.temporaryDirectory.appendingPathComponent("podlounge-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    func cleanup() {
+        try? fm.removeItem(at: root)
+    }
+
+    func file(_ name: String, _ contents: String, in directory: URL? = nil) throws -> URL {
+        let folder = directory ?? root
+        if folder != root {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        let url = folder.appendingPathComponent(name)
+        try Data(contents.utf8).write(to: url)
+        return url
+    }
+
+    func manifestData(_ package: ProjectPackage) throws -> Data {
+        try Data(contentsOf: package.manifestURL)
+    }
+}
+
+private func expect<T: Error & Equatable>(
+    _ expected: T,
+    _ body: () throws -> Void
+) {
+    do {
+        try body()
+        Issue.record("Expected \(expected) to be thrown")
+    } catch let error as T {
+        #expect(error == expected)
+    } catch {
+        Issue.record("Unexpected error \(error)")
+    }
+}
+
+@Test func createSaveReopenRoundTripsMetadata() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let folder = scratch.root.appendingPathComponent("Morning.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Morning Show")
+    #expect(package.manifest.formatVersion == PackageLayout.formatVersion)
+    #expect(FileManager.default.fileExists(atPath: package.rootURL.appendingPathComponent("recovery").path))
+    #expect(FileManager.default.fileExists(atPath: package.rootURL.appendingPathComponent("depot/results").path))
+    let stub = try String(contentsOf: package.rootURL.appendingPathComponent("workspaces/fixer.json"), encoding: .utf8)
+    #expect(stub == "{}\n")
+
+    package.manifest.projectName = "Morning Show Ep. 12"
+    package.manifest.workspaceSettings["fixer"] = WorkspaceSettings(notes: "stay until stop")
+    try package.save()
+
+    let names = try FileManager.default.contentsOfDirectory(atPath: package.rootURL.path)
+    #expect(names.allSatisfy { !$0.contains(".tmp") })
+
+    let reopened = try ProjectPackage.open(at: folder)
+    #expect(reopened.manifest.projectName == "Morning Show Ep. 12")
+    #expect(reopened.manifest.formatVersion == 1)
+    #expect(reopened.manifest.workspaceSettings["fixer"]?.notes == "stay until stop")
+    #expect(reopened.manifest.assets.isEmpty)
+    let stubAfter = try String(contentsOf: reopened.rootURL.appendingPathComponent("workspaces/fixer.json"), encoding: .utf8)
+    #expect(stubAfter == "{}\n")
+}
+
+@Test func saveDoesNotRewriteOrCopyAudio() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("episode.wav", "original-bytes")
+    let sourceBytes = try Data(contentsOf: source)
+    let sourceDate = try FileManager.default.attributesOfItem(atPath: source.path)[.modificationDate] as? Date
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil, select: true)
+    let depotURL = try package.resolvedURL(for: asset)
+    let depotBytes = try Data(contentsOf: depotURL)
+    let depotDate = try FileManager.default.attributesOfItem(atPath: depotURL.path)[.modificationDate] as? Date
+    #expect(depotBytes == sourceBytes)
+    #expect(try Data(contentsOf: source) == sourceBytes)
+    #expect(try FileManager.default.attributesOfItem(atPath: source.path)[.modificationDate] as? Date == sourceDate)
+
+    package.manifest.projectName = "Show renamed"
+    try package.save()
+    try package.save()
+
+    #expect(try Data(contentsOf: depotURL) == depotBytes)
+    #expect(try FileManager.default.attributesOfItem(atPath: depotURL.path)[.modificationDate] as? Date == depotDate)
+    let originals = try FileManager.default.contentsOfDirectory(
+        at: package.rootURL.appendingPathComponent("depot/originals"),
+        includingPropertiesForKeys: nil
+    )
+    #expect(originals.count == 1)
+    #expect(originals[0].lastPathComponent == "\(asset.id).wav")
+    let raw = try String(contentsOf: package.manifestURL, encoding: .utf8)
+    #expect(raw.contains("depot/originals/\(asset.id).wav"))
+    #expect(!raw.contains(source.deletingLastPathComponent().path))
+    #expect(!raw.hasPrefix("/"))
+    #expect(!raw.contains("\"relativePath\" : \"/"))
+}
+
+@Test func sameDisplayNameImportsDoNotClobber() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let first = try scratch.file("episode.wav", "alpha-take", in: scratch.root.appendingPathComponent("a"))
+    let second = try scratch.file("episode.wav", "beta-take", in: scratch.root.appendingPathComponent("b"))
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let alpha = try package.importMedia(from: first, kind: .original, producedBy: nil)
+    let beta = try package.importMedia(from: second, kind: .original, producedBy: nil)
+
+    #expect(alpha.id != beta.id)
+    #expect(alpha.displayName == "episode.wav")
+    #expect(beta.displayName == "episode.wav")
+    #expect(alpha.relativePath != beta.relativePath)
+    #expect(try Data(contentsOf: package.resolvedURL(for: alpha)) == Data("alpha-take".utf8))
+    #expect(try Data(contentsOf: package.resolvedURL(for: beta)) == Data("beta-take".utf8))
+    #expect(try Data(contentsOf: first) == Data("alpha-take".utf8))
+    #expect(try Data(contentsOf: second) == Data("beta-take".utf8))
+
+    let resultSource = try scratch.file("bounce.wav", "limited")
+    let result = try package.importMedia(from: resultSource, kind: .result, producedBy: "limiter")
+    #expect(result.relativePath == "depot/results/\(result.id).wav")
+    #expect(result.producedBy == "limiter")
+    #expect(try Data(contentsOf: package.resolvedURL(for: result)) == Data("limited".utf8))
+
+    let odd = try scratch.file("clip.not an ext", "odd-bytes")
+    let stored = try package.importMedia(from: odd, kind: .original, producedBy: nil)
+    #expect(stored.relativePath.hasSuffix(".bin"))
+    #expect(stored.displayName == "clip.not an ext")
+}
+
+@Test func relativePathsSurviveSaveAsAndMove() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("intro.wav", "intro-bytes")
+    let originalURL = scratch.root.appendingPathComponent("Show.podlounge")
+    let package = try ProjectPackage.create(at: originalURL, name: "Original")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    let relative = asset.relativePath
+    #expect(!relative.hasPrefix("/"))
+    #expect(!relative.contains(".."))
+
+    package.manifest.projectName = "Renamed in memory"
+    let copyURL = scratch.root.appendingPathComponent("nested/Copy.podlounge")
+    try FileManager.default.createDirectory(at: copyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let copy = try package.saveAs(to: copyURL)
+    #expect(copy.manifest.projectName == "Renamed in memory")
+    #expect(copy.manifest.assets[0].relativePath == relative)
+    #expect(try Data(contentsOf: copy.resolvedURL(for: copy.manifest.assets[0])) == Data("intro-bytes".utf8))
+
+    let originalReopened = try ProjectPackage.open(at: originalURL)
+    #expect(originalReopened.manifest.projectName == "Original")
+    #expect(try Data(contentsOf: originalReopened.resolvedURL(for: originalReopened.manifest.assets[0])) == Data("intro-bytes".utf8))
+
+    let moved = scratch.root.appendingPathComponent("Moved.podlounge")
+    try FileManager.default.moveItem(at: copyURL, to: moved)
+    let reopened = try ProjectPackage.open(at: moved)
+    #expect(reopened.manifest.assets[0].relativePath == relative)
+    #expect(try Data(contentsOf: reopened.resolvedURL(for: reopened.manifest.assets[0])) == Data("intro-bytes".utf8))
+    let raw = try String(contentsOf: reopened.manifestURL, encoding: .utf8)
+    #expect(!raw.contains(moved.path))
+}
+
+@Test func unknownSchemaAndMalformedManifestAreLeftUntouched() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let folder = scratch.root.appendingPathComponent("Show.podlounge")
+    _ = try ProjectPackage.create(at: folder, name: "Show")
+
+    let future = """
+    {
+      "formatVersion" : 99,
+      "projectName" : "Future"
+    }
+    """
+    let futureURL = folder.appendingPathComponent("manifest.json")
+    try Data(future.utf8).write(to: futureURL)
+    let futureBytes = try Data(contentsOf: futureURL)
+    expect(PackageError.unsupportedFormatVersion(found: 99, supported: 1)) {
+        _ = try ProjectPackage.open(at: folder)
+    }
+    #expect(try Data(contentsOf: futureURL) == futureBytes)
+
+    let broken = Data("{\"formatVersion\":".utf8)
+    try broken.write(to: futureURL)
+    expect(PackageError.malformedManifest("manifest.json is not JSON with a formatVersion.")) {
+        _ = try ProjectPackage.open(at: folder)
+    }
+    #expect(try Data(contentsOf: futureURL) == broken)
+
+    let missingFields = Data("{\"formatVersion\":1}".utf8)
+    try missingFields.write(to: futureURL)
+    do {
+        _ = try ProjectPackage.open(at: folder)
+        Issue.record("Expected a malformed manifest")
+    } catch is PackageError {
+        #expect(try Data(contentsOf: futureURL) == missingFields)
+    } catch {
+        Issue.record("Unexpected error \(error)")
+    }
+
+    let escape = """
+    {
+      "assets" : [
+        {
+          "byteCount" : 4,
+          "displayName" : "secret.txt",
+          "id" : "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+          "importedAt" : "2026-01-01T00:00:00Z",
+          "kind" : "original",
+          "producedBy" : null,
+          "relativePath" : "depot/originals/../../secret.txt"
+        }
+      ],
+      "createdAt" : "2026-01-01T00:00:00Z",
+      "formatVersion" : 1,
+      "modifiedAt" : "2026-01-01T00:00:00Z",
+      "projectName" : "Bad",
+      "workspaceSettings" : {}
+    }
+    """
+    try Data(escape.utf8).write(to: futureURL)
+    let escapeBytes = try Data(contentsOf: futureURL)
+    expect(PackageError.pathEscapesPackage("depot/originals/../../secret.txt")) {
+        _ = try ProjectPackage.open(at: folder)
+    }
+    #expect(try Data(contentsOf: futureURL) == escapeBytes)
+}
+
+@Test func missingAndMismatchedAssetsStayListedWithoutRewritingAudio() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("bed.wav", "bed-bytes")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    let depotURL = try package.resolvedURL(for: asset)
+    try FileManager.default.removeItem(at: depotURL)
+
+    let missing = try ProjectPackage.open(at: package.rootURL)
+    #expect(missing.missingAssetIDs.contains(asset.id))
+    #expect(missing.health(of: missing.manifest.assets[0]) == .missing)
+    #expect(missing.manifest.assets.count == 1)
+    missing.manifest.projectName = "Still missing"
+    try missing.save()
+    let originals = try FileManager.default.contentsOfDirectory(
+        at: missing.rootURL.appendingPathComponent("depot/originals"),
+        includingPropertiesForKeys: nil
+    )
+    #expect(originals.isEmpty)
+    #expect(missing.manifest.assets.count == 1)
+    let savedMissing = try ProjectPackage.open(at: missing.rootURL)
+    #expect(savedMissing.manifest.projectName == "Still missing")
+    #expect(savedMissing.missingAssetIDs.contains(asset.id))
+    #expect(savedMissing.manifest.assets[0].relativePath == asset.relativePath)
+
+    let again = try scratch.file("bed2.wav", "bed-bytes")
+    let package2 = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Other.podlounge"), name: "Other")
+    let asset2 = try package2.importMedia(from: again, kind: .original, producedBy: nil)
+    let url2 = try package2.resolvedURL(for: asset2)
+    let handle = try FileHandle(forWritingTo: url2)
+    try handle.seekToEnd()
+    try handle.write(contentsOf: Data("MORE".utf8))
+    try handle.close()
+    let mismatched = try ProjectPackage.open(at: package2.rootURL)
+    #expect(mismatched.mismatchedAssetIDs.contains(asset2.id))
+    let audioBefore = try Data(contentsOf: url2)
+    try mismatched.save()
+    #expect(try Data(contentsOf: url2) == audioBefore)
+    #expect(mismatched.manifest.assets[0].byteCount == asset2.byteCount)
+}
+
+@Test func failedImportLeavesManifestAndDepotUntouched() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let before = try scratch.manifestData(package)
+    let missing = scratch.root.appendingPathComponent("nope.wav")
+    expect(PackageError.importFailed("Source is not a readable file.")) {
+        _ = try package.importMedia(from: missing, kind: .original, producedBy: nil)
+    }
+    #expect(try scratch.manifestData(package) == before)
+    #expect(package.manifest.assets.isEmpty)
+
+    let originals = package.rootURL.appendingPathComponent("depot/originals")
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: originals.path)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: originals.path)
+    }
+    let blocked = try scratch.file("blocked.wav", "nope")
+    do {
+        _ = try package.importMedia(from: blocked, kind: .original, producedBy: nil)
+        Issue.record("Import should have failed")
+    } catch is PackageError {
+        #expect(try scratch.manifestData(package) == before)
+        #expect(package.manifest.assets.isEmpty)
+    } catch {
+        Issue.record("Unexpected error \(error)")
+    }
+    let leftBehind = try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil)
+    #expect(leftBehind.isEmpty)
+
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: originals.path)
+    let source = try scratch.file("ok.wav", "ok-bytes")
+    package.failNextSaveForTesting = true
+    expect(PackageError.atomicWriteFailed("Simulated save failure.")) {
+        _ = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    }
+    #expect(try scratch.manifestData(package) == before)
+    #expect(package.manifest.assets.isEmpty)
+    let afterRollback = try FileManager.default.contentsOfDirectory(at: originals, includingPropertiesForKeys: nil)
+    #expect(afterRollback.isEmpty)
+    #expect(try Data(contentsOf: source) == Data("ok-bytes".utf8))
+}
+
+@Test func symlinkOutsidePackageIsRejectedWithoutWriting() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("inside.wav", "inside")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    let depotURL = try package.resolvedURL(for: asset)
+    let outside = try scratch.file("secret.txt", "secret")
+    try FileManager.default.removeItem(at: depotURL)
+    try FileManager.default.createSymbolicLink(at: depotURL, withDestinationURL: outside)
+    let before = try scratch.manifestData(package)
+    expect(PackageError.pathEscapesPackage(asset.relativePath)) {
+        _ = try ProjectPackage.open(at: package.rootURL)
+    }
+    #expect(try scratch.manifestData(package) == before)
+    #expect(try Data(contentsOf: outside) == Data("secret".utf8))
+}
+
+@Test func pickedLocationsResolveInsideThePackageExtension() throws {
+    let show = URL(fileURLWithPath: "/tmp/My Show")
+    #expect(ProjectPackage.directoryURL(forPickedURL: show).lastPathComponent == "My Show.podlounge")
+    let already = URL(fileURLWithPath: "/tmp/My Show.podlounge")
+    #expect(ProjectPackage.directoryURL(forPickedURL: already).path == already.path)
+
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let located = ProjectPackage.locateRoot(from: package.manifestURL)
+    #expect(located?.resolvingSymlinksInPath().path == package.rootURL.resolvingSymlinksInPath().path)
+}
+
+@Test func removeAssetDeletesDepotCopyAndSurvivesReopen() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let original = try scratch.file("keep-me.wav", "AUDIO-A")
+    let other = try scratch.file("other.wav", "AUDIO-B")
+    let folder = scratch.root.appendingPathComponent("Delete.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Delete Test")
+    let a = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    let b = try package.importMedia(from: other, kind: .original, producedBy: nil)
+    let copyA = try package.resolvedURL(for: a)
+    #expect(FileManager.default.fileExists(atPath: copyA.path))
+
+    try package.removeAsset(id: a.id)
+    #expect(package.manifest.assets.map(\.id) == [b.id])
+    #expect(package.manifest.selectedAssetID == nil)
+    #expect(!FileManager.default.fileExists(atPath: copyA.path))
+    #expect(FileManager.default.fileExists(atPath: original.path))
+    #expect(FileManager.default.fileExists(atPath: try package.resolvedURL(for: b).path))
+
+    let reopened = try ProjectPackage.open(at: folder)
+    #expect(reopened.manifest.assets.map(\.id) == [b.id])
+}
+
+@Test func removeAssetRollsBackWhenSaveFails() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("a.wav", "AUDIO")
+    let folder = scratch.root.appendingPathComponent("Rollback.podlounge")
+    let package = try ProjectPackage.create(at: folder, name: "Rollback")
+    let a = try package.importMedia(from: source, kind: .original, producedBy: nil, select: true)
+    package.failNextSaveForTesting = true
+    #expect(throws: (any Error).self) { try package.removeAsset(id: a.id) }
+    #expect(package.manifest.assets.map(\.id) == [a.id])
+    #expect(package.manifest.selectedAssetID == a.id)
+    #expect(FileManager.default.fileExists(atPath: try package.resolvedURL(for: a).path))
+}

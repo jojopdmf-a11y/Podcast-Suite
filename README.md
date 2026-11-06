@@ -10,6 +10,7 @@ This repo is the apps. The marketing site and free tools live in [CougarCalc](ht
 FixerMixer/           # PodProducer — stems → polish → bounce
 LilLeveler/           # PodLeveler — final mix → platform loudness
 Podcast Stripper/     # PodStripper — stereo mix → speaker tracks + music
+PodLounge/            # Pod Lounge — project home (shell only; tools not connected)
 ```
 
 (Folder names on disk stay as they are so updates and saved files keep working.)
@@ -65,6 +66,14 @@ The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requ
 - **PodStripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
 - **PodProducer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks (same filename as before, so old folders still load). Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer at your interface’s sample rate) then **ADD STRIP** / **RECORD**. **REMOVE STRIP** deletes an unused empty speaker. **EXPORT** can convert sample rate and pick WAV 16 / WAV 24 / AIFF 24. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
 - **PodLeveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
+
+## Pod Lounge
+
+Pod Lounge is the shared project window: Stripper, Fixer, Trimmer, and Limiter cards open in that same window, in any order. This build stores a `.podlounge` project folder and workspace notes. It does not run the other apps and it does not record or process audio. See [`PodLounge/README.md`](PodLounge/README.md).
+
+```bash
+cd PodLounge/app && SKIP_REVEAL=1 ./scripts/build_app.sh   # -> PodLounge/dist/PodLounge.app
+```
 
 ## Build
 
