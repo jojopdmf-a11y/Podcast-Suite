@@ -1,14 +1,12 @@
-import AppKit
 import Combine
 import Foundation
 import SwiftUI
-import UniformTypeIdentifiers
 
 @MainActor
-final class LevelerSession: ObservableObject {
-    @Published var sourceURL: URL?
+public final class LevelerSession: ObservableObject {
+    @Published public var sourceURL: URL?
     @Published var sourceName: String = ""
-    @Published var status: String = "Drop a final mix to begin"
+    @Published public var status: String = "Drop a final mix to begin"
     @Published var isBusy = false
     /// MUSIC LOUD FILE LOUDNESS rewrite — does not freeze Play or THRESHOLD.
     @Published var isMeasuring = false
@@ -46,6 +44,8 @@ final class LevelerSession: ObservableObject {
     @Published var preOvers = false
     @Published var postOvers = false
 
+    @Published var renderFraction: Double = 0
+
     private var sourceStore: PCMStore?
     private var leveledStore: PCMStore?
     private let playback = LevelerPlaybackEngine()
@@ -53,6 +53,9 @@ final class LevelerSession: ObservableObject {
     private var processGeneration: UInt64 = 0
     /// If THRESHOLD is released while FILE LOUDNESS is still rewriting, run once more.
     private var measureAgain = false
+    /// Restored from the project after the file's own peak would otherwise replace it.
+    private var pendingMusicThreshold: Float?
+    private var pendingListenPost: Bool?
 
     var activeTargetLUFS: Float {
         preset.isCustom ? customLUFS : preset.targetLUFS
@@ -95,7 +98,7 @@ final class LevelerSession: ObservableObject {
         PlatformPreset.factory + userPresets.map(\.asPlatformPreset) + [.custom]
     }
 
-    init() {
+    public init() {
         PCMStore.sweepTemporaryFiles()
         userPresets = UserLoudnessPresetStore.load()
         playback.onPlayhead = { [weak self] frame in
@@ -184,11 +187,12 @@ final class LevelerSession: ObservableObject {
         status = "Removed personal preset"
     }
 
-    func load(url: URL) {
+    public func load(url: URL, displayName: String? = nil) {
         stopPlayback()
         loadGeneration += 1
         processGeneration += 1
         let gen = loadGeneration
+        let resolvedName = Self.presentationName(displayName, url: url)
         isBusy = true
         status = "Loading…"
         hasResult = false
@@ -205,7 +209,7 @@ final class LevelerSession: ObservableObject {
         durationFrames = 0
         resetMeterUI()
         sourceURL = url
-        sourceName = url.lastPathComponent
+        sourceName = resolvedName
 
         Task.detached(priority: .userInitiated) {
             do {
@@ -224,15 +228,20 @@ final class LevelerSession: ObservableObject {
                 await MainActor.run {
                     guard self.loadGeneration == gen else { return }
                     self.sourceURL = url
-                    self.sourceName = url.lastPathComponent
+                    self.sourceName = resolvedName
                     self.sourceStore = store
                     self.before = report
                     self.sampleRate = store.sampleRate
                     self.durationFrames = store.frameCount
-                    self.musicThresholdDb = min(
-                        Self.musicThresholdMax,
-                        max(Self.musicThresholdMin, report.truePeakDbTP)
-                    )
+                    if let pending = self.pendingMusicThreshold {
+                        self.musicThresholdDb = min(Self.musicThresholdMax, max(Self.musicThresholdMin, pending))
+                        self.pendingMusicThreshold = nil
+                    } else {
+                        self.musicThresholdDb = min(
+                            Self.musicThresholdMax,
+                            max(Self.musicThresholdMin, report.truePeakDbTP)
+                        )
+                    }
                     self.liveGR = 0
                     self.peakGR = 0
                     self.filePeakGR = 0
@@ -350,6 +359,7 @@ final class LevelerSession: ObservableObject {
                     } else {
                         self.isBusy = false
                     }
+                    self.consumePendingListen()
                     self.status = self.isPlaying ? self.playingStatus() : self.readyStatus()
                 }
             } catch {
@@ -367,93 +377,146 @@ final class LevelerSession: ObservableObject {
         }
     }
 
-    func exportLeveled() {
-        guard let sourceURL else {
+    public var sourceSampleRate: Double { sampleRate }
+
+    public var activePresetTitle: String { preset.title }
+
+    public var activePresetID: String { preset.id }
+
+    public var canExportLeveled: Bool {
+        if isBusy || isMeasuring { return false }
+        if preset.isMaximizer { return hasFile }
+        return hasResult
+    }
+
+    public func controlSnapshot() -> LevelerControlSnapshot {
+        LevelerControlSnapshot(
+            presetID: preset.id,
+            customLUFS: customLUFS,
+            customTruePeak: customTP,
+            musicThresholdDb: musicThresholdDb,
+            meterMode: meterMode.rawValue,
+            peakHold: peakHold,
+            listenPost: playAfter
+        )
+    }
+
+    /// Applies saved controls. Threshold and A/B wait until the file has finished loading.
+    public func applyControls(_ snapshot: LevelerControlSnapshot) {
+        customLUFS = min(-10, max(-24, snapshot.customLUFS))
+        customTP = min(-0.1, max(-3, snapshot.customTruePeak))
+        if let match = listedPresets.first(where: { $0.id == snapshot.presetID }) {
+            preset = match
+        } else if snapshot.presetID == PlatformPreset.custom.id {
+            preset = .custom
+        } else {
+            preset = .universal
+        }
+        let threshold = min(Self.musicThresholdMax, max(Self.musicThresholdMin, snapshot.musicThresholdDb))
+        musicThresholdDb = threshold
+        pendingMusicThreshold = threshold
+        if let mode = LevelerMeterMode(rawValue: snapshot.meterMode) {
+            meterMode = mode
+        }
+        peakHold = snapshot.peakHold
+        pendingListenPost = snapshot.listenPost
+        if hasFile {
+            pendingMusicThreshold = nil
+            syncLiveMaximizer()
+            process()
+        }
+    }
+
+    /// Stops playback and drops the working audio. Does not delete depot files.
+    public func teardown() {
+        stopPlayback()
+        loadGeneration += 1
+        processGeneration += 1
+        isBusy = false
+        isMeasuring = false
+        measureAgain = false
+        hasResult = false
+        renderFraction = 0
+        sourceStore = nil
+        leveledStore = nil
+        playback.load(pre: nil, post: nil)
+        sourceURL = nil
+        sourceName = ""
+        before = .empty
+        after = .empty
+        appliedGainDb = 0
+        playAfter = false
+        durationFrames = 0
+        resetMeterUI()
+    }
+
+    /// Level first (already baked, or MUSIC LOUD rendered here), then sample-rate
+    /// conversion, then dither only when the file is 16-bit.
+    public func writeLeveled(
+        to url: URL,
+        output: LevelerOutputSettings,
+        releaseBusy: Bool = true
+    ) async throws {
+        guard let sourceStore else {
             status = "Nothing to export yet."
-            return
+            throw LevelerError.processFailed("Nothing to export yet.")
         }
         let maximizer = preset.isMaximizer
-        if maximizer {
-            guard sourceStore != nil else {
-                status = "Nothing to export yet."
-                return
-            }
-        } else if leveledStore == nil {
+        if maximizer == false, leveledStore == nil {
             status = "Nothing to export yet."
-            return
+            throw LevelerError.processFailed("Nothing to export yet.")
         }
-        let base = sourceURL.deletingPathExtension().lastPathComponent
-        let panel = NSSavePanel()
-        panel.title = "Export Leveled"
-        panel.message = "WAV file after leveling. Pick a folder and a name."
-        panel.prompt = "Export"
-        panel.canCreateDirectories = true
-        panel.isExtensionHidden = false
-        panel.allowedContentTypes = [.wav]
-        panel.nameFieldStringValue = "\(base)_leveled.wav"
-        panel.directoryURL = sourceURL.deletingLastPathComponent()
-        panel.level = .modalPanel
-        guard panel.runModal() == .OK, var dest = panel.url else {
-            status = "Export cancelled"
-            return
-        }
-        if dest.pathExtension.lowercased() != "wav" {
-            dest = dest.appendingPathExtension("wav")
-        }
-        isBusy = true
-        status = "Exporting…"
-        let bounceSource = sourceStore
         let baked = leveledStore
-        let destURL = dest
-        let gen = loadGeneration
         let threshold = musicThresholdDb
         let ceiling = Self.musicCeilingDb
-        Task.detached(priority: .userInitiated) {
-            do {
+        let settings = output
+        let generation = loadGeneration
+        isBusy = true
+        renderFraction = 0
+        status = "Rendering…"
+        let report: @Sendable (Double) -> Void = { fraction in
+            Task { @MainActor in
+                guard self.loadGeneration == generation else { return }
+                self.renderFraction = fraction
+                self.status = String(format: "Rendering… %.0f%%", fraction * 100)
+            }
+        }
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                let rendered: PCMStore
                 if maximizer {
-                    guard let bounceSource else {
-                        throw LevelerError.processFailed("Nothing to export yet.")
-                    }
                     let result = try LoudnessEngine.maximize(
-                        bounceSource,
+                        sourceStore,
                         thresholdDb: threshold,
                         ceilingDb: ceiling
                     ) { fraction in
-                        Task { @MainActor in
-                            guard self.loadGeneration == gen else { return }
-                            self.status = String(format: "Exporting… %.0f%%", fraction * 100)
-                        }
+                        report(0.7 * fraction)
                     }
-                    try WAVIO.write(url: destURL, store: result.0) { fraction in
-                        Task { @MainActor in
-                            guard self.loadGeneration == gen else { return }
-                            self.status = String(format: "Writing WAV… %.0f%%", fraction * 100)
-                        }
-                    }
+                    rendered = result.0
+                } else if let baked {
+                    rendered = baked
                 } else {
-                    guard let baked else {
-                        throw LevelerError.processFailed("Nothing to export yet.")
-                    }
-                    try WAVIO.write(url: destURL, store: baked) { fraction in
-                        Task { @MainActor in
-                            guard self.loadGeneration == gen else { return }
-                            self.status = String(format: "Exporting… %.0f%%", fraction * 100)
-                        }
-                    }
+                    throw LevelerError.processFailed("Nothing to export yet.")
                 }
-                await MainActor.run {
-                    guard self.loadGeneration == gen else { return }
-                    self.isBusy = false
-                    self.status = "Exported → \(destURL.lastPathComponent)"
-                    NSWorkspace.shared.activateFileViewerSelecting([destURL])
+                try LevelerOutputWriter.write(store: rendered, to: url, settings: settings) { fraction in
+                    report(0.7 + 0.3 * fraction)
                 }
-            } catch {
-                await MainActor.run {
-                    guard self.loadGeneration == gen else { return }
-                    self.isBusy = false
-                    self.status = error.localizedDescription
-                }
+            }.value
+            guard loadGeneration == generation else { return }
+            renderFraction = 1
+            if releaseBusy {
+                isBusy = false
             }
+            status = "Rendered \(url.lastPathComponent)"
+        } catch {
+            if loadGeneration == generation {
+                renderFraction = 0
+                if releaseBusy {
+                    isBusy = false
+                }
+                status = error.localizedDescription
+            }
+            throw error
         }
     }
 
@@ -516,7 +579,7 @@ final class LevelerSession: ObservableObject {
         peakGR = filePeakGR
     }
 
-    func stopPlayback() {
+    public func stopPlayback() {
         playback.stop(resetPlayhead: true)
         isPlaying = false
         isScrubbing = false
@@ -547,6 +610,18 @@ final class LevelerSession: ObservableObject {
             enabled: preset.isMaximizer && sourceStore != nil,
             makeupDb: musicMakeupDb
         )
+    }
+
+    private static func presentationName(_ displayName: String?, url: URL) -> String {
+        let trimmed = displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty { return url.lastPathComponent }
+        return trimmed
+    }
+
+    private func consumePendingListen() {
+        guard let listen = pendingListenPost else { return }
+        pendingListenPost = nil
+        setListenPost(listen)
     }
 
     private func readyStatus() -> String {

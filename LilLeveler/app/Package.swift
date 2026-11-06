@@ -20,5 +20,10 @@ let package = Package(
             dependencies: ["LilLevelerKit"],
             path: "Sources/LilLeveler"
         ),
+        .testTarget(
+            name: "LilLevelerTests",
+            dependencies: ["LilLevelerKit"],
+            path: "Tests/LilLevelerTests"
+        ),
     ]
 )

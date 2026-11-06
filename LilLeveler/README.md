@@ -26,7 +26,7 @@ Opens `dist/PodLeveler.app`.
 3. Pick a platform preset, or **CUSTOM** then **SAVE PRESET** to keep your own LUFS / true-peak target
 4. Watch the PRE / POST Dorrough meters while you play, then read the **FILE LOUDNESS** cards (integrated, short-term, momentary, true peak, sample peak)
 5. Hit **PLAY**, drag the time slider, flip **A/B** between PRE (original) and POST (leveled)
-6. **Export leveled** → `{name}_leveled.wav` (PCM WAV for host compatibility)
+6. **Export leveled** → `{name}_leveled.wav` by default (16-bit WAV at the source sample rate, with TPDF dither). WAV, AIFF, and M4A are available, plus 24-bit and 32-bit float. MP3 is shown and not available yet.
 
 ## Platform targets (v0.1)
 

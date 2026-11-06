@@ -6,26 +6,90 @@ public extension Notification.Name {
     static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
 }
 
-/// Standalone PodLeveler window. The Limiter workspace hosts the same view.
+/// Standalone PodLeveler window. The Limiter workspace hosts `LevelerRootView`.
 public struct LevelerAppRoot: View {
+    @StateObject private var session = LevelerSession()
+    @State private var output = LevelerOutputSettings.standaloneDefaults
+
     public init() {}
 
     public var body: some View {
-        ContentView()
+        LevelerRootView(session: session, mode: .application, output: $output)
     }
 }
 
-struct ContentView: View {
-    @StateObject private var session = LevelerSession()
+public enum LevelerHostMode {
+    case application
+    case lounge
+}
+
+public struct LevelerRootView: View {
+    @ObservedObject var session: LevelerSession
+    var mode: LevelerHostMode
+    @Binding var output: LevelerOutputSettings
+    var resultName: Binding<String>
+    var resultNameFollowsSource: Binding<Bool>
+    var onSaveToDepot: ((URL, String) async throws -> Void)?
+    var onControlsChanged: (() -> Void)?
+
     @State private var isDropTargeted = false
     @State private var showAbout = false
+    @State private var showExportOptions = false
 
-    var body: some View {
+    public init(
+        session: LevelerSession,
+        mode: LevelerHostMode,
+        output: Binding<LevelerOutputSettings>,
+        resultName: Binding<String> = .constant(""),
+        resultNameFollowsSource: Binding<Bool> = .constant(true),
+        onSaveToDepot: ((URL, String) async throws -> Void)? = nil,
+        onControlsChanged: (() -> Void)? = nil
+    ) {
+        self.session = session
+        self.mode = mode
+        self._output = output
+        self.resultName = resultName
+        self.resultNameFollowsSource = resultNameFollowsSource
+        self.onSaveToDepot = onSaveToDepot
+        self.onControlsChanged = onControlsChanged
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            chrome
+            if mode == .lounge {
+                LevelerOutputPanel(
+                    session: session,
+                    settings: $output,
+                    resultName: resultName,
+                    followsSource: resultNameFollowsSource,
+                    primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
+                    primaryHelp: "Render the leveled file into the project. The original is not changed.",
+                    primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
+                    primaryAction: saveToDepot
+                )
+                .frame(width: LevelerLayout.windowWidth)
+            }
+        }
+        .onChange(of: session.preset) { _, _ in onControlsChanged?() }
+        .onChange(of: session.customLUFS) { _, _ in onControlsChanged?() }
+        .onChange(of: session.customTP) { _, _ in onControlsChanged?() }
+        .onChange(of: session.musicThresholdDb) { _, _ in onControlsChanged?() }
+        .onChange(of: session.meterMode) { _, _ in onControlsChanged?() }
+        .onChange(of: session.peakHold) { _, _ in onControlsChanged?() }
+        .onChange(of: session.playAfter) { _, _ in onControlsChanged?() }
+    }
+
+    private var chrome: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if session.sourceURL == nil {
-                    dropZone
+                    if mode == .lounge {
+                        loungeEmpty
+                    } else {
+                        dropZone
+                    }
                 } else {
                     mainWorkspace
                 }
@@ -35,6 +99,9 @@ struct ContentView: View {
 
             if showAbout {
                 aboutOverlay
+            }
+            if showExportOptions, mode == .application {
+                exportOverlay
             }
         }
         // Keep this view in the title-bar safe area. Ignoring safe area here
@@ -57,7 +124,11 @@ struct ContentView: View {
             showAbout = true
         }
         .onExitCommand {
-            if showAbout { showAbout = false }
+            if showExportOptions {
+                showExportOptions = false
+            } else if showAbout {
+                showAbout = false
+            }
         }
     }
 
@@ -90,7 +161,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Button("ABOUT") { showAbout = true }
                     .buttonStyle(LevelerGhostButtonStyle())
-                if session.sourceURL != nil {
+                if mode == .application, session.sourceURL != nil {
                     Button("LOAD OTHER…") { pickFile() }
                         .buttonStyle(LevelerGhostButtonStyle())
                 }
@@ -131,6 +202,55 @@ struct ContentView: View {
         }
     }
 
+    private var exportOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .contentShape(Rectangle())
+                .onTapGesture { showExportOptions = false }
+            VStack(spacing: 12) {
+                LevelerOutputPanel(
+                    session: session,
+                    settings: $output,
+                    resultName: nil,
+                    followsSource: nil,
+                    primaryTitle: session.isBusy ? "WORKING…" : "Export…",
+                    primaryHelp: "Then pick a folder. The default name and 16-bit WAV keep today’s export.",
+                    primaryDisabled: !session.canExportLeveled,
+                    primaryAction: chooseExportDestination
+                )
+                Button("CANCEL") { showExportOptions = false }
+                    .buttonStyle(LevelerGhostButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+            .frame(width: 460)
+        }
+    }
+
+    private var loungeEmpty: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(LevelerTheme.panel)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(LevelerTheme.cyan.opacity(0.55), style: StrokeStyle(lineWidth: 1.4, dash: [7, 6]))
+            VStack(spacing: 10) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(LevelerTheme.cyan)
+                Text("SELECT A DEPOT FILE")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .tracking(1)
+                    .foregroundStyle(LevelerTheme.textPrimary)
+                Text("Pick one in the depot list. The original stays where it is.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var dropZone: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -149,7 +269,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(LevelerTheme.textPrimary)
-                Text("WAV, AIFF, MP3, M4A, CAF, FLAC… · export stays WAV")
+                Text("WAV, AIFF, MP3, M4A, CAF, FLAC…")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                 Button("CHOOSE FILE…") { pickFile() }
@@ -424,12 +544,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
-                    session.exportLeveled()
+                if mode == .application {
+                    Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
+                        showExportOptions = true
+                    }
+                    .buttonStyle(LevelerPrimaryButtonStyle())
+                    .disabled(!session.canExportLeveled)
+                    .help("Choose a file type, bit depth, and sample rate, then a folder. MUSIC LOUD exports the current THRESHOLD.")
                 }
-                .buttonStyle(LevelerPrimaryButtonStyle())
-                .disabled((session.preset.isMaximizer ? !session.hasFile : !session.hasResult) || session.isBusy)
-                .help("Choose a folder and file name. MUSIC LOUD exports the current THRESHOLD.")
             }
         }
         .padding(12)
@@ -442,6 +564,78 @@ struct ContentView: View {
             .foregroundStyle(LevelerTheme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
+    }
+
+    private var automaticResultName: String {
+        let raw = session.sourceName.isEmpty ? "Audio" : session.sourceName
+        let base = (raw as NSString).deletingPathExtension
+        let stem = base.isEmpty ? "Audio" : base
+        return "\(stem) – Leveled (\(session.activePresetTitle))"
+    }
+
+    private func saveToDepot() {
+        guard let onSaveToDepot else { return }
+        let settings = output
+        let ext = settings.container.fileExtension
+        var display = resultName.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if display.isEmpty { display = automaticResultName }
+        if display.lowercased().hasSuffix(".\(ext)") == false {
+            display += ".\(ext)"
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("podleveler-\(UUID().uuidString).\(ext)")
+        Task {
+            do {
+                try await session.writeLeveled(to: temp, output: settings, releaseBusy: false)
+                try await onSaveToDepot(temp, display)
+                try? FileManager.default.removeItem(at: temp)
+                session.isBusy = false
+                session.status = "Saved result to the depot"
+            } catch {
+                try? FileManager.default.removeItem(at: temp)
+                session.isBusy = false
+                session.renderFraction = 0
+                session.status = error.localizedDescription
+            }
+        }
+    }
+
+    private func chooseExportDestination() {
+        guard let sourceURL = session.sourceURL else {
+            session.status = "Nothing to export yet."
+            return
+        }
+        let settings = output
+        let base = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = settings.container.fileExtension
+        let panel = NSSavePanel()
+        panel.title = "Export Leveled"
+        panel.message = "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [settings.contentType]
+        panel.nameFieldStringValue = "\(base)_leveled.\(ext)"
+        panel.directoryURL = sourceURL.deletingLastPathComponent()
+        panel.level = .modalPanel
+        guard panel.runModal() == .OK, var dest = panel.url else {
+            session.status = "Export cancelled"
+            return
+        }
+        if dest.pathExtension.lowercased() != ext {
+            dest = dest.deletingPathExtension().appendingPathExtension(ext)
+        }
+        showExportOptions = false
+        let destination = dest
+        Task {
+            do {
+                try await session.writeLeveled(to: destination, output: settings)
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+                session.status = "Exported → \(destination.lastPathComponent)"
+            } catch {
+                session.status = error.localizedDescription
+            }
+        }
     }
 
     private func promptSavePreset() {
