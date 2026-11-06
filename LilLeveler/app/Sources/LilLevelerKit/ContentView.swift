@@ -202,7 +202,7 @@ public struct LevelerRootView: View {
                         help: "Drag to resize the meters. Double-click to reset."
                     ) {
                         if loudnessDragOrigin == nil { loudnessDragOrigin = CGFloat(loudnessExtraStorage) }
-                        let next = (loudnessDragOrigin ?? CGFloat(loudnessExtraStorage)) + $0
+                        let next = (loudnessDragOrigin ?? CGFloat(loudnessExtraStorage)) - $0
                         loudnessExtraStorage = Double(min(400, max(0, next)))
                     } onEnded: {
                         loudnessDragOrigin = nil
