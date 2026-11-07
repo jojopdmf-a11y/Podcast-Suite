@@ -22,9 +22,9 @@ enum LevelerTheme {
     }
 }
 
-/// Desk size is the standalone minimum. A larger window gives the extra space to the meters.
+/// Standalone PodLeveler metrics. A larger window gives the extra space to the meters.
 enum LevelerLayout {
-    static let windowPadding: CGFloat = 18
+    static let windowPadding: CGFloat = 12
     static let presetColumnWidth: CGFloat = 220
     static let columnGap: CGFloat = 14
     static let faceplateWidth: CGFloat = 148
@@ -35,6 +35,17 @@ enum LevelerLayout {
     static let meterDeckPadding: CGFloat = 12
     static let meterDeckSpacing: CGFloat = 14
 
+    /// Pane floors for the standalone window. Lounge keeps `LevelerPaneMetrics`.
+    static let appPresetMin: CGFloat = 200
+    static let appPresetDefault: CGFloat = 220
+    static let appPresetMax: CGFloat = 320
+    static let appCenterMin: CGFloat = 480
+    static let appOutputMin: CGFloat = 276
+    static let appOutputDefault: CGFloat = 292
+    static let appOutputMax: CGFloat = 420
+    /// Shortest meter band before the horizontal divider stops. Controls tighten inside it.
+    static let applicationMeterMin: CGFloat = 248
+
     static var meterDeckWidth: CGFloat {
         meterDeckPadding * 2
             + faceplateWidth * 2
@@ -42,11 +53,57 @@ enum LevelerLayout {
             + meterDeckSpacing * 2
     }
 
-    static var windowWidth: CGFloat {
-        windowPadding * 2 + presetColumnWidth + columnGap + meterDeckWidth
+    static var windowWidth: CGFloat { LevelerWindowFit.minimumContentWidth }
+    static var windowHeight: CGFloat { LevelerWindowFit.minimumContentHeight }
+}
+
+/// Standalone window size. Content height stays at or under 840 so the window,
+/// including its title bar, fits a 1512×982 point MacBook with the menu bar.
+public enum LevelerWindowFit {
+    public static let minimumContentWidth: CGFloat = 1180
+    public static let minimumContentHeight: CGFloat = 840
+    public static let idealContentWidth: CGFloat = 1280
+    public static let idealContentHeight: CGFloat = 840
+    /// Used when the real title bar has not been measured yet.
+    public static let assumedTitleBarHeight: CGFloat = 28
+
+    public struct ContentSize: Equatable, Sendable {
+        public var minWidth: CGFloat
+        public var minHeight: CGFloat
+        public var idealWidth: CGFloat
+        public var idealHeight: CGFloat
+
+        public init(minWidth: CGFloat, minHeight: CGFloat, idealWidth: CGFloat, idealHeight: CGFloat) {
+            self.minWidth = minWidth
+            self.minHeight = minHeight
+            self.idealWidth = idealWidth
+            self.idealHeight = idealHeight
+        }
     }
 
-    static let windowHeight: CGFloat = 948
+    /// `visible` is the screen area below the menu bar and clear of the Dock.
+    /// The returned sizes are content sizes: the title bar sits on top of them.
+    public static func contentSize(
+        minimumWidth: CGFloat,
+        minimumHeight: CGFloat,
+        idealWidth: CGFloat,
+        idealHeight: CGFloat,
+        visible: CGRect,
+        titleBar: CGFloat
+    ) -> ContentSize {
+        let maxWidth = max(1, visible.width)
+        let maxHeight = max(1, visible.height - max(0, titleBar))
+        let minWidth = min(minimumWidth, maxWidth)
+        let minHeight = min(minimumHeight, maxHeight)
+        let fittedIdealWidth = min(max(idealWidth, minWidth), maxWidth)
+        let fittedIdealHeight = min(max(idealHeight, minHeight), maxHeight)
+        return ContentSize(
+            minWidth: minWidth,
+            minHeight: minHeight,
+            idealWidth: fittedIdealWidth,
+            idealHeight: fittedIdealHeight
+        )
+    }
 }
 
 extension View {

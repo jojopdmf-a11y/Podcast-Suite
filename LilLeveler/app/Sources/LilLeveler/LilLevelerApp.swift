@@ -8,6 +8,7 @@ struct LilLevelerApp: App {
             LevelerAppRoot()
                 .preferredColorScheme(.dark)
         }
+        .defaultSize(width: LevelerWindowFit.idealContentWidth, height: LevelerWindowFit.idealContentHeight)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}

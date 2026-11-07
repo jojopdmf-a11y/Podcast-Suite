@@ -79,8 +79,25 @@ struct DorroughMeterDeck: View {
     }
 
     private var meterControls: some View {
-        VStack(alignment: .leading, spacing: compact ? 6 : 14) {
-            controlGroup(label: "PEAK") {
+        // Lounge stays on the compact stack. Standalone keeps that same stack when
+        // the meter band is tall, and only pulls the groups closer when the window
+        // is short enough that the full stack would clip.
+        let roomy = controlColumn(stackSpacing: compact ? 6 : 14, groupSpacing: compact ? 3 : 6)
+        return Group {
+            if expands && compact == false {
+                ViewThatFits(in: .vertical) {
+                    roomy
+                    controlColumn(stackSpacing: 6, groupSpacing: 4)
+                }
+            } else {
+                roomy
+            }
+        }
+    }
+
+    private func controlColumn(stackSpacing: CGFloat, groupSpacing: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: stackSpacing) {
+            controlGroup(label: "PEAK", spacing: groupSpacing) {
                 HardwareLitButton(
                     title: "HOLD",
                     lit: session.peakHold,
@@ -102,7 +119,7 @@ struct DorroughMeterDeck: View {
                 .help("Clear peak holds and overs lamps.")
             }
 
-            controlGroup(label: "METER MODE") {
+            controlGroup(label: "METER MODE", spacing: groupSpacing) {
                 HardwareLitButton(
                     title: "RMS",
                     lit: session.meterMode == .rms,
@@ -124,7 +141,7 @@ struct DorroughMeterDeck: View {
                 .help("Inter-sample true peak. Best match for the limiter ceiling.")
             }
 
-            VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+            VStack(alignment: .leading, spacing: groupSpacing) {
                 Text("OVERS")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(1.1)
@@ -140,11 +157,11 @@ struct DorroughMeterDeck: View {
             }
         }
         .frame(width: controlWidth)
-        .padding(.vertical, compact ? 0 : 4)
+        .padding(.vertical, compact ? 0 : (stackSpacing > 10 ? 4 : 2))
     }
 
-    private func controlGroup(label: String, @ViewBuilder buttons: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 3 : 6) {
+    private func controlGroup(label: String, spacing: CGFloat? = nil, @ViewBuilder buttons: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: spacing ?? (compact ? 3 : 6)) {
             Text(label)
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(1.1)
