@@ -2,17 +2,279 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ContentView: View {
+public extension Notification.Name {
+    static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
+}
+
+/// Standalone PodLeveler window. The Limiter workspace hosts `LevelerRootView`.
+public struct LevelerAppRoot: View {
     @StateObject private var session = LevelerSession()
+    @State private var output = LevelerOutputSettings.standaloneDefaults
+
+    public init() {}
+
+    public var body: some View {
+        LevelerRootView(session: session, mode: .application, output: $output)
+    }
+}
+
+public enum LevelerHostMode {
+    case application
+    case lounge
+}
+
+public struct LevelerRootView: View {
+    @ObservedObject var session: LevelerSession
+    var mode: LevelerHostMode
+    @Binding var output: LevelerOutputSettings
+    var resultName: Binding<String>
+    var resultNameFollowsSource: Binding<Bool>
+    var onSaveToDepot: ((URL, String) async throws -> Void)?
+    var onControlsChanged: (() -> Void)?
+    /// Lounge calls this before PLAY so depot preview stops first.
+    var onPlaybackWillStart: (() -> Void)?
+
     @State private var isDropTargeted = false
     @State private var showAbout = false
+    @State private var showExportOptions = false
+    @AppStorage(LevelerPaneMetrics.presetKey) private var presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
+    @AppStorage(LevelerPaneMetrics.outputKey) private var outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
+    @AppStorage(LevelerPaneMetrics.loudnessExtraKey) private var loudnessExtraStorage = 0.0
+    @State private var presetDragOrigin: CGFloat?
+    @State private var outputDragOrigin: CGFloat?
+    @State private var loudnessDragOrigin: CGFloat?
 
-    var body: some View {
+    public init(
+        session: LevelerSession,
+        mode: LevelerHostMode,
+        output: Binding<LevelerOutputSettings>,
+        resultName: Binding<String> = .constant(""),
+        resultNameFollowsSource: Binding<Bool> = .constant(true),
+        onSaveToDepot: ((URL, String) async throws -> Void)? = nil,
+        onControlsChanged: (() -> Void)? = nil,
+        onPlaybackWillStart: (() -> Void)? = nil
+    ) {
+        self.session = session
+        self.mode = mode
+        self._output = output
+        self.resultName = resultName
+        self.resultNameFollowsSource = resultNameFollowsSource
+        self.onSaveToDepot = onSaveToDepot
+        self.onControlsChanged = onControlsChanged
+        self.onPlaybackWillStart = onPlaybackWillStart
+    }
+
+    public var body: some View {
+        Group {
+            if mode == .lounge {
+                loungeLayout
+                    .onDisappear { session.stopPlayback() }
+                    .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
+                        showAbout = true
+                    }
+                    .onExitCommand {
+                        if showAbout { showAbout = false }
+                    }
+            } else {
+                chrome
+            }
+        }
+        .onChange(of: session.preset) { _, _ in onControlsChanged?() }
+        .onChange(of: session.customLUFS) { _, _ in onControlsChanged?() }
+        .onChange(of: session.customTP) { _, _ in onControlsChanged?() }
+        .onChange(of: session.musicThresholdDb) { _, _ in onControlsChanged?() }
+        .onChange(of: session.meterMode) { _, _ in onControlsChanged?() }
+        .onChange(of: session.peakHold) { _, _ in onControlsChanged?() }
+        .onChange(of: session.playAfter) { _, _ in onControlsChanged?() }
+    }
+
+    /// One screen inside Pod Lounge: presets, meters and loudness, output column.
+    /// The fixed `LevelerLayout` window stays on the standalone app.
+    private var loungeLayout: some View {
+        ZStack {
+            VStack(alignment: .leading, spacing: 6) {
+                header
+                GeometryReader { geo in
+                    loungeColumns(in: geo.size)
+                }
+            }
+            .padding(8)
+
+            if showAbout {
+                aboutOverlay
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background { levelerBackdrop }
+        .preferredColorScheme(.dark)
+    }
+
+    private var columnLock: LevelerPaneMath.ColumnLock {
+        if presetDragOrigin != nil { return .output }
+        if outputDragOrigin != nil { return .preset }
+        return .none
+    }
+
+    private func columnSplit(in size: CGSize) -> LevelerColumnSplit {
+        let loaded = session.sourceURL != nil
+        return LevelerPaneMath.columns(
+            available: size.width,
+            preset: CGFloat(presetWidthStorage),
+            output: CGFloat(outputWidthStorage),
+            showsPreset: loaded,
+            presetMin: LevelerPaneMetrics.presetMin,
+            presetMax: LevelerPaneMetrics.presetMax,
+            outputMin: LevelerPaneMetrics.outputMin,
+            outputMax: LevelerPaneMetrics.outputMax,
+            centerMin: loaded ? LevelerPaneMetrics.centerMin : 160,
+            divider: LevelerPaneMetrics.divider,
+            lock: columnLock
+        )
+    }
+
+    private func loungeColumns(in size: CGSize) -> some View {
+        let split = columnSplit(in: size)
+        let loaded = session.sourceURL != nil
+        return HStack(alignment: .top, spacing: 0) {
+            if loaded {
+                presetColumn
+                    .frame(width: split.preset, height: size.height, alignment: .top)
+                paneDivider(axis: .vertical, help: "Drag to resize presets. Double-click to reset.") {
+                    if presetDragOrigin == nil { presetDragOrigin = split.preset }
+                    presetWidthStorage = Double((presetDragOrigin ?? split.preset) + $0)
+                } onEnded: {
+                    presetWidthStorage = Double(split.preset)
+                    presetDragOrigin = nil
+                } onReset: {
+                    presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
+                    presetDragOrigin = nil
+                }
+            }
+            loungeCenter
+                .frame(width: loaded ? split.center : nil, height: size.height, alignment: .top)
+                .frame(maxWidth: loaded ? nil : .infinity)
+            paneDivider(axis: .vertical, help: "Drag to resize Output. Double-click to reset.") {
+                if outputDragOrigin == nil { outputDragOrigin = split.output }
+                outputWidthStorage = Double((outputDragOrigin ?? split.output) - $0)
+            } onEnded: {
+                outputWidthStorage = Double(split.output)
+                outputDragOrigin = nil
+            } onReset: {
+                outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
+                outputDragOrigin = nil
+            }
+            loungeOutput
+                .frame(width: split.output, height: size.height, alignment: .top)
+        }
+        .frame(width: size.width, height: size.height, alignment: .top)
+    }
+
+    private func paneDivider(
+        axis: LevelerPaneDivider.Axis,
+        help: String,
+        onDrag: @escaping (CGFloat) -> Void,
+        onEnded: @escaping () -> Void,
+        onReset: @escaping () -> Void
+    ) -> some View {
+        LevelerPaneDivider(axis: axis, help: help, onDrag: onDrag, onDragEnded: onEnded, onReset: onReset)
+    }
+
+    private var loungeCenter: some View {
+        Group {
+            if session.sourceURL == nil {
+                VStack(alignment: .leading, spacing: 6) {
+                    loungeEmpty
+                    loungeFooter
+                }
+            } else {
+                LevelerCenterLayout(
+                    extra: CGFloat(loudnessExtraStorage),
+                    meterMin: LevelerPaneMetrics.meterMin,
+                    spacing: 6
+                ) {
+                    fileRow
+                    GeometryReader { proxy in
+                        DorroughMeterDeck(session: session, compact: true, expands: true)
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                    }
+                    paneDivider(
+                        axis: .horizontal,
+                        help: "Drag to resize the meters. Double-click to reset."
+                    ) {
+                        if loudnessDragOrigin == nil { loudnessDragOrigin = CGFloat(loudnessExtraStorage) }
+                        let next = (loudnessDragOrigin ?? CGFloat(loudnessExtraStorage)) - $0
+                        loudnessExtraStorage = Double(min(400, max(0, next)))
+                    } onEnded: {
+                        loudnessDragOrigin = nil
+                    } onReset: {
+                        loudnessExtraStorage = 0
+                        loudnessDragOrigin = nil
+                    }
+                    LoudnessCompareBoard(
+                        before: session.before,
+                        after: session.after,
+                        hasResult: session.hasResult,
+                        targetLUFS: session.activeTargetLUFS,
+                        targetTP: session.activeTruePeak,
+                        isMaximizer: session.preset.isMaximizer,
+                        maximizerMakeupDb: session.musicMakeupDb,
+                        compact: true
+                    )
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    loungeFooter
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var loungeFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            transportRow
+            statusBar
+        }
+    }
+
+    private var loungeOutput: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            LevelerOutputPanel(
+                session: session,
+                settings: $output,
+                resultName: resultName,
+                followsSource: resultNameFollowsSource,
+                primaryTitle: session.isBusy ? "WORKING…" : "Export File to Depot",
+                primaryHelp: "Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.",
+                primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
+                primaryAction: saveToDepot,
+                fillsColumn: false,
+                includesPrimaryButton: true
+            )
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var levelerBackdrop: some View {
+        ZStack {
+            LevelerTheme.windowBackground
+            RadialGradient(
+                colors: [LevelerTheme.cyan.opacity(0.06), .clear],
+                center: .top,
+                startRadius: 10,
+                endRadius: 480
+            )
+        }
+    }
+
+    private var chrome: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if session.sourceURL == nil {
-                    dropZone
+                    if mode == .lounge {
+                        loungeEmpty
+                    } else {
+                        dropZone
+                    }
                 } else {
                     mainWorkspace
                 }
@@ -23,52 +285,59 @@ struct ContentView: View {
             if showAbout {
                 aboutOverlay
             }
-        }
-        // Keep this view in the title-bar safe area. Ignoring safe area here
-        // slides PODLEVELER under the traffic lights and clips the status line.
-        .frame(width: LevelerLayout.windowWidth, height: LevelerLayout.windowHeight)
-        .background {
-            ZStack {
-                LevelerTheme.windowBackground
-                RadialGradient(
-                    colors: [LevelerTheme.cyan.opacity(0.06), .clear],
-                    center: .top,
-                    startRadius: 10,
-                    endRadius: 480
-                )
+            if showExportOptions, mode == .application {
+                exportOverlay
             }
         }
+        // Minimum is the old desk size. Extra space goes to the meters.
+        // Ignoring the safe area slides PODLEVELER under the traffic lights.
+        .frame(
+            minWidth: LevelerLayout.windowWidth,
+            idealWidth: LevelerLayout.windowWidth,
+            maxWidth: .infinity,
+            minHeight: LevelerLayout.windowHeight,
+            idealHeight: LevelerLayout.windowHeight,
+            maxHeight: .infinity
+        )
+        .background { levelerBackdrop }
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
         .onExitCommand {
-            if showAbout { showAbout = false }
+            if showExportOptions {
+                showExportOptions = false
+            } else if showAbout {
+                showAbout = false
+            }
         }
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
+        let lounge = mode == .lounge
+        return HStack(alignment: .center, spacing: lounge ? 8 : 10) {
+            VStack(alignment: .leading, spacing: lounge ? 1 : 3) {
                 Text("PODLEVELER")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .tracking(1.1)
+                    .font(.system(size: lounge ? 16 : 22, weight: .bold, design: .rounded))
+                    .tracking(lounge ? 0.8 : 1.1)
                     .foregroundStyle(LevelerTheme.cyan)
                     .shadow(color: LevelerTheme.cyan.opacity(0.35), radius: 6)
                     .lineLimit(1)
-                    .padding(.vertical, 2)
-                    .fixedSize()
+                    .padding(.vertical, lounge ? 0 : 2)
+                    .fixedSize(horizontal: !lounge, vertical: true)
                 Text("Final mix → platform loudness")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: lounge ? 10 : 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                     .lineLimit(1)
-                    .fixedSize()
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: !lounge, vertical: true)
                 Text("\(CougarCalcBrand.company) · \(CougarCalcBrand.versionLabel)")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(.system(size: lounge ? 9 : 10, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary.opacity(0.85))
                     .lineLimit(1)
-                    .fixedSize()
+                    .minimumScaleFactor(0.8)
+                    .fixedSize(horizontal: !lounge, vertical: true)
             }
             .layoutPriority(1)
 
@@ -77,7 +346,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 Button("ABOUT") { showAbout = true }
                     .buttonStyle(LevelerGhostButtonStyle())
-                if session.sourceURL != nil {
+                if mode == .application, session.sourceURL != nil {
                     Button("LOAD OTHER…") { pickFile() }
                         .buttonStyle(LevelerGhostButtonStyle())
                 }
@@ -118,6 +387,55 @@ struct ContentView: View {
         }
     }
 
+    private var exportOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .contentShape(Rectangle())
+                .onTapGesture { showExportOptions = false }
+            VStack(spacing: 12) {
+                LevelerOutputPanel(
+                    session: session,
+                    settings: $output,
+                    resultName: nil,
+                    followsSource: nil,
+                    primaryTitle: session.isBusy ? "WORKING…" : "Export…",
+                    primaryHelp: "Then pick a folder. The default name and 16-bit WAV keep today’s export.",
+                    primaryDisabled: !session.canExportLeveled,
+                    primaryAction: chooseExportDestination
+                )
+                Button("CANCEL") { showExportOptions = false }
+                    .buttonStyle(LevelerGhostButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+            .frame(width: 460)
+        }
+    }
+
+    private var loungeEmpty: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(LevelerTheme.panel)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(LevelerTheme.cyan.opacity(0.55), style: StrokeStyle(lineWidth: 1.4, dash: [7, 6]))
+            VStack(spacing: 10) {
+                Image(systemName: "waveform.badge.mic")
+                    .font(.system(size: 40, weight: .light))
+                    .foregroundStyle(LevelerTheme.cyan)
+                Text("SELECT A DEPOT FILE")
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .tracking(1)
+                    .foregroundStyle(LevelerTheme.textPrimary)
+                Text("Pick one in the depot list. The original stays where it is.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textSecondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
     private var dropZone: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
@@ -136,7 +454,7 @@ struct ContentView: View {
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(LevelerTheme.textPrimary)
-                Text("WAV, AIFF, MP3, M4A, CAF, FLAC… · export stays WAV")
+                Text("WAV, AIFF, MP3, M4A, CAF, FLAC…")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                 Button("CHOOSE FILE…") { pickFile() }
@@ -157,7 +475,11 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 fileRow
-                DorroughMeterDeck(session: session)
+                GeometryReader { proxy in
+                    DorroughMeterDeck(session: session, expands: true)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 LoudnessCompareBoard(
                     before: session.before,
                     after: session.after,
@@ -169,21 +491,39 @@ struct ContentView: View {
                 )
                 transportRow
             }
-            .frame(width: LevelerLayout.meterDeckWidth, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var presetColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let lounge = mode == .lounge
+        return VStack(alignment: .leading, spacing: lounge ? 6 : 8) {
             Text("PLATFORM TARGET LEVEL")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(.system(size: lounge ? 9 : 10, weight: .bold, design: .rounded))
                 .tracking(0.6)
                 .foregroundStyle(LevelerTheme.cyanDim)
                 .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 8) {
+            if lounge {
+                ViewThatFits(in: .vertical) {
+                    presetList
+                    ScrollView { presetList }
+                }
+            } else {
+                ScrollView { presetList }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(lounge ? 8 : 12)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .levelerPanel(glow: true)
+    }
+
+    private var presetList: some View {
+        let lounge = mode == .lounge
+        return VStack(alignment: .leading, spacing: lounge ? 4 : 8) {
                     ForEach(session.listedPresets) { p in
                         HStack(spacing: 6) {
                             Button {
@@ -193,13 +533,15 @@ struct ContentView: View {
                                     Text(p.title)
                                         .font(.system(size: 11, weight: .bold, design: .rounded))
                                         .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom : LevelerTheme.cyan)
+                                        .lineLimit(1)
                                     Text(p.subtitle)
                                         .font(.system(size: 9, weight: .medium, design: .rounded))
                                         .foregroundStyle(session.preset.id == p.id ? LevelerTheme.bgBottom.opacity(0.75) : LevelerTheme.textSecondary)
+                                        .lineLimit(1)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 8)
+                                .padding(.horizontal, mode == .lounge ? 8 : 10)
+                                .padding(.vertical, mode == .lounge ? 4 : 8)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                                         .fill(session.preset.id == p.id ? LevelerTheme.lime : LevelerTheme.panelRaised)
@@ -259,14 +601,7 @@ struct ContentView: View {
                         }
                         .padding(.top, 4)
                     }
-                }
-            }
-
-            Spacer(minLength: 0)
         }
-        .padding(12)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .levelerPanel(glow: true)
     }
 
     /// L1-style: one threshold slider + a readable GR meter. Ceiling is fixed.
@@ -342,16 +677,21 @@ struct ContentView: View {
                 Text(String(format: "GAIN %+.1f dB", session.appliedGainDb))
                     .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.lime)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
-        .padding(12)
+        .padding(mode == .lounge ? 8 : 12)
         .levelerPanel()
     }
 
     private var transportRow: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: mode == .lounge ? 6 : 10) {
             HStack(spacing: 12) {
                 Button(session.isPlaying ? "PAUSE" : "PLAY") {
+                    if !session.isPlaying {
+                        onPlaybackWillStart?()
+                    }
                     session.togglePlayback()
                 }
                 .buttonStyle(LevelerPrimaryButtonStyle())
@@ -401,25 +741,26 @@ struct ContentView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 150)
+                .frame(width: mode == .lounge ? 112 : 150)
                 .disabled(!session.canListenPost)
                 .help("PRE is the file you dropped. POST is the live maximizer (MUSIC LOUD) or the leveled file. Time stays put when you flip.")
 
-                Button("RE-LEVEL") { session.process() }
+                Button("RE-LEVEL") { session.relevel() }
                     .buttonStyle(LevelerGhostButtonStyle())
                     .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
 
-                Spacer()
-
-                Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
-                    session.exportLeveled()
+                if mode == .application {
+                    Spacer()
+                    Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
+                        showExportOptions = true
+                    }
+                    .buttonStyle(LevelerPrimaryButtonStyle())
+                    .disabled(!session.canExportLeveled)
+                    .help("Choose a file type, bit depth, and sample rate, then a folder. MUSIC LOUD exports the current THRESHOLD.")
                 }
-                .buttonStyle(LevelerPrimaryButtonStyle())
-                .disabled((session.preset.isMaximizer ? !session.hasFile : !session.hasResult) || session.isBusy)
-                .help("Choose a folder and file name. MUSIC LOUD exports the current THRESHOLD.")
             }
         }
-        .padding(12)
+        .padding(mode == .lounge ? 8 : 12)
         .levelerPanel()
     }
 
@@ -429,6 +770,77 @@ struct ContentView: View {
             .foregroundStyle(LevelerTheme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
+    }
+
+    private var automaticResultName: String {
+        LevelerResultName.suggested(sourceName: session.sourceName, presetTitle: session.activePresetTitle)
+    }
+
+    private func saveToDepot() {
+        guard let onSaveToDepot else { return }
+        let settings = output
+        let ext = settings.container.fileExtension
+        var display = resultName.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if display.isEmpty { display = automaticResultName }
+        if display.lowercased().hasSuffix(".\(ext)") == false {
+            display += ".\(ext)"
+        }
+        let temp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("podleveler-\(UUID().uuidString).\(ext)")
+        Task {
+            session.isExporting = true
+            defer { session.isExporting = false }
+            do {
+                try await session.writeLeveled(to: temp, output: settings, releaseBusy: false)
+                try await onSaveToDepot(temp, display)
+                try? FileManager.default.removeItem(at: temp)
+                session.isBusy = false
+                session.status = "Saved result to the depot"
+            } catch {
+                try? FileManager.default.removeItem(at: temp)
+                session.isBusy = false
+                session.renderFraction = 0
+                session.status = error.localizedDescription
+            }
+        }
+    }
+
+    private func chooseExportDestination() {
+        guard let sourceURL = session.sourceURL else {
+            session.status = "Nothing to export yet."
+            return
+        }
+        let settings = output
+        let base = sourceURL.deletingPathExtension().lastPathComponent
+        let ext = settings.container.fileExtension
+        let panel = NSSavePanel()
+        panel.title = "Export Leveled"
+        panel.message = "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.allowedContentTypes = [settings.contentType]
+        panel.nameFieldStringValue = "\(base)_leveled.\(ext)"
+        panel.directoryURL = sourceURL.deletingLastPathComponent()
+        panel.level = .modalPanel
+        guard panel.runModal() == .OK, var dest = panel.url else {
+            session.status = "Export cancelled"
+            return
+        }
+        if dest.pathExtension.lowercased() != ext {
+            dest = dest.deletingPathExtension().appendingPathExtension(ext)
+        }
+        showExportOptions = false
+        let destination = dest
+        Task {
+            do {
+                try await session.writeLeveled(to: destination, output: settings)
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+                session.status = "Exported → \(destination.lastPathComponent)"
+            } catch {
+                session.status = error.localizedDescription
+            }
+        }
     }
 
     private func promptSavePreset() {

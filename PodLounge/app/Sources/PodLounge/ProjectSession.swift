@@ -24,14 +24,27 @@ final class ProjectSession: ObservableObject {
     @Published var alertMessage: String?
     @Published var confirmDiscard = false
     @Published var showAbout = false
+    @Published var limiterSettings = LimiterWorkspaceSettings.defaults
+    /// True while the Limiter is rendering or copying a result. Depot clicks wait.
+    @Published var limiterExporting = false
+
+    /// Set by the Limiter workspace so leaving the card stops playback.
+    var endLimiterPlayback: (() -> Void)?
+    /// Stops Limiter transport without unloading the file. Depot preview calls this.
+    var stopLimiterPlayback: (() -> Void)?
+    let depotPlayer = DepotPreviewPlayer()
 
     private var pending: PendingNavigation?
     private var savedName = ""
     private var savedNotes: [WorkspaceID: String] = [:]
     private var savedSelection: String?
+    private var savedLimiterSettings = LimiterWorkspaceSettings.defaults
 
     var isDirty: Bool {
-        projectName != savedName || notes != savedNotes || selectedAssetID != savedSelection
+        projectName != savedName
+            || notes != savedNotes
+            || selectedAssetID != savedSelection
+            || limiterSettings != savedLimiterSettings
     }
 
     var assets: [DepotAsset] {
@@ -45,10 +58,46 @@ final class ProjectSession: ObservableObject {
     }
 
     func select(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
         selectedAssetID = asset.id
     }
 
+    /// Plays the depot file as stored. A second file, or the same file again, stops the first.
+    func toggleDepotPlayback(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
+        if depotPlayer.playingAssetID == asset.id {
+            stopDepotPlayback()
+            return
+        }
+        guard health(of: asset) == .present,
+              let package,
+              let url = try? package.resolvedURL(for: asset)
+        else {
+            stopDepotPlayback()
+            alertMessage = "That depot file can't be played."
+            return
+        }
+        stopLimiterPlayback?()
+        do {
+            try depotPlayer.play(assetID: asset.id, url: url)
+        } catch {
+            stopDepotPlayback()
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    func stopDepotPlayback() {
+        depotPlayer.stop()
+    }
+
+    /// Opens a card. Ignored while a Limiter export is still writing.
+    func openWorkspace(_ workspace: WorkspaceID) {
+        guard !limiterExporting else { return }
+        activeWorkspace = workspace
+    }
+
     func newProject() {
+        guard !limiterExporting else { return }
         guard !isDirty else {
             pending = .newProject
             confirmDiscard = true
@@ -58,6 +107,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func openProject() {
+        guard !limiterExporting else { return }
         guard !isDirty else {
             pending = .openProject
             confirmDiscard = true
@@ -82,7 +132,7 @@ final class ProjectSession: ObservableObject {
         do {
             try save()
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
             pending = nil
             return
         }
@@ -105,7 +155,7 @@ final class ProjectSession: ObservableObject {
         do {
             try save()
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -114,6 +164,7 @@ final class ProjectSession: ObservableObject {
             throw PackageError.operationFailed("Create or open a project before saving.")
         }
         applyMetadata(to: package)
+        try package.writeLimiterSettings(limiterSettings)
         try package.save()
         markClean()
         missingAssetIDs = package.missingAssetIDs
@@ -121,6 +172,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func saveAs() {
+        guard !limiterExporting else { return }
         guard package != nil else {
             presentNewPanel()
             return
@@ -136,21 +188,28 @@ final class ProjectSession: ObservableObject {
         do {
             applyMetadata(to: package)
             let copy = try package.saveAs(to: folder)
+            do {
+                try copy.writeLimiterSettings(limiterSettings)
+            } catch {
+                try? FileManager.default.removeItem(at: folder)
+                throw error
+            }
             // The copy takes the name typed in the Save As box, so the
             // project name at the top of the Lounge matches the new file.
             copy.manifest.projectName = folder.deletingPathExtension().lastPathComponent
             do {
                 try copy.save()
             } catch {
-                alertMessage = error.localizedDescription
+                report(error)
             }
             adopt(copy)
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
     func importAudio() {
+        guard !limiterExporting else { return }
         guard package != nil else {
             alertMessage = "Create or open a project before importing audio."
             return
@@ -168,6 +227,7 @@ final class ProjectSession: ObservableObject {
 
     /// Asks first, then removes the file from the depot and saves the project.
     func deleteAsset(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
         guard let package else { return }
         let alert = NSAlert()
         alert.messageText = "Delete \u{201C}\(asset.displayName)\u{201D} from this project?"
@@ -177,8 +237,12 @@ final class ProjectSession: ObservableObject {
         alert.addButton(withTitle: "Cancel")
         alert.buttons.first?.hasDestructiveAction = true
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        if depotPlayer.playingAssetID == asset.id {
+            stopDepotPlayback()
+        }
         do {
             applyMetadata(to: package)
+            try package.writeLimiterSettings(limiterSettings)
             try package.removeAsset(id: asset.id)
             adopt(package, keepWorkspace: true)
         } catch {
@@ -186,9 +250,66 @@ final class ProjectSession: ObservableObject {
         }
     }
 
-    /// Navigation only. Does not stop a take — there is no recorder in this build.
+    /// Navigation only. Stops Limiter playback. Does not delete depot audio.
+    /// Does not stop a Fixer take — there is no recorder in this build.
     func leaveWorkspace() {
+        guard !limiterExporting else { return }
+        stopDepotPlayback()
+        if activeWorkspace == .limiter {
+            endLimiterPlayback?()
+        }
         activeWorkspace = nil
+    }
+
+    /// Renders nothing itself. The Limiter workspace passes a finished file.
+    /// The original depot bytes are not rewritten, and the selection stays on
+    /// the file that was leveled.
+    func importLimiterResult(from url: URL, displayName: String) throws {
+        guard let package else {
+            throw PackageError.operationFailed("Create or open a project before saving a result.")
+        }
+        applyMetadata(to: package)
+        try package.writeLimiterSettings(limiterSettings)
+        _ = try package.importResult(
+            from: url,
+            producedBy: "limiter",
+            displayName: displayName,
+            select: false
+        )
+        adopt(package, keepWorkspace: true)
+    }
+
+    /// Copies the stored depot file out. The project and its audio are not changed.
+    func exportCopy(of asset: DepotAsset) {
+        guard !limiterExporting else { return }
+        guard health(of: asset) != .missing, let package else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export Copy"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = ProjectPackage.exportCopySuggestedName(
+            displayName: asset.displayName,
+            relativePath: asset.relativePath
+        )
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try package.exportCopy(of: asset, to: url)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// Reveals the stored depot file. This is a user action, so Finder may open.
+    func showInFinder(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
+        guard health(of: asset) != .missing, let package else { return }
+        guard let url = try? package.resolvedURL(for: asset) else { return }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     // MARK: - Private
@@ -206,7 +327,7 @@ final class ProjectSession: ObservableObject {
             let created = try ProjectPackage.create(at: folder, name: name)
             adopt(created)
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -236,6 +357,7 @@ final class ProjectSession: ObservableObject {
     private func importFiles(_ urls: [URL]) {
         guard let package else { return }
         applyMetadata(to: package)
+        try? package.writeLimiterSettings(limiterSettings)
         var failures: [String] = []
         var importedAny = false
         for url in urls {
@@ -255,6 +377,18 @@ final class ProjectSession: ObservableObject {
         }
     }
 
+    private func report(_ error: Error) {
+        if error.localizedDescription == ProjectPackage.nestedProjectMessage {
+            let alert = NSAlert()
+            alert.messageText = ProjectPackage.nestedProjectMessage
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        alertMessage = error.localizedDescription
+    }
+
     private func applyMetadata(to package: ProjectPackage) {
         let trimmed = projectName.trimmingCharacters(in: .whitespacesAndNewlines)
         package.manifest.projectName = trimmed.isEmpty ? "Untitled Project" : trimmed
@@ -266,7 +400,11 @@ final class ProjectSession: ObservableObject {
     }
 
     private func adopt(_ package: ProjectPackage, keepWorkspace: Bool = false) {
+        let rootChanged = self.package?.rootURL != package.rootURL
         let workspace = keepWorkspace ? activeWorkspace : nil
+        if activeWorkspace == .limiter, workspace != .limiter {
+            endLimiterPlayback?()
+        }
         self.package = package
         projectName = package.manifest.projectName
         var nextNotes: [WorkspaceID: String] = [:]
@@ -275,22 +413,30 @@ final class ProjectSession: ObservableObject {
         }
         notes = nextNotes
         selectedAssetID = package.manifest.selectedAssetID
+        limiterSettings = package.readLimiterSettings()
         missingAssetIDs = package.missingAssetIDs
         mismatchedAssetIDs = package.mismatchedAssetIDs
         activeWorkspace = workspace
         markClean()
+        if rootChanged {
+            stopDepotPlayback()
+        } else if let playing = depotPlayer.playingAssetID, assets.contains(where: { $0.id == playing }) == false {
+            stopDepotPlayback()
+        }
     }
 
     private func markClean() {
         savedName = projectName
         savedNotes = notes
         savedSelection = selectedAssetID
+        savedLimiterSettings = limiterSettings
     }
 
     private func discardUnsavedEdits() {
         projectName = savedName
         notes = savedNotes
         selectedAssetID = savedSelection
+        limiterSettings = savedLimiterSettings
         guard let package else { return }
         package.manifest.projectName = savedName
         package.manifest.selectedAssetID = savedSelection

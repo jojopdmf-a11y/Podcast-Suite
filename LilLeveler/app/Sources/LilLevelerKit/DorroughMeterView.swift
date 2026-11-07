@@ -33,9 +33,19 @@ enum DorroughLook {
 
 struct DorroughMeterDeck: View {
     @ObservedObject var session: LevelerSession
+    /// Lounge column. Shorter buttons so the deck fits beside the presets.
+    /// Standalone PodLeveler leaves this false.
+    var compact: Bool = false
+    /// Draw the same scale at whatever size the parent offers. Ballistics stay put.
+    var expands: Bool = false
+
+    private var controlWidth: CGFloat {
+        if expands { return compact ? 104 : LevelerLayout.meterControlsWidth }
+        return compact ? 92 : LevelerLayout.meterControlsWidth
+    }
 
     var body: some View {
-        HStack(alignment: .center, spacing: LevelerLayout.meterDeckSpacing) {
+        HStack(alignment: .center, spacing: compact ? 8 : LevelerLayout.meterDeckSpacing) {
             DorroughFaceplate(
                 title: "PRE",
                 sample: session.livePre,
@@ -43,7 +53,9 @@ struct DorroughMeterDeck: View {
                 holdR: session.preHoldR,
                 overs: session.preOvers,
                 mode: session.meterMode,
-                active: true
+                active: true,
+                compact: compact,
+                expands: expands
             )
             DorroughFaceplate(
                 title: "POST",
@@ -52,21 +64,28 @@ struct DorroughMeterDeck: View {
                 holdR: session.postHoldR,
                 overs: session.postOvers,
                 mode: session.meterMode,
-                active: session.hasResult || session.liveMaximizerActive
+                active: session.hasResult || session.liveMaximizerActive,
+                compact: compact,
+                expands: expands
             )
             meterControls
         }
-        .padding(LevelerLayout.meterDeckPadding)
+        .padding(compact ? 8 : LevelerLayout.meterDeckPadding)
+        .frame(
+            maxWidth: (compact || expands) ? .infinity : nil,
+            maxHeight: (compact || expands) ? .infinity : nil
+        )
         .levelerPanel()
     }
 
     private var meterControls: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: compact ? 6 : 14) {
             controlGroup(label: "PEAK") {
                 HardwareLitButton(
                     title: "HOLD",
                     lit: session.peakHold,
-                    led: DorroughLook.ledYellow
+                    led: DorroughLook.ledYellow,
+                    compact: compact
                 ) {
                     session.peakHold.toggle()
                 }
@@ -75,7 +94,8 @@ struct DorroughMeterDeck: View {
                 HardwareLitButton(
                     title: "RESET",
                     lit: false,
-                    led: DorroughLook.ledRed
+                    led: DorroughLook.ledRed,
+                    compact: compact
                 ) {
                     session.resetPeakHold()
                 }
@@ -86,7 +106,8 @@ struct DorroughMeterDeck: View {
                 HardwareLitButton(
                     title: "RMS",
                     lit: session.meterMode == .rms,
-                    led: DorroughLook.ledGreen
+                    led: DorroughLook.ledGreen,
+                    compact: compact
                 ) {
                     session.setMeterMode(.rms)
                 }
@@ -95,32 +116,35 @@ struct DorroughMeterDeck: View {
                 HardwareLitButton(
                     title: "TRUE PEAK",
                     lit: session.meterMode == .truePeak,
-                    led: DorroughLook.ledYellow
+                    led: DorroughLook.ledYellow,
+                    compact: compact
                 ) {
                     session.setMeterMode(.truePeak)
                 }
                 .help("Inter-sample true peak. Best match for the limiter ceiling.")
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: compact ? 3 : 6) {
                 Text("OVERS")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(DorroughLook.silk)
-                HStack(spacing: 10) {
+                HStack(spacing: compact ? 6 : 10) {
                     oversLamp(title: "PRE", on: session.preOvers)
                     oversLamp(title: "POST", on: session.postOvers)
                 }
             }
 
-            Spacer(minLength: 0)
+            if !compact && !expands {
+                Spacer(minLength: 0)
+            }
         }
-        .frame(width: LevelerLayout.meterControlsWidth)
-        .padding(.vertical, 4)
+        .frame(width: controlWidth)
+        .padding(.vertical, compact ? 0 : 4)
     }
 
     private func controlGroup(label: String, @ViewBuilder buttons: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: compact ? 3 : 6) {
             Text(label)
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(1.1)
@@ -135,7 +159,7 @@ struct DorroughMeterDeck: View {
         VStack(spacing: 3) {
             Circle()
                 .fill(on ? DorroughLook.ledRed : Color(white: 0.12))
-                .frame(width: 10, height: 10)
+                .frame(width: compact ? 8 : 10, height: compact ? 8 : 10)
                 .shadow(color: on ? DorroughLook.ledRed.opacity(0.9) : .clear, radius: on ? 5 : 0)
                 .overlay(Circle().stroke(Color(white: 0.35), lineWidth: 0.6))
             Text(title)
@@ -153,29 +177,39 @@ struct DorroughFaceplate: View {
     var overs: Bool
     var mode: LevelerMeterMode
     var active: Bool
+    var compact: Bool = false
+    var expands: Bool = false
 
     private var live: (Float, Float) { sample.display(mode: mode) }
+    private var scaleWidth: CGFloat {
+        if expands { return compact ? 30 : LevelerLayout.scaleWidth + 8 }
+        return compact ? 16 : LevelerLayout.scaleWidth
+    }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: compact ? 4 : 8) {
             HStack {
                 Text(title)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .tracking(1.6)
                     .foregroundStyle(DorroughLook.silk)
+                    .lineLimit(1)
                 Spacer()
                 Text(mode.unit)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(DorroughLook.scale.opacity(0.8))
+                    .lineLimit(1)
             }
 
-            HStack(alignment: .top, spacing: 3) {
+            HStack(alignment: .top, spacing: compact ? 2 : 3) {
                 scaleColumn(align: .trailing)
-                ledWell(level: live.0, hold: holdL)
-                ledWell(level: live.1, hold: holdR)
+                ledColumn(level: live.0, hold: holdL)
+                ledColumn(level: live.1, hold: holdR)
                 scaleColumn(align: .leading)
             }
-            .frame(height: LevelerLayout.meterStackHeight)
+            .frame(maxHeight: (compact || expands) ? .infinity : nil)
+            .frame(height: (compact || expands) ? nil : LevelerLayout.meterStackHeight)
+            .frame(minHeight: (compact || expands) ? 56 : nil)
             .opacity(active ? 1 : 0.38)
 
             HStack {
@@ -190,8 +224,14 @@ struct DorroughFaceplate: View {
 
             readout
         }
-        .padding(8)
-        .frame(width: LevelerLayout.faceplateWidth)
+        .padding(compact ? 6 : 8)
+        .frame(
+            minWidth: expands ? 110 : nil,
+            maxWidth: (compact || expands) ? .infinity : nil,
+            maxHeight: (compact || expands) ? .infinity : nil,
+            alignment: .top
+        )
+        .frame(width: (compact || expands) ? nil : LevelerLayout.faceplateWidth)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(
@@ -261,11 +301,12 @@ struct DorroughFaceplate: View {
     private func scaleColumn(align: Alignment) -> some View {
         let marks: [Float] = [3, 0, -3, -6, -9, -12, -18, -24, -30, -40]
         return GeometryReader { geo in
-            ForEach(marks, id: \.self) { db in
+            let placed = readableScaleMarks(marks, height: geo.size.height)
+            ForEach(placed, id: \.self) { db in
                 let y = DorroughLook.verticalInset
                     + (geo.size.height - 2 * DorroughLook.verticalInset)
                     * (1 - DorroughLook.fraction(db: db))
-                HStack(spacing: 3) {
+                HStack(spacing: 2) {
                     if align == .leading, db == 0 {
                         Text("FS")
                             .foregroundStyle(DorroughLook.ledYellow)
@@ -278,17 +319,48 @@ struct DorroughFaceplate: View {
                     }
                 }
                 .font(.system(size: 8, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .frame(width: geo.size.width, alignment: align)
                 .position(x: geo.size.width / 2, y: y)
             }
         }
-        .frame(width: LevelerLayout.scaleWidth)
+        .frame(width: scaleWidth)
+    }
+
+    /// Same dB positions as the LED scale. A mark is omitted only when it would
+    /// sit on top of a mark that is already drawn, which happens on a short meter.
+    private func readableScaleMarks(_ marks: [Float], height: CGFloat) -> [Float] {
+        let inner = max(1, height - 2 * DorroughLook.verticalInset)
+        func y(_ db: Float) -> CGFloat {
+            DorroughLook.verticalInset + inner * (1 - DorroughLook.fraction(db: db))
+        }
+        let priority: [Float] = [0, 3, -12, -24, -40, -6, -18, -30, -9, -3]
+        var kept: [Float] = []
+        for db in priority where marks.contains(db) {
+            let markY = y(db)
+            if kept.allSatisfy({ abs(y($0) - markY) >= 11 }) {
+                kept.append(db)
+            }
+        }
+        return kept
     }
 
     private func scaleLabel(_ db: Float) -> String {
         if db > 0 { return "+\(Int(db))" }
         if db == 0 { return "0" }
         return "\(Int(abs(db)))"
+    }
+
+    @ViewBuilder
+    private func ledColumn(level: Float, hold: Float) -> some View {
+        if compact || expands {
+            ledWell(level: level, hold: hold)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ledWell(level: level, hold: hold)
+                .frame(width: LevelerLayout.ledColumnWidth)
+        }
     }
 
     private func ledWell(level: Float, hold: Float) -> some View {
@@ -334,7 +406,12 @@ struct DorroughFaceplate: View {
             }
         }
         .padding(3)
-        .frame(width: LevelerLayout.ledColumnWidth)
+        .frame(
+            minWidth: (compact || expands) ? 14 : LevelerLayout.ledColumnWidth,
+            idealWidth: (compact || expands) ? 28 : LevelerLayout.ledColumnWidth,
+            maxWidth: (compact || expands) ? .infinity : LevelerLayout.ledColumnWidth,
+            maxHeight: .infinity
+        )
         .background(
             RoundedRectangle(cornerRadius: 3, style: .continuous)
                 .fill(DorroughLook.well)
@@ -359,25 +436,26 @@ struct HardwareLitButton: View {
     var title: String
     var lit: Bool
     var led: Color
+    var compact: Bool = false
     var action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
+            VStack(spacing: compact ? 2 : 5) {
                 Circle()
                     .fill(lit ? led : Color(white: 0.18))
-                    .frame(width: 8, height: 8)
+                    .frame(width: compact ? 6 : 8, height: compact ? 6 : 8)
                     .shadow(color: lit ? led.opacity(0.95) : .clear, radius: lit ? 4 : 0)
                     .overlay(Circle().stroke(Color.black.opacity(0.5), lineWidth: 0.6))
                 Text(title)
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 7 : 8, weight: .bold, design: .rounded))
                     .tracking(0.3)
                     .foregroundStyle(Color(white: 0.15))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 8)
+            .padding(.vertical, compact ? 3 : 8)
             .background(
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
                     .fill(
@@ -408,34 +486,36 @@ struct LoudnessCompareBoard: View {
     var targetTP: Float
     var isMaximizer: Bool = false
     var maximizerMakeupDb: Float = 0
+    /// Tighter type and padding for the Pod Lounge column. Standalone stays at the desk size.
+    var compact: Bool = false
 
     private var netGainDb: Float {
         after.integratedLUFS - before.integratedLUFS
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: compact ? 6 : 10) {
+            VStack(alignment: .leading, spacing: compact ? 2 : 4) {
                 Text("FILE LOUDNESS")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
                     .tracking(1.1)
                     .foregroundStyle(LevelerTheme.cyanDim)
                 Text(isMaximizer
                      ? String(format: "MUSIC LOUD  ceiling −0.1 dB  ·  makeup %+.1f dB", maximizerMakeupDb)
                      : String(format: "PLATFORM TARGET LEVEL  %.1f LUFS  ·  %.1f dBTP", targetLUFS, targetTP))
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.system(size: compact ? 9 : 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.cyan)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.7)
             }
 
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: compact ? 6 : 8) {
                 loudnessCard(title: "PRE", report: before, glow: false)
                 gainPill
                 loudnessCard(title: "POST", report: after, glow: hasResult)
             }
         }
-        .padding(12)
+        .padding(compact ? 8 : 12)
         .levelerPanel(glow: hasResult)
     }
 
@@ -446,7 +526,7 @@ struct LoudnessCompareBoard: View {
                 .tracking(0.8)
                 .foregroundStyle(LevelerTheme.cyanDim)
             Text(hasResult ? String(format: "%+.1f", netGainDb) : "—")
-                .font(.system(size: 16, weight: .bold, design: .monospaced))
+                .font(.system(size: compact ? 14 : 16, weight: .bold, design: .monospaced))
                 .foregroundStyle(hasResult ? LevelerTheme.lime : LevelerTheme.textSecondary)
             Text("dB")
                 .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -456,8 +536,8 @@ struct LoudnessCompareBoard: View {
                 .tracking(0.4)
                 .foregroundStyle(LevelerTheme.textSecondary.opacity(0.9))
         }
-        .frame(width: 58)
-        .padding(.vertical, 10)
+        .frame(width: compact ? 50 : 58)
+        .padding(.vertical, compact ? 6 : 10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(LevelerTheme.panelRaised)
@@ -466,21 +546,21 @@ struct LoudnessCompareBoard: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(LevelerTheme.lime.opacity(hasResult ? 0.55 : 0.15), lineWidth: 1)
         )
-        .padding(.top, 18)
+        .padding(.top, compact ? 10 : 18)
         .help("How much louder the whole file got, from PRE to POST.")
     }
 
     private func loudnessCard(title: String, report: LoudnessReport, glow: Bool) -> some View {
         let accent = glow ? LevelerTheme.lime : LevelerTheme.cyan
-        return VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: compact ? 4 : 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
                 .tracking(1.4)
                 .foregroundStyle(accent)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(formatLUFS(report.integratedLUFS))
-                    .font(.system(size: 26, weight: .bold, design: .monospaced))
+                    .font(.system(size: compact ? 20 : 26, weight: .bold, design: .monospaced))
                     .foregroundStyle(accent)
                     .shadow(color: accent.opacity(0.35), radius: 6)
                     .minimumScaleFactor(0.7)
@@ -489,16 +569,18 @@ struct LoudnessCompareBoard: View {
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(0.8)
                     .foregroundStyle(LevelerTheme.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
-            VStack(spacing: 4) {
+            VStack(spacing: compact ? 2 : 4) {
                 metric("SHORT-TERM", formatLUFS(report.shortTermLUFS), unit: "LUFS", accent: accent)
                 metric("MOMENTARY", formatLUFS(report.momentaryLUFS), unit: "LUFS", accent: accent)
                 metric("TRUE PEAK", formatPeak(report.truePeakDbTP), unit: "dBTP", accent: peakColor(report.truePeakDbTP, fallback: accent))
                 metric("SAMPLE PEAK", formatPeak(report.samplePeakDbFS), unit: "dBFS", accent: accent)
             }
         }
-        .padding(10)
+        .padding(compact ? 6 : 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -516,9 +598,11 @@ struct LoudnessCompareBoard: View {
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.4)
                 .foregroundStyle(LevelerTheme.textSecondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
             Spacer(minLength: 4)
             Text(value)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .font(.system(size: compact ? 11 : 12, weight: .bold, design: .monospaced))
                 .foregroundStyle(accent)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)

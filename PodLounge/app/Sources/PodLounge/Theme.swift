@@ -18,6 +18,17 @@ struct LoungeButtonStyle: ButtonStyle {
     var prominent = false
 
     func makeBody(configuration: Configuration) -> some View {
+        LoungeButtonBody(configuration: configuration, prominent: prominent)
+    }
+}
+
+/// Reads isEnabled so a disabled button looks dimmed instead of live.
+private struct LoungeButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let prominent: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(prominent ? Color(red: 0.03, green: 0.08, blue: 0.10) : LoungeTheme.cyan)
@@ -31,7 +42,7 @@ struct LoungeButtonStyle: ButtonStyle {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(LoungeTheme.cyan.opacity(prominent ? 0 : 0.75), lineWidth: 1)
             )
-            .opacity(configuration.isPressed ? 0.72 : 1)
+            .opacity(isEnabled ? (configuration.isPressed ? 0.72 : 1) : 0.35)
     }
 }
 

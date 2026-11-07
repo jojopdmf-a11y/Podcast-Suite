@@ -1,8 +1,31 @@
+import AppKit
+import LilLevelerKit
 import PodLoungeCore
 import SwiftUI
 
+enum DepotChrome {
+    static let minWidth: CGFloat = 260
+    static let maxWidth: CGFloat = 560
+    static let defaultWidth: Double = 332
+    static let widthKey = "podlounge.depotWidth"
+    static let hiddenKey = "podlounge.depotHidden"
+}
+
 struct ContentView: View {
     @EnvironmentObject private var session: ProjectSession
+    @AppStorage(DepotChrome.widthKey) private var depotWidthStorage = DepotChrome.defaultWidth
+    @AppStorage(DepotChrome.hiddenKey) private var depotHidden = false
+    @State private var depotDragStart: CGFloat?
+
+    private func depotMax(in containerWidth: CGFloat) -> CGFloat {
+        guard session.activeWorkspace == .limiter else { return DepotChrome.maxWidth }
+        return LevelerPaneMath.depotMaximum(
+            container: containerWidth,
+            reserved: LevelerPaneMetrics.limiterWorkspaceMinimum,
+            minimum: DepotChrome.minWidth,
+            cap: DepotChrome.maxWidth
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -10,22 +33,41 @@ struct ContentView: View {
             Rectangle()
                 .fill(LoungeTheme.cyan.opacity(0.18))
                 .frame(height: 1)
-            HStack(spacing: 0) {
-                Group {
-                    if let workspace = session.activeWorkspace {
-                        WorkspaceScaffoldView(workspace: workspace)
-                    } else {
-                        LoungeHomeView()
+            GeometryReader { geo in
+                let maxDepot = depotMax(in: geo.size.width)
+                let width = min(maxDepot, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
+                HStack(spacing: 0) {
+                    Group {
+                        if let workspace = session.activeWorkspace {
+                            if workspace == .limiter {
+                                LimiterWorkspaceView()
+                            } else {
+                                WorkspaceScaffoldView(workspace: workspace)
+                            }
+                        } else {
+                            LoungeHomeView()
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if !depotHidden {
+                        DepotSidebar()
+                            .frame(width: width)
+                            .overlay(alignment: .leading) {
+                                depotResizeHandle(current: width, maximum: maxDepot)
+                            }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                DepotSidebar()
-                    .frame(width: 332)
             }
         }
         .background(LoungeTheme.background)
         .foregroundStyle(LoungeTheme.text)
-        .frame(minWidth: 1100, minHeight: 700)
+        .frame(
+            minWidth: LevelerPaneMetrics.limiterWorkspaceMinimum + DepotChrome.minWidth,
+            minHeight: 800
+        )
+        .onChange(of: session.activeWorkspace) { _, _ in
+            session.stopDepotPlayback()
+        }
         .alert("Pod Lounge", isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { session.alertMessage = nil }
         } message: {
@@ -34,7 +76,7 @@ struct ContentView: View {
         .alert("About Pod Lounge", isPresented: aboutIsPresented) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. This build stores a project package and opens workspace scaffolds. It does not record or process audio.")
+            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Limiter levels the selected depot file and can save a new result. Stripper, Fixer, and Trimmer do not process audio in this build.")
         }
         .confirmationDialog(
             "This project has unsaved changes.",
@@ -45,7 +87,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest only. Depot audio stays as it is.")
+            Text("Save Project writes the manifest and Limiter settings. It does not rewrite depot audio.")
         }
     }
 
@@ -121,18 +163,44 @@ struct ContentView: View {
             Spacer()
             Button("New") { session.newProject() }
                 .buttonStyle(LoungeButtonStyle())
+                .disabled(session.limiterExporting)
             Button("Open") { session.openProject() }
                 .buttonStyle(LoungeButtonStyle())
+                .disabled(session.limiterExporting)
             Button("Save") { session.saveShowingError() }
                 .buttonStyle(LoungeButtonStyle(prominent: true))
                 .disabled(session.package == nil || !session.isDirty)
             Button("Save As") { session.saveAs() }
                 .buttonStyle(LoungeButtonStyle())
-                .disabled(session.package == nil)
+                .disabled(session.package == nil || session.limiterExporting)
+            Button(depotHidden ? "Show Depot" : "Hide Depot") {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    depotHidden.toggle()
+                }
+            }
+            .buttonStyle(LoungeButtonStyle())
+            .help(depotHidden ? "Show the project depot" : "Hide the project depot")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .background(LoungeTheme.backgroundRaised)
+    }
+
+    private func depotResizeHandle(current: CGFloat, maximum: CGFloat) -> some View {
+        LevelerPaneDivider(
+            axis: .vertical,
+            help: "Drag to resize the depot. Double-click to reset."
+        ) { delta in
+            if depotDragStart == nil { depotDragStart = current }
+            let next = (depotDragStart ?? current) - delta
+            let clamped = min(maximum, max(DepotChrome.minWidth, next))
+            depotWidthStorage = Double(clamped)
+        } onDragEnded: {
+            depotDragStart = nil
+        } onReset: {
+            depotWidthStorage = DepotChrome.defaultWidth
+            depotDragStart = nil
+        }
     }
 }
 
@@ -159,8 +227,9 @@ struct LoungeHomeView: View {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(WorkspaceID.allCases) { workspace in
                         WorkspaceCard(workspace: workspace) {
-                            session.activeWorkspace = workspace
+                            session.openWorkspace(workspace)
                         }
+                        .disabled(session.limiterExporting)
                     }
                 }
                 .frame(minHeight: 560)
