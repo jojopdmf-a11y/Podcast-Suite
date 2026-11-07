@@ -182,13 +182,93 @@ private func milliseconds(since start: ContinuousClock.Instant, clock: Continuou
     )
 }
 
+@Test @MainActor func reselectingAnEvictedFileShowsItsResultImmediately() async throws {
+    let folder = FileManager.default.temporaryDirectory
+        .appendingPathComponent("reselect-evict-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+
+    let settings = LevelerOutputSettings(container: .wav, bitDepth: .int16, rateMode: .matchSource)
+    let firstURL = folder.appendingPathComponent("first.wav")
+    let secondURL = folder.appendingPathComponent("second.wav")
+    try writeTone(frames: 48_000 * 2, to: firstURL, settings: settings)
+    try writeTone(frames: 48_000, to: secondURL, settings: settings)
+
+    let cache = LevelerScanCache(maxAudioFiles: 1, maxAudioBytes: 2_000_000_000, maxReportFiles: 8)
+    let session = LevelerSession(scanCache: cache)
+
+    session.load(url: firstURL)
+    try await waitUntilReady(session, url: firstURL)
+    let before = session.before
+    let after = session.after
+    let gain = session.appliedGainDb
+    let peak = session.peakGR
+    #expect(session.sourceAnalysisCount == 1)
+    #expect(session.levelingMeasureCount == 1)
+    #expect(session.hasResult)
+
+    session.load(url: secondURL)
+    try await waitUntilReady(session, url: secondURL)
+    let analyzed = session.sourceAnalysisCount
+    let measured = session.levelingMeasureCount
+    #expect(analyzed == 2)
+    #expect(measured == 2)
+
+    session.load(url: firstURL)
+    #expect(session.sourceName == firstURL.lastPathComponent)
+    #expect(session.before == before)
+    #expect(session.after == after)
+    #expect(session.appliedGainDb == gain)
+    #expect(session.peakGR == peak)
+    #expect(session.hasResult)
+    #expect(session.sourceAnalysisCount == analyzed)
+    #expect(session.levelingMeasureCount == measured)
+    #expect(session.hasFile == false)
+    #expect(session.canExportLeveled == false)
+    #expect(session.isBusy == false)
+    #expect(session.isMeasuring == false)
+    #expect(session.renderFraction == 0)
+    #expect(session.status.contains("Analyzing") == false)
+    #expect(session.status.contains("Leveling") == false)
+    #expect(session.status.contains("Loading…") == false)
+    #expect(session.status.contains("%") == false)
+
+    try await waitUntilReady(session, url: firstURL)
+    #expect(session.hasFile)
+    #expect(session.canExportLeveled)
+    #expect(session.isBusy == false)
+    #expect(session.sourceAnalysisCount == analyzed)
+    #expect(session.levelingMeasureCount == measured)
+    #expect(session.before == before)
+    #expect(session.after == after)
+    #expect(session.appliedGainDb == gain)
+    #expect(session.peakGR == peak)
+    #expect(session.status.contains("Analyzing") == false)
+    #expect(session.status.contains("Leveling") == false)
+    #expect(session.status.contains("Loading") == false)
+}
+
+private func writeTone(frames: Int, to url: URL, settings: LevelerOutputSettings) throws {
+    let tone = try PCMStore.createTemporary(sampleRate: 48_000, channelCount: 2, frameCount: frames)
+    var samples = [Float](repeating: 0, count: frames * 2)
+    for frame in 0..<frames {
+        let t = Double(frame) / 48_000
+        let sample = Float(sin(2 * Double.pi * 440 * t) * 0.2)
+        samples[frame * 2] = sample
+        samples[frame * 2 + 1] = sample
+    }
+    tone.write(interleaved: samples, startFrame: 0, frames: frames)
+    try LevelerOutputWriter.write(store: tone, to: url, settings: settings)
+}
+
 @MainActor
 private func waitUntilReady(_ session: LevelerSession, url: URL) async throws {
     let deadline = Date().addingTimeInterval(90)
     let wanted = url.standardizedFileURL.resolvingSymlinksInPath()
     while Date() < deadline {
         let current = session.sourceURL?.standardizedFileURL.resolvingSymlinksInPath()
-        if session.hasResult, session.isBusy == false, session.isMeasuring == false, current == wanted {
+        if session.hasResult, session.hasFile, session.canExportLeveled,
+           session.isBusy == false, session.isMeasuring == false, current == wanted {
             return
         }
         try await Task.sleep(for: .milliseconds(20))

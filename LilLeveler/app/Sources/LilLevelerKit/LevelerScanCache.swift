@@ -28,7 +28,8 @@ struct LevelerFileStamp: Hashable, Sendable {
 /// Reports stay for many files. Mapped audio is kept for only a few recent files
 /// (and about 2 GB). The newest file is kept even when it alone is larger than
 /// the budget, so the show you just scanned can be reselected without a rescan.
-/// Evicted audio can be decoded again; the stored report still skips analysis.
+/// Evicted audio can be decoded again. The stored reports still redraw the last
+/// level, and skip measuring, before that audio is back.
 final class LevelerScanCache: @unchecked Sendable {
     struct ProcessKey: Hashable, Sendable {
         var presetID: String

@@ -150,35 +150,15 @@ enum LoudnessEngine {
             throw LevelerError.processFailed("Audio too short to level.")
         }
 
-        var gainDb = targetLUFS - before.integratedLUFS
-        gainDb = max(-24, min(24, gainDb))
-        let gain = pow(10.0, gainDb / 20.0)
-
-        if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
-            try PCMStore.ensureDiskSpace(
-                bytes: Int64(needed) + 32_000_000,
-                near: FileManager.default.temporaryDirectory
-            )
-        }
-
-        let dest = try PCMStore.createTemporary(
-            sampleRate: store.sampleRate,
-            channelCount: store.channelCount,
-            frameCount: store.frameCount
-        )
+        var result = try writeNormalizedAudio(
+            store,
+            before: before,
+            targetLUFS: targetLUFS,
+            truePeakCeilingDbTP: truePeakCeilingDbTP
+        ) { progress?(0.45 + 0.35 * $0) }
 
         let ceilingDb = truePeakCeilingDbTP - 0.05
         let ceiling = pow(10.0, ceilingDb / 20.0)
-        let gainedTP = before.truePeakDbTP + gainDb
-
-        if gainedTP <= ceilingDb {
-            copyGained(from: store, to: dest, gain: gain) { progress?(0.45 + 0.35 * $0) }
-        } else {
-            truePeakLimit(from: store, to: dest, gain: gain, ceiling: ceiling) { progress?(0.45 + 0.35 * $0) }
-        }
-        dest.sync()
-
-        var result = dest
         var after = analyze(result) { progress?(0.80 + 0.12 * $0) }
 
         let lufsShort = targetLUFS - after.integratedLUFS
@@ -218,37 +198,54 @@ enum LoudnessEngine {
             throw LevelerError.processFailed("Audio too short to level.")
         }
 
-        let thresh = min(ceilingDb, max(-24, thresholdDb))
-        let makeupDb = ceilingDb - thresh
-        let gain = pow(10.0, makeupDb / 20.0)
-        let ceiling = pow(10.0, ceilingDb / 20.0)
-
-        if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
-            try PCMStore.ensureDiskSpace(
-                bytes: Int64(needed) + 32_000_000,
-                near: FileManager.default.temporaryDirectory
-            )
-        }
-
-        let dest = try PCMStore.createTemporary(
-            sampleRate: store.sampleRate,
-            channelCount: store.channelCount,
-            frameCount: store.frameCount
-        )
-        // L1 default release is 1 ms — fast peak limiting, not a slow compressor.
-        let peakGR = truePeakLimit(
-            from: store,
-            to: dest,
-            gain: gain,
-            ceiling: ceiling,
-            releaseSec: 0.001
+        let (dest, peakGR) = try writeMaximizedAudio(
+            store,
+            thresholdDb: thresholdDb,
+            ceilingDb: ceilingDb
         ) { progress?(0.40 + 0.45 * $0) }
-        dest.sync()
 
         let after = analyze(dest) { progress?(0.85 + 0.15 * $0) }
         progress?(1)
         let netGainDb = after.integratedLUFS - before.integratedLUFS
         return (dest, after, netGainDb, peakGR)
+    }
+
+    /// Same gain and true-peak limiter as `normalize`, using a report that was
+    /// already measured. Does not walk the file for loudness, and does not
+    /// replace the caller's cached after-report.
+    static func renderNormalized(
+        _ store: PCMStore,
+        knownBefore: LoudnessReport,
+        targetLUFS: Float,
+        truePeakCeilingDbTP: Float,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws -> PCMStore {
+        guard knownBefore.durationSec > 0.05 else {
+            throw LevelerError.processFailed("Audio too short to level.")
+        }
+        return try writeNormalizedAudio(
+            store,
+            before: knownBefore,
+            targetLUFS: targetLUFS,
+            truePeakCeilingDbTP: truePeakCeilingDbTP,
+            progress: progress
+        )
+    }
+
+    /// Same makeup and brickwall as `maximize`, without measuring the result.
+    static func renderMaximized(
+        _ store: PCMStore,
+        thresholdDb: Float,
+        ceilingDb: Float,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws -> PCMStore {
+        let (dest, _) = try writeMaximizedAudio(
+            store,
+            thresholdDb: thresholdDb,
+            ceilingDb: ceilingDb,
+            progress: progress
+        )
+        return dest
     }
 
     /// A cached source report skips the first walk of the file. The leveled
@@ -267,6 +264,79 @@ enum LoudnessEngine {
     }
 
     // MARK: - Streaming helpers
+
+    private static func writeNormalizedAudio(
+        _ store: PCMStore,
+        before: LoudnessReport,
+        targetLUFS: Float,
+        truePeakCeilingDbTP: Float,
+        progress: (@Sendable (Double) -> Void)?
+    ) throws -> PCMStore {
+        var gainDb = targetLUFS - before.integratedLUFS
+        gainDb = max(-24, min(24, gainDb))
+        let gain = pow(10.0, gainDb / 20.0)
+
+        if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
+            try PCMStore.ensureDiskSpace(
+                bytes: Int64(needed) + 32_000_000,
+                near: FileManager.default.temporaryDirectory
+            )
+        }
+
+        let dest = try PCMStore.createTemporary(
+            sampleRate: store.sampleRate,
+            channelCount: store.channelCount,
+            frameCount: store.frameCount
+        )
+
+        let ceilingDb = truePeakCeilingDbTP - 0.05
+        let ceiling = pow(10.0, ceilingDb / 20.0)
+        let gainedTP = before.truePeakDbTP + gainDb
+
+        if gainedTP <= ceilingDb {
+            copyGained(from: store, to: dest, gain: gain, progress: progress)
+        } else {
+            truePeakLimit(from: store, to: dest, gain: gain, ceiling: ceiling, progress: progress)
+        }
+        dest.sync()
+        return dest
+    }
+
+    /// L1 default release is 1 ms — fast peak limiting, not a slow compressor.
+    private static func writeMaximizedAudio(
+        _ store: PCMStore,
+        thresholdDb: Float,
+        ceilingDb: Float,
+        progress: (@Sendable (Double) -> Void)?
+    ) throws -> (PCMStore, Float) {
+        let thresh = min(ceilingDb, max(-24, thresholdDb))
+        let makeupDb = ceilingDb - thresh
+        let gain = pow(10.0, makeupDb / 20.0)
+        let ceiling = pow(10.0, ceilingDb / 20.0)
+
+        if let needed = PCMStore.estimatedByteCount(frames: store.frameCount, channels: store.channelCount) {
+            try PCMStore.ensureDiskSpace(
+                bytes: Int64(needed) + 32_000_000,
+                near: FileManager.default.temporaryDirectory
+            )
+        }
+
+        let dest = try PCMStore.createTemporary(
+            sampleRate: store.sampleRate,
+            channelCount: store.channelCount,
+            frameCount: store.frameCount
+        )
+        let peakGR = truePeakLimit(
+            from: store,
+            to: dest,
+            gain: gain,
+            ceiling: ceiling,
+            releaseSec: 0.001,
+            progress: progress
+        )
+        dest.sync()
+        return (dest, peakGR)
+    }
 
     private static func meanSquareFromRing(
         _ ring: [Float],
