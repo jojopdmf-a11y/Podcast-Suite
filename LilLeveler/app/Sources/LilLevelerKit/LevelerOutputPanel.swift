@@ -13,7 +13,7 @@ struct LevelerOutputPanel: View {
     var primaryAction: () -> Void
     /// Stretch the card and pin the save button to the bottom of the column.
     var fillsColumn: Bool = false
-    /// Lounge draws Save Result under the transport. Export keeps the button here.
+    /// Draws the save button under the result name (Lounge: Export File to Depot).
     var includesPrimaryButton: Bool = true
 
     private var sourceRate: Double {

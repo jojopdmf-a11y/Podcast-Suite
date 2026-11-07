@@ -232,13 +232,6 @@ public struct LevelerRootView: View {
         VStack(alignment: .leading, spacing: 6) {
             transportRow
             statusBar
-            Button(action: saveToDepot) {
-                Text(session.isBusy ? "WORKING…" : "Save Result to Depot")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(LevelerPrimaryButtonStyle())
-            .disabled(!session.canExportLeveled || onSaveToDepot == nil || output.container == .mp3)
-            .help("Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.")
         }
     }
 
@@ -249,12 +242,12 @@ public struct LevelerRootView: View {
                 settings: $output,
                 resultName: resultName,
                 followsSource: resultNameFollowsSource,
-                primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
+                primaryTitle: session.isBusy ? "WORKING…" : "Export File to Depot",
                 primaryHelp: "Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.",
                 primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
                 primaryAction: saveToDepot,
                 fillsColumn: false,
-                includesPrimaryButton: false
+                includesPrimaryButton: true
             )
             Spacer(minLength: 0)
         }
