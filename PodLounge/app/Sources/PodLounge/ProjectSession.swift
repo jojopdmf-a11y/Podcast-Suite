@@ -132,7 +132,7 @@ final class ProjectSession: ObservableObject {
         do {
             try save()
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
             pending = nil
             return
         }
@@ -155,7 +155,7 @@ final class ProjectSession: ObservableObject {
         do {
             try save()
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -200,11 +200,11 @@ final class ProjectSession: ObservableObject {
             do {
                 try copy.save()
             } catch {
-                alertMessage = error.localizedDescription
+                report(error)
             }
             adopt(copy)
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -279,6 +279,39 @@ final class ProjectSession: ObservableObject {
         adopt(package, keepWorkspace: true)
     }
 
+    /// Copies the stored depot file out. The project and its audio are not changed.
+    func exportCopy(of asset: DepotAsset) {
+        guard !limiterExporting else { return }
+        guard health(of: asset) != .missing, let package else { return }
+        let panel = NSSavePanel()
+        panel.title = "Export Copy"
+        panel.prompt = "Export"
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.nameFieldStringValue = ProjectPackage.exportCopySuggestedName(
+            displayName: asset.displayName,
+            relativePath: asset.relativePath
+        )
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try package.exportCopy(of: asset, to: url)
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
+    /// Reveals the stored depot file. This is a user action, so Finder may open.
+    func showInFinder(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
+        guard health(of: asset) != .missing, let package else { return }
+        guard let url = try? package.resolvedURL(for: asset) else { return }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            return
+        }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
     // MARK: - Private
 
     private func presentNewPanel() {
@@ -294,7 +327,7 @@ final class ProjectSession: ObservableObject {
             let created = try ProjectPackage.create(at: folder, name: name)
             adopt(created)
         } catch {
-            alertMessage = error.localizedDescription
+            report(error)
         }
     }
 
@@ -342,6 +375,18 @@ final class ProjectSession: ObservableObject {
             let header = failures.count == 1 ? "1 file could not be imported:" : "\(failures.count) files could not be imported:"
             alertMessage = ([header] + failures).joined(separator: "\n")
         }
+    }
+
+    private func report(_ error: Error) {
+        if error.localizedDescription == ProjectPackage.nestedProjectMessage {
+            let alert = NSAlert()
+            alert.messageText = ProjectPackage.nestedProjectMessage
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        alertMessage = error.localizedDescription
     }
 
     private func applyMetadata(to package: ProjectPackage) {

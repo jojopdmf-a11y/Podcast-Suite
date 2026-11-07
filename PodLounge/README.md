@@ -11,14 +11,14 @@ A project is a directory ending in `.podlounge`:
 ```
 ShowName.podlounge/
   manifest.json                 formatVersion 1, written atomically
-  depot/originals/<id>.<ext>    imported copies, one file per id
-  depot/results/<id>.<ext>      reserved for a future Save Result
+  depot/originals/<name>.<ext>  imported copies, readable file name, id stays a UUID
+  depot/results/<name>.<ext>    Limiter results, same naming; " 2", " 3" on collisions
   workspaces/limiter.json       Limiter preset, meters, and output choices
   workspaces/*.json             other cards stay empty stubs; manifest holds notes
   recovery/                     reserved for future long recordings
 ```
 
-`manifest.json` is the source of truth. Media references are package-relative paths (`depot/originals/<uuid>.wav`), never absolute paths and never `..`. Import copies the file into the depot under a new id. The same display name can be imported twice; the second copy does not replace the first. The file you picked is only read.
+`manifest.json` is the source of truth. Media references are package-relative paths (`depot/originals/Morning Show.wav`), never absolute paths and never `..`. New imports and Limiter results are stored under the sanitized display name. A second file with the same name gets " 2", " 3", and so on. Asset ids stay UUIDs. Older projects whose files are still named with those UUIDs open unchanged; nothing renames them. The file you picked is only read.
 
 **Save Project** updates the manifest (name, notes, selection) and `workspaces/limiter.json` with a temp file and rename. It does not rewrite depot audio and it does not make another copy.
 

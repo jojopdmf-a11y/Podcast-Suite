@@ -7,7 +7,8 @@ struct DepotSidebar: View {
     var body: some View {
         GeometryReader { geo in
             // A long list scrolls. A short one stays as tall as its rows.
-            let listCap = max(72, geo.size.height - 360)
+            // Room below the list for the selected-file actions, including Export Copy and Show in Finder.
+            let listCap = max(72, geo.size.height - 440)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -115,10 +116,18 @@ struct DepotSidebar: View {
                         .foregroundStyle(LoungeTheme.cyan.opacity(0.85))
                         .lineLimit(2)
                     healthLabel(session.health(of: asset))
-                    Button("Delete from Project") { session.deleteAsset(asset) }
-                        .buttonStyle(LoungeButtonStyle())
-                        .disabled(session.limiterExporting)
-                        .padding(.top, 4)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button("Export Copy…") { session.exportCopy(of: asset) }
+                            .buttonStyle(LoungeButtonStyle())
+                            .disabled(exportActionsDisabled(asset))
+                        Button("Show in Finder") { session.showInFinder(asset) }
+                            .buttonStyle(LoungeButtonStyle())
+                            .disabled(exportActionsDisabled(asset))
+                        Button("Delete from Project") { session.deleteAsset(asset) }
+                            .buttonStyle(LoungeButtonStyle())
+                            .disabled(session.limiterExporting)
+                    }
+                    .padding(.top, 4)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -150,6 +159,10 @@ struct DepotSidebar: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(LoungeTheme.textDim)
         }
+    }
+
+    private func exportActionsDisabled(_ asset: DepotAsset) -> Bool {
+        session.limiterExporting || session.health(of: asset) == .missing
     }
 
     @ViewBuilder
@@ -241,6 +254,10 @@ private struct DepotRow: View {
             }
         }
         .contextMenu {
+            Button("Export Copy…") { session.exportCopy(of: asset) }
+                .disabled(session.limiterExporting || session.health(of: asset) == .missing)
+            Button("Show in Finder") { session.showInFinder(asset) }
+                .disabled(session.limiterExporting || session.health(of: asset) == .missing)
             Button("Delete from Project…") { session.deleteAsset(asset) }
                 .disabled(session.limiterExporting)
         }

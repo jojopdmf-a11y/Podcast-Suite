@@ -29,7 +29,26 @@ public final class ProjectPackage {
         rootURL.appendingPathComponent(PackageLayout.manifestFileName)
     }
 
+    public static let nestedProjectMessage = "You can't save a project inside another project. Pick a different folder."
+
+    /// True when a parent of `url` is a folder whose name ends in `.podlounge`.
+    /// The URL itself is the project being saved or created, so that folder does not count.
+    public static func isInsideAnotherProject(_ url: URL) -> Bool {
+        let parts = url.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        guard parts.count >= 2 else { return false }
+        for part in parts.dropLast() {
+            let ext = URL(fileURLWithPath: part).pathExtension
+            if ext.lowercased() == PackageLayout.pathExtension {
+                return true
+            }
+        }
+        return false
+    }
+
     public static func create(at url: URL, name: String) throws -> ProjectPackage {
+        if isInsideAnotherProject(url) {
+            throw PackageError.operationFailed(nestedProjectMessage)
+        }
         let fm = FileManager.default
         if fm.fileExists(atPath: url.path) {
             throw PackageError.destinationExists(url.path)
@@ -107,6 +126,7 @@ public final class ProjectPackage {
 
     /// Writes `manifest.json` via temp file + rename. Does not touch depot bytes.
     public func save() throws {
+        try rejectNestedWrite()
         if failNextSaveForTesting {
             failNextSaveForTesting = false
             throw PackageError.atomicWriteFailed("Simulated save failure.")
@@ -128,6 +148,9 @@ public final class ProjectPackage {
         let fm = FileManager.default
         let dest = destination.standardizedFileURL
         let root = rootURL.standardizedFileURL
+        if Self.isInsideAnotherProject(dest) {
+            throw PackageError.operationFailed(Self.nestedProjectMessage)
+        }
         if Self.isInsideOrEqual(dest, root: root) {
             throw PackageError.operationFailed("Save As must be outside this project folder.")
         }
@@ -154,15 +177,19 @@ public final class ProjectPackage {
         return copy
     }
 
-    /// Copies `source` into the depot once, under a new id. Same display names
-    /// do not share a filename. The source file is only read. On any failure
-    /// the manifest file and the in-memory asset list are left as they were.
+    /// Copies `source` into the depot once. The asset id is a new UUID. The
+    /// stored file name is the sanitized display name plus the file extension,
+    /// with " 2", " 3", … when that name is already used (case-insensitive).
+    /// Existing relative paths are never renamed. The source file is only read.
+    /// On any failure the manifest file and the in-memory asset list are left
+    /// as they were.
     @discardableResult
     public func importMedia(
         from source: URL,
         kind: AssetKind,
         producedBy: String?,
-        select: Bool = false
+        select: Bool = false,
+        displayName: String? = nil
     ) throws -> DepotAsset {
         if kind == .original, producedBy != nil {
             throw PackageError.operationFailed("Originals do not have a producing tool.")
@@ -183,11 +210,12 @@ public final class ProjectPackage {
 
         let id = UUID().uuidString.lowercased()
         let ext = Self.storageExtension(for: source)
-        let fileName = "\(id).\(ext)"
+        let display = Self.sanitizedDisplayName(displayName ?? Self.displayName(for: source))
+        let fileName = try allocateDepotFileName(displayName: display, ext: ext, kind: kind)
         let relativePath = "\(kind.depotDirectory)/\(fileName)"
         let destination = try Self.locate(relativePath: relativePath, kind: kind, in: rootURL)
         if fm.fileExists(atPath: destination.path) {
-            throw PackageError.importFailed("Depot id collision.")
+            throw PackageError.importFailed("A depot file already uses that name.")
         }
         let partial = destination.appendingPathExtension("partial")
         if fm.fileExists(atPath: partial.path) {
@@ -212,7 +240,7 @@ public final class ProjectPackage {
         let byteCount = Self.byteCount(at: destination)
         let asset = DepotAsset(
             id: id,
-            displayName: Self.displayName(for: source),
+            displayName: display,
             kind: kind,
             relativePath: relativePath,
             byteCount: byteCount,
@@ -237,8 +265,8 @@ public final class ProjectPackage {
         return asset
     }
 
-    /// Copies a rendered file into `depot/results`.
-    /// The source file is only read. A second atomic save stores the display name.
+    /// Copies a rendered file into `depot/results` under `displayName`.
+    /// The source file is only read. Existing depot files are not renamed.
     ///
     /// Selection is left alone unless `select` is true. Saving a leveled file
     /// therefore keeps the depot on the file being worked on. When nothing was
@@ -251,23 +279,34 @@ public final class ProjectPackage {
         displayName: String,
         select: Bool = false
     ) throws -> DepotAsset {
-        let asset = try importMedia(from: source, kind: .result, producedBy: producedBy, select: select)
-        let cleaned = Self.sanitizedDisplayName(displayName)
-        guard let index = manifest.assets.firstIndex(where: { $0.id == asset.id }) else {
-            return asset
+        try importMedia(
+            from: source,
+            kind: .result,
+            producedBy: producedBy,
+            select: select,
+            displayName: displayName
+        )
+    }
+
+    /// Copies the stored depot file to `destination` byte for byte.
+    /// Does not rewrite the project, the manifest, or the depot original.
+    public func exportCopy(of asset: DepotAsset, to destination: URL) throws {
+        let source = try resolvedURL(for: asset)
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: source.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            throw PackageError.operationFailed("That file is missing from the project.")
         }
-        if manifest.assets[index].displayName == cleaned {
-            return manifest.assets[index]
-        }
-        let previousName = manifest.assets[index].displayName
-        manifest.assets[index].displayName = cleaned
-        do {
-            try save()
-        } catch {
-            manifest.assets[index].displayName = previousName
-            throw error
-        }
-        return manifest.assets[index]
+        try Self.copyFileBytes(from: source, to: destination.standardizedFileURL)
+    }
+
+    /// Save-panel name: the display name plus the stored file's extension,
+    /// with characters the file system rejects turned into spaces.
+    public static func exportCopySuggestedName(displayName: String, relativePath: String) -> String {
+        let ext = storageExtensionString(URL(fileURLWithPath: relativePath).pathExtension)
+        let display = sanitizedDisplayName(displayName)
+        let stem = cappedStem(storageStem(displayName: display, extension: ext), extension: ext)
+        return "\(stem).\(ext)"
     }
 
     public var limiterSettingsURL: URL {
@@ -285,6 +324,7 @@ public final class ProjectPackage {
     }
 
     public func writeLimiterSettings(_ settings: LimiterWorkspaceSettings) throws {
+        try rejectNestedWrite()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(settings)
@@ -493,7 +533,7 @@ public final class ProjectPackage {
             throw PackageError.malformedManifest("Asset path is outside \(kind.depotDirectory).")
         }
         let fileName = parts[2]
-        guard fileName.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#, options: .regularExpression) != nil else {
+        guard isSafeDepotFileName(fileName) else {
             throw PackageError.malformedManifest("Unsafe depot filename.")
         }
         return parts.joined(separator: "/")
@@ -526,11 +566,73 @@ public final class ProjectPackage {
     }
 
     static func storageExtension(for source: URL) -> String {
-        let ext = source.pathExtension.lowercased()
-        if ext.range(of: #"^[a-z0-9]{1,8}$"#, options: .regularExpression) != nil {
-            return ext
+        storageExtensionString(source.pathExtension)
+    }
+
+    static func storageExtensionString(_ ext: String) -> String {
+        let lower = ext.lowercased()
+        if lower.range(of: #"^[a-z0-9]{1,8}$"#, options: .regularExpression) != nil {
+            return lower
         }
         return "bin"
+    }
+
+    /// File name stem for a depot copy. Illegal storage characters become spaces.
+    /// A matching extension on `displayName` is removed so it is not doubled.
+    static func storageStem(displayName: String, extension ext: String) -> String {
+        var text = displayName
+        let suffix = "." + ext.lowercased()
+        if !ext.isEmpty, text.lowercased().hasSuffix(suffix) {
+            text.removeLast(suffix.count)
+        }
+        var mapped = ""
+        mapped.reserveCapacity(text.count)
+        for scalar in text.unicodeScalars {
+            if isIllegalStorageScalar(scalar) {
+                mapped.append(" ")
+            } else {
+                mapped.unicodeScalars.append(scalar)
+            }
+        }
+        let collapsed = mapped.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var stem = collapsed.trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+        if stem.isEmpty || stem == "." || stem == ".." {
+            stem = "Untitled"
+        }
+        return stem.precomposedStringWithCanonicalMapping
+    }
+
+    static func cappedStem(_ stem: String, extension ext: String) -> String {
+        let reserve = 6 + ext.utf8.count
+        let budget = max(1, 255 - reserve)
+        var text = stem
+        while text.utf8.count > budget, !text.isEmpty {
+            text.removeLast()
+        }
+        text = text.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        return text.isEmpty ? "Untitled" : text
+    }
+
+    static func isIllegalStorageScalar(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar {
+        case "/", "\\", ":", "*", "?", "\"", "<", ">", "|", "\u{2028}", "\u{2029}":
+            return true
+        default:
+            return scalar.value == 0 || CharacterSet.controlCharacters.contains(scalar)
+        }
+    }
+
+    /// Accepts both legacy UUID file names and the readable names new imports use.
+    static func isSafeDepotFileName(_ fileName: String) -> Bool {
+        if fileName.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"#, options: .regularExpression) != nil {
+            return true
+        }
+        if fileName.isEmpty || fileName == "." || fileName == ".." { return false }
+        if fileName.utf8.count > 255 { return false }
+        if fileName.hasPrefix(".") || fileName.hasSuffix(".") { return false }
+        if fileName.hasPrefix(" ") || fileName.hasSuffix(" ") { return false }
+        if fileName.unicodeScalars.contains(where: isIllegalStorageScalar) { return false }
+        return true
     }
 
     static func displayName(for source: URL) -> String {
@@ -551,6 +653,78 @@ public final class ProjectPackage {
         let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
         let number = attributes?[.size] as? NSNumber
         return number?.int64Value ?? 0
+    }
+
+    private func rejectNestedWrite() throws {
+        if Self.isInsideAnotherProject(rootURL) {
+            throw PackageError.operationFailed(Self.nestedProjectMessage)
+        }
+    }
+
+    /// Picks `stem.ext`, then `stem 2.ext`, `stem 3.ext`, … until the name is free.
+    private func allocateDepotFileName(displayName: String, ext: String, kind: AssetKind) throws -> String {
+        let stem = Self.cappedStem(Self.storageStem(displayName: displayName, extension: ext), extension: ext)
+        var suffix: Int?
+        for _ in 0..<9_000 {
+            let fileName = suffix.map { "\(stem) \($0).\(ext)" } ?? "\(stem).\(ext)"
+            guard Self.isSafeDepotFileName(fileName) else {
+                throw PackageError.importFailed("Could not make a safe file name.")
+            }
+            if !depotFileNameIsTaken(fileName, kind: kind) {
+                return fileName
+            }
+            suffix = (suffix ?? 1) + 1
+        }
+        throw PackageError.importFailed("Could not find a free file name in the depot.")
+    }
+
+    private func depotFileNameIsTaken(_ fileName: String, kind: AssetKind) -> Bool {
+        let needle = Self.caseFold(fileName)
+        for asset in manifest.assets where asset.kind == kind {
+            let existing = URL(fileURLWithPath: asset.relativePath).lastPathComponent
+            if Self.caseFold(existing) == needle { return true }
+        }
+        let directory = Self.appending(kind.depotDirectory, to: rootURL)
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else {
+            return false
+        }
+        return names.contains { Self.caseFold($0) == needle }
+    }
+
+    private static func caseFold(_ name: String) -> String {
+        name.folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .precomposedStringWithCanonicalMapping
+    }
+
+    private static func copyFileBytes(from source: URL, to destination: URL) throws {
+        let fm = FileManager.default
+        let sourceID = source.standardizedFileURL.resolvingSymlinksInPath()
+        let destID = destination.standardizedFileURL.resolvingSymlinksInPath()
+        if sourceID == destID { return }
+        let directory = destination.deletingLastPathComponent()
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: directory.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw PackageError.operationFailed("Could not export a copy of that file.")
+        }
+        let temporary = directory.appendingPathComponent(".podlounge-export-\(UUID().uuidString)")
+        do {
+            try fm.copyItem(at: source, to: temporary)
+            if fm.fileExists(atPath: destination.path) {
+                _ = try fm.replaceItemAt(destination, withItemAt: temporary)
+            } else {
+                try fm.moveItem(at: temporary, to: destination)
+            }
+        } catch let error as PackageError {
+            if fm.fileExists(atPath: temporary.path) {
+                try? fm.removeItem(at: temporary)
+            }
+            throw error
+        } catch {
+            if fm.fileExists(atPath: temporary.path) {
+                try? fm.removeItem(at: temporary)
+            }
+            throw PackageError.operationFailed("Could not export a copy of that file.")
+        }
     }
 }
 
