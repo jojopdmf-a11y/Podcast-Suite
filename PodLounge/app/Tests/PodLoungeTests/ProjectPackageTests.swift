@@ -394,6 +394,7 @@ private func expect<T: Error & Equatable>(
     settings.listenPost = true
     settings.container = "aiff"
     settings.bitDepth = "16"
+    settings.mp3BitrateKbps = 160
     settings.sampleRate = 96_000
     settings.resultName = "Episode – Leveled (SPOTIFY).aiff"
     settings.resultNameFollowsSource = false
@@ -413,6 +414,7 @@ private func expect<T: Error & Equatable>(
     #expect(partialSettings.presetID == "apple")
     #expect(partialSettings.bitDepth == "24")
     #expect(partialSettings.container == "wav")
+    #expect(partialSettings.mp3BitrateKbps == 128)
     #expect(partialSettings.sampleRate == nil)
 
     try Data("not-json".utf8).write(to: partial.limiterSettingsURL)

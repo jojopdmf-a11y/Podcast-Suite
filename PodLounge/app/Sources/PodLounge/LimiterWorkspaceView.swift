@@ -102,6 +102,7 @@ struct LimiterWorkspaceView: View {
                 var next = session.limiterSettings
                 next.container = newValue.container.rawValue
                 next.bitDepth = bitDepthToken(newValue.bitDepth)
+                next.mp3BitrateKbps = newValue.mp3BitrateKbps
                 switch newValue.rateMode {
                 case .automatic, .matchSource:
                     next.sampleRate = nil
@@ -195,9 +196,10 @@ struct LimiterWorkspaceView: View {
             .automatic
         }
         return LevelerOutputSettings(
-            container: container == .mp3 ? .wav : container,
+            container: container,
             bitDepth: depth,
-            rateMode: rateMode
+            rateMode: rateMode,
+            mp3BitrateKbps: settings.mp3BitrateKbps
         )
     }
 

@@ -29,8 +29,11 @@ public enum LevelerContainer: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// MP3 is shown in the panel and is not writable in this build.
-    public var isWritable: Bool { self != .mp3 }
+    /// MP3 stays off when `libmp3lame` was not built or bundled.
+    public var isWritable: Bool {
+        if self == .mp3 { return LAMELibrary.isAvailable }
+        return true
+    }
 }
 
 public enum LevelerBitDepth: String, CaseIterable, Identifiable, Sendable {
@@ -69,9 +72,13 @@ public struct LevelerOutputSettings: Equatable, Sendable {
     public var container: LevelerContainer
     public var bitDepth: LevelerBitDepth
     public var rateMode: LevelerRateMode
+    /// Constant MP3 bitrate in kbps. Ignored by WAV, AIFF, and M4A.
+    public var mp3BitrateKbps: Int
 
     public static let standardRates: [Double] = [44_100, 48_000, 88_200, 96_000]
     public static let aacRates: [Double] = [44_100, 48_000]
+    public static let mp3Rates: [Double] = [44_100, 48_000]
+    public static let mp3Bitrates = [96, 128, 160, 192]
 
     public static let standaloneDefaults = LevelerOutputSettings(
         container: .wav,
@@ -85,10 +92,20 @@ public struct LevelerOutputSettings: Equatable, Sendable {
         rateMode: .automatic
     )
 
-    public init(container: LevelerContainer, bitDepth: LevelerBitDepth, rateMode: LevelerRateMode) {
+    public init(
+        container: LevelerContainer,
+        bitDepth: LevelerBitDepth,
+        rateMode: LevelerRateMode,
+        mp3BitrateKbps: Int = 128
+    ) {
         self.container = container
         self.bitDepth = bitDepth
         self.rateMode = rateMode
+        self.mp3BitrateKbps = Self.normalizedMP3Bitrate(mp3BitrateKbps)
+    }
+
+    public static func normalizedMP3Bitrate(_ value: Int) -> Int {
+        mp3Bitrates.contains(value) ? value : 128
     }
 
     /// Sample rate the file will actually use. AAC is limited to 44.1 and 48 kHz.
@@ -110,12 +127,21 @@ public struct LevelerOutputSettings: Equatable, Sendable {
         if container == .m4a, Self.aacRates.contains(where: { abs($0 - chosen) < 1 }) == false {
             return 48_000
         }
+        if container == .mp3, Self.mp3Rates.contains(where: { abs($0 - chosen) < 1 }) == false {
+            return 48_000
+        }
         return chosen
     }
 
     public func rateIsEnabled(_ rate: Double) -> Bool {
-        if container != .m4a { return true }
-        return Self.aacRates.contains(where: { abs($0 - rate) < 1 })
+        switch container {
+        case .wav, .aiff:
+            return true
+        case .m4a:
+            return Self.aacRates.contains(where: { abs($0 - rate) < 1 })
+        case .mp3:
+            return Self.mp3Rates.contains(where: { abs($0 - rate) < 1 })
+        }
     }
 
     public var contentType: UTType {
@@ -166,9 +192,6 @@ enum LevelerOutputWriter {
         ditherSeed: UInt64? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws {
-        guard settings.container.isWritable else {
-            throw LevelerError.processFailed("MP3 is coming next.")
-        }
         let rate = settings.resolvedSampleRate(sourceRate: store.sampleRate)
         let working: PCMStore
         if abs(rate - store.sampleRate) < 0.5 {
@@ -180,7 +203,12 @@ enum LevelerOutputWriter {
         }
         switch settings.container {
         case .mp3:
-            throw LevelerError.processFailed("MP3 is coming next.")
+            guard settings.container.isWritable else {
+                throw LevelerError.processFailed("MP3 encoder is missing.")
+            }
+            try writeMP3(working, to: url, settings: settings) { fraction in
+                progress?(0.65 + 0.35 * fraction)
+            }
         case .m4a:
             try writeAAC(working, to: url) { fraction in
                 progress?(0.65 + 0.35 * fraction)

@@ -15,6 +15,9 @@ struct LilLevelerApp: App {
                 Button("About PodLeveler") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
                 }
+                Button("Third-Party Notices") {
+                    NotificationCenter.default.post(name: .cougarCalcShowThirdPartyNotices, object: nil)
+                }
             }
             CommandGroup(after: .help) {
                 Button("CougarCalc Support…") {

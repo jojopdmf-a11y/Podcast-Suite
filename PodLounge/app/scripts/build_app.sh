@@ -5,6 +5,21 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 APP_DIR="$ROOT/app"
 cd "$APP_DIR"
 
+install_lame() {
+  local app="$1"
+  local repo
+  repo="$(cd "$ROOT/.." && pwd)"
+  local dylib="$repo/ThirdParty/lame/build/lib/libmp3lame.0.dylib"
+  if [[ ! -f "$dylib" ]]; then
+    "$repo/ThirdParty/lame/build_lame.sh"
+  fi
+  mkdir -p "$app/Contents/Frameworks" "$app/Contents/Resources"
+  cp "$dylib" "$app/Contents/Frameworks/libmp3lame.0.dylib"
+  chmod 755 "$app/Contents/Frameworks/libmp3lame.0.dylib"
+  codesign --force --sign - "$app/Contents/Frameworks/libmp3lame.0.dylib"
+  cp "$repo/ThirdParty/lame/build/COPYING" "$app/Contents/Resources/LAME-COPYING.txt"
+}
+
 swift build -c release --product PodLounge
 BIN_DIR="$(swift build -c release --show-bin-path)"
 BIN="$BIN_DIR/PodLounge"
@@ -15,6 +30,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PodLounge"
 cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
 chmod +x "$APP/Contents/MacOS/PodLounge"
+install_lame "$APP"
 
 # Card screenshots. Bundle.main looks in Contents/Resources. The SwiftPM
 # resource bundle sits next to the executable during `swift run`; copy it

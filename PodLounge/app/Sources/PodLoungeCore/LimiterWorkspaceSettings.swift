@@ -12,9 +12,12 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
     public var listenPost: Bool
     public var container: String
     public var bitDepth: String
+    public var mp3BitrateKbps: Int
     public var sampleRate: Double?
     public var resultName: String
     public var resultNameFollowsSource: Bool
+
+    private static let allowedMP3Bitrates: Set<Int> = [96, 128, 160, 192]
 
     public static let defaults = LimiterWorkspaceSettings(
         presetID: "universal",
@@ -26,6 +29,7 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         listenPost: false,
         container: "wav",
         bitDepth: "24",
+        mp3BitrateKbps: 128,
         sampleRate: nil,
         resultName: "",
         resultNameFollowsSource: true
@@ -41,6 +45,7 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         listenPost: Bool,
         container: String,
         bitDepth: String,
+        mp3BitrateKbps: Int = 128,
         sampleRate: Double?,
         resultName: String,
         resultNameFollowsSource: Bool
@@ -54,6 +59,7 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         self.listenPost = listenPost
         self.container = container
         self.bitDepth = bitDepth
+        self.mp3BitrateKbps = Self.allowedMP3Bitrates.contains(mp3BitrateKbps) ? mp3BitrateKbps : 128
         self.sampleRate = sampleRate
         self.resultName = resultName
         self.resultNameFollowsSource = resultNameFollowsSource
@@ -69,6 +75,7 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         case listenPost
         case container
         case bitDepth
+        case mp3BitrateKbps
         case sampleRate
         case resultName
         case resultNameFollowsSource
@@ -85,6 +92,7 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         try container.encode(listenPost, forKey: .listenPost)
         try container.encode(self.container, forKey: .container)
         try container.encode(bitDepth, forKey: .bitDepth)
+        try container.encode(mp3BitrateKbps, forKey: .mp3BitrateKbps)
         try container.encodeIfPresent(sampleRate, forKey: .sampleRate)
         try container.encode(resultName, forKey: .resultName)
         try container.encode(resultNameFollowsSource, forKey: .resultNameFollowsSource)
@@ -102,6 +110,8 @@ public struct LimiterWorkspaceSettings: Codable, Equatable, Sendable {
         listenPost = try container.decodeIfPresent(Bool.self, forKey: .listenPost) ?? fallback.listenPost
         self.container = try container.decodeIfPresent(String.self, forKey: .container) ?? fallback.container
         bitDepth = try container.decodeIfPresent(String.self, forKey: .bitDepth) ?? fallback.bitDepth
+        let storedBitrate = try container.decodeIfPresent(Int.self, forKey: .mp3BitrateKbps) ?? fallback.mp3BitrateKbps
+        mp3BitrateKbps = Self.allowedMP3Bitrates.contains(storedBitrate) ? storedBitrate : fallback.mp3BitrateKbps
         sampleRate = try container.decodeIfPresent(Double.self, forKey: .sampleRate)
         resultName = try container.decodeIfPresent(String.self, forKey: .resultName) ?? fallback.resultName
         resultNameFollowsSource = try container.decodeIfPresent(Bool.self, forKey: .resultNameFollowsSource) ?? fallback.resultNameFollowsSource

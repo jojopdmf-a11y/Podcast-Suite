@@ -23,3 +23,6 @@ tools/*.tar.gz
 *.xcuserstate
 xcuserdata/
 *.app
+
+# LAME is LGPL and loaded at runtime. Do not commit the tarball or the dylib.
+ThirdParty/lame/build/

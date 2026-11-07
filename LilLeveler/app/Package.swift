@@ -12,7 +12,13 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "CLame",
+            path: "Sources/CLame",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "LilLevelerKit",
+            dependencies: ["CLame"],
             path: "Sources/LilLevelerKit"
         ),
         .executableTarget(

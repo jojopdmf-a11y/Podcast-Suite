@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 public extension Notification.Name {
     static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
+    static let cougarCalcShowThirdPartyNotices = Notification.Name("cougarCalcShowThirdPartyNotices")
 }
 
 /// Standalone PodLeveler window. The Limiter workspace hosts `LevelerRootView`.
@@ -36,6 +37,7 @@ public struct LevelerRootView: View {
 
     @State private var isDropTargeted = false
     @State private var showAbout = false
+    @State private var showNotices = false
     @State private var showExportOptions = false
     @AppStorage(LevelerPaneMetrics.presetKey) private var presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
     @AppStorage(LevelerPaneMetrics.outputKey) private var outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
@@ -72,8 +74,16 @@ public struct LevelerRootView: View {
                     .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
                         showAbout = true
                     }
+                    .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowThirdPartyNotices)) { _ in
+                        showAbout = false
+                        showNotices = true
+                    }
                     .onExitCommand {
-                        if showAbout { showAbout = false }
+                        if showNotices {
+                            showNotices = false
+                        } else if showAbout {
+                            showAbout = false
+                        }
                     }
             } else {
                 chrome
@@ -102,6 +112,9 @@ public struct LevelerRootView: View {
 
             if showAbout {
                 aboutOverlay
+            }
+            if showNotices {
+                noticesOverlay
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -285,6 +298,9 @@ public struct LevelerRootView: View {
             if showAbout {
                 aboutOverlay
             }
+            if showNotices {
+                noticesOverlay
+            }
             if showExportOptions, mode == .application {
                 exportOverlay
             }
@@ -305,8 +321,14 @@ public struct LevelerRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowThirdPartyNotices)) { _ in
+            showAbout = false
+            showNotices = true
+        }
         .onExitCommand {
-            if showExportOptions {
+            if showNotices {
+                showNotices = false
+            } else if showExportOptions {
                 showExportOptions = false
             } else if showAbout {
                 showAbout = false
@@ -367,7 +389,11 @@ public struct LevelerRootView: View {
                 AboutSupportPanel(
                     appName: "PodLeveler",
                     tagline: "Final mix → platform loudness",
-                    accent: LevelerTheme.cyan
+                    accent: LevelerTheme.cyan,
+                    onShowNotices: {
+                        showAbout = false
+                        showNotices = true
+                    }
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -387,6 +413,45 @@ public struct LevelerRootView: View {
         }
     }
 
+    private var noticesOverlay: some View {
+        ZStack {
+            Color.black.opacity(0.58)
+                .contentShape(Rectangle())
+                .onTapGesture { showNotices = false }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Third-Party Notices")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textPrimary)
+                Text(LAMENotice.summary)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack(spacing: 10) {
+                    Button("SHOW LGPL TEXT") { LAMENotice.openCopying() }
+                        .buttonStyle(.bordered)
+                        .disabled(LAMENotice.copyingURL() == nil)
+                    Button("LAME WEBSITE") { LAMENotice.openWebsite() }
+                        .buttonStyle(.bordered)
+                }
+                Button("CLOSE") { showNotices = false }
+                    .buttonStyle(LevelerPrimaryButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+            .frame(maxWidth: 460)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(LevelerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(LevelerTheme.cyan.opacity(0.4), lineWidth: 1.1)
+            )
+        }
+    }
+
     private var exportOverlay: some View {
         ZStack {
             Color.black.opacity(0.58)
@@ -399,7 +464,9 @@ public struct LevelerRootView: View {
                     resultName: nil,
                     followsSource: nil,
                     primaryTitle: session.isBusy ? "WORKING…" : "Export…",
-                    primaryHelp: "Then pick a folder. The default name and 16-bit WAV keep today’s export.",
+                    primaryHelp: output.container == .mp3
+                        ? "Then pick a folder. This writes an MP3 at the bitrate and sample rate you picked."
+                        : "Then pick a folder. The default name and 16-bit WAV keep today’s export.",
                     primaryDisabled: !session.canExportLeveled,
                     primaryAction: chooseExportDestination
                 )
@@ -815,7 +882,9 @@ public struct LevelerRootView: View {
         let ext = settings.container.fileExtension
         let panel = NSSavePanel()
         panel.title = "Export Leveled"
-        panel.message = "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
+        panel.message = settings.container == .mp3
+            ? "Leveling is already done. This writes that audio as MP3 at the bitrate and sample rate you picked."
+            : "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
         panel.prompt = "Export"
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
