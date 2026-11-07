@@ -163,14 +163,16 @@ struct ContentView: View {
             Spacer()
             Button("New") { session.newProject() }
                 .buttonStyle(LoungeButtonStyle())
+                .disabled(session.limiterExporting)
             Button("Open") { session.openProject() }
                 .buttonStyle(LoungeButtonStyle())
+                .disabled(session.limiterExporting)
             Button("Save") { session.saveShowingError() }
                 .buttonStyle(LoungeButtonStyle(prominent: true))
                 .disabled(session.package == nil || !session.isDirty)
             Button("Save As") { session.saveAs() }
                 .buttonStyle(LoungeButtonStyle())
-                .disabled(session.package == nil)
+                .disabled(session.package == nil || session.limiterExporting)
             Button(depotHidden ? "Show Depot" : "Hide Depot") {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     depotHidden.toggle()
@@ -225,8 +227,9 @@ struct LoungeHomeView: View {
                 LazyVGrid(columns: columns, spacing: 16) {
                     ForEach(WorkspaceID.allCases) { workspace in
                         WorkspaceCard(workspace: workspace) {
-                            session.activeWorkspace = workspace
+                            session.openWorkspace(workspace)
                         }
+                        .disabled(session.limiterExporting)
                     }
                 }
                 .frame(minHeight: 560)

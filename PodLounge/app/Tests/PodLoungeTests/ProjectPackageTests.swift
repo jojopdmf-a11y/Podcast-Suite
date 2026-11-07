@@ -436,7 +436,8 @@ private func expect<T: Error & Equatable>(
     #expect(result.producedBy == "limiter")
     #expect(result.displayName == "Episode – Leveled (UNIVERSAL).wav")
     #expect(result.relativePath == "depot/results/\(result.id).wav")
-    #expect(package.manifest.selectedAssetID == result.id)
+    // A result stays in the list. The file already selected stays selected.
+    #expect(package.manifest.selectedAssetID == source.id)
     #expect(package.manifest.assets.count == 2)
     #expect(try Data(contentsOf: package.resolvedURL(for: result)) == Data("LEVELED-BYTES".utf8))
     #expect(try Data(contentsOf: originalURL) == originalBytes)
@@ -444,8 +445,39 @@ private func expect<T: Error & Equatable>(
 
     let reopened = try ProjectPackage.open(at: package.rootURL)
     #expect(reopened.manifest.assets.map(\.id) == [source.id, result.id])
-    #expect(reopened.manifest.selectedAssetID == result.id)
+    #expect(reopened.manifest.selectedAssetID == source.id)
     #expect(try Data(contentsOf: reopened.resolvedURL(for: source)) == originalBytes)
+}
+
+@Test func importResultLeavesSelectionNilWhenNothingWasSelected() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Empty.podlounge"), name: "Empty")
+    #expect(package.manifest.selectedAssetID == nil)
+    let rendered = try scratch.file("rendered.wav", "LEVELED")
+    let result = try package.importResult(from: rendered, producedBy: "limiter", displayName: "Leveled.wav")
+    // Nothing was selected, so nothing becomes selected. The new file is still listed.
+    #expect(package.manifest.selectedAssetID == nil)
+    #expect(package.manifest.assets.map(\.id) == [result.id])
+    let reopened = try ProjectPackage.open(at: package.rootURL)
+    #expect(reopened.manifest.selectedAssetID == nil)
+}
+
+@Test func importResultSelectsOnlyWhenAsked() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let original = try scratch.file("episode.wav", "ORIGINAL")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Pick.podlounge"), name: "Pick")
+    let source = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    let rendered = try scratch.file("rendered.wav", "LEVELED")
+    let result = try package.importResult(
+        from: rendered,
+        producedBy: "limiter",
+        displayName: "Leveled.wav",
+        select: true
+    )
+    #expect(package.manifest.selectedAssetID == result.id)
+    #expect(package.manifest.assets.map(\.id) == [source.id, result.id])
 }
 
 @Test func removeAssetRollsBackWhenSaveFails() throws {

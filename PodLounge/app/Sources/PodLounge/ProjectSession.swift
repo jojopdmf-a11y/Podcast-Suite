@@ -25,6 +25,8 @@ final class ProjectSession: ObservableObject {
     @Published var confirmDiscard = false
     @Published var showAbout = false
     @Published var limiterSettings = LimiterWorkspaceSettings.defaults
+    /// True while the Limiter is rendering or copying a result. Depot clicks wait.
+    @Published var limiterExporting = false
 
     /// Set by the Limiter workspace so leaving the card stops playback.
     var endLimiterPlayback: (() -> Void)?
@@ -56,11 +58,13 @@ final class ProjectSession: ObservableObject {
     }
 
     func select(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
         selectedAssetID = asset.id
     }
 
     /// Plays the depot file as stored. A second file, or the same file again, stops the first.
     func toggleDepotPlayback(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
         if depotPlayer.playingAssetID == asset.id {
             stopDepotPlayback()
             return
@@ -86,7 +90,14 @@ final class ProjectSession: ObservableObject {
         depotPlayer.stop()
     }
 
+    /// Opens a card. Ignored while a Limiter export is still writing.
+    func openWorkspace(_ workspace: WorkspaceID) {
+        guard !limiterExporting else { return }
+        activeWorkspace = workspace
+    }
+
     func newProject() {
+        guard !limiterExporting else { return }
         guard !isDirty else {
             pending = .newProject
             confirmDiscard = true
@@ -96,6 +107,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func openProject() {
+        guard !limiterExporting else { return }
         guard !isDirty else {
             pending = .openProject
             confirmDiscard = true
@@ -160,6 +172,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func saveAs() {
+        guard !limiterExporting else { return }
         guard package != nil else {
             presentNewPanel()
             return
@@ -196,6 +209,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func importAudio() {
+        guard !limiterExporting else { return }
         guard package != nil else {
             alertMessage = "Create or open a project before importing audio."
             return
@@ -213,6 +227,7 @@ final class ProjectSession: ObservableObject {
 
     /// Asks first, then removes the file from the depot and saves the project.
     func deleteAsset(_ asset: DepotAsset) {
+        guard !limiterExporting else { return }
         guard let package else { return }
         let alert = NSAlert()
         alert.messageText = "Delete \u{201C}\(asset.displayName)\u{201D} from this project?"
@@ -238,6 +253,7 @@ final class ProjectSession: ObservableObject {
     /// Navigation only. Stops Limiter playback. Does not delete depot audio.
     /// Does not stop a Fixer take — there is no recorder in this build.
     func leaveWorkspace() {
+        guard !limiterExporting else { return }
         stopDepotPlayback()
         if activeWorkspace == .limiter {
             endLimiterPlayback?()
@@ -246,14 +262,20 @@ final class ProjectSession: ObservableObject {
     }
 
     /// Renders nothing itself. The Limiter workspace passes a finished file.
-    /// The original depot bytes are not rewritten.
+    /// The original depot bytes are not rewritten, and the selection stays on
+    /// the file that was leveled.
     func importLimiterResult(from url: URL, displayName: String) throws {
         guard let package else {
             throw PackageError.operationFailed("Create or open a project before saving a result.")
         }
         applyMetadata(to: package)
         try package.writeLimiterSettings(limiterSettings)
-        _ = try package.importResult(from: url, producedBy: "limiter", displayName: displayName)
+        _ = try package.importResult(
+            from: url,
+            producedBy: "limiter",
+            displayName: displayName,
+            select: false
+        )
         adopt(package, keepWorkspace: true)
     }
 

@@ -90,7 +90,7 @@ struct PlatformPreset: Identifiable, Equatable, Hashable {
     ]
 }
 
-struct LoudnessReport: Equatable {
+struct LoudnessReport: Equatable, Sendable {
     var integratedLUFS: Float
     var shortTermLUFS: Float
     /// Approximate momentary (400 ms) loudness.

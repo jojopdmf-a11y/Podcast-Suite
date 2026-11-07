@@ -8,6 +8,8 @@ public final class LevelerSession: ObservableObject {
     @Published var sourceName: String = ""
     @Published public var status: String = "Drop a final mix to begin"
     @Published var isBusy = false
+    /// True while a leveled file is being rendered or copied. The Lounge locks the depot on this.
+    @Published public internal(set) var isExporting = false
     /// MUSIC LOUD FILE LOUDNESS rewrite — does not freeze Play or THRESHOLD.
     @Published var isMeasuring = false
     @Published var preset: PlatformPreset = .universal
@@ -48,6 +50,11 @@ public final class LevelerSession: ObservableObject {
 
     private var sourceStore: PCMStore?
     private var leveledStore: PCMStore?
+    /// Session-long scan cache. Torn down with the process, not with one file load.
+    private let scanCache = LevelerScanCache.shared
+    private var loadedStamp: LevelerFileStamp?
+    /// How many times this session walked a source file for its "before" report.
+    private(set) var sourceAnalysisCount = 0
     private let playback = LevelerPlaybackEngine()
     private var loadGeneration: UInt64 = 0
     private var processGeneration: UInt64 = 0
@@ -193,16 +200,25 @@ public final class LevelerSession: ObservableObject {
         processGeneration += 1
         let gen = loadGeneration
         let resolvedName = Self.presentationName(displayName, url: url)
+        let stamp = LevelerFileStamp.make(for: url)
+
+        if let stamp, let hit = scanCache.source(for: stamp), let store = hit.store {
+            acceptLoadedFile(url: url, name: resolvedName, stamp: stamp, store: store, report: hit.report)
+            return
+        }
+
+        let cachedReport = stamp.flatMap { scanCache.source(for: $0)?.report }
         isBusy = true
         status = "Loading…"
         hasResult = false
         isMeasuring = false
         measureAgain = false
-        before = .empty
+        before = cachedReport ?? .empty
         after = .empty
         appliedGainDb = 0
         sourceStore = nil
         leveledStore = nil
+        loadedStamp = nil
         playback.load(pre: nil, post: nil)
         playAfter = false
         playheadFrame = 0
@@ -219,47 +235,33 @@ public final class LevelerSession: ObservableObject {
                         self.status = String(format: "Loading… %.0f%%", fraction * 100)
                     }
                 }
-                let report = LoudnessEngine.analyze(store) { fraction in
-                    Task { @MainActor in
-                        guard self.loadGeneration == gen else { return }
-                        self.status = String(format: "Analyzing… %.0f%%", fraction * 100)
+                let report: LoudnessReport
+                let didAnalyze: Bool
+                if let cachedReport {
+                    report = cachedReport
+                    didAnalyze = false
+                } else {
+                    report = LoudnessEngine.analyze(store) { fraction in
+                        Task { @MainActor in
+                            guard self.loadGeneration == gen else { return }
+                            self.status = String(format: "Analyzing… %.0f%%", fraction * 100)
+                        }
                     }
+                    didAnalyze = true
                 }
                 await MainActor.run {
+                    if didAnalyze { self.sourceAnalysisCount += 1 }
+                    if let stamp {
+                        self.scanCache.storeSource(stamp: stamp, report: report, store: store)
+                    }
                     guard self.loadGeneration == gen else { return }
-                    self.sourceURL = url
-                    self.sourceName = resolvedName
-                    self.sourceStore = store
-                    self.before = report
-                    self.sampleRate = store.sampleRate
-                    self.durationFrames = store.frameCount
-                    if let pending = self.pendingMusicThreshold {
-                        self.musicThresholdDb = min(Self.musicThresholdMax, max(Self.musicThresholdMin, pending))
-                        self.pendingMusicThreshold = nil
-                    } else {
-                        self.musicThresholdDb = min(
-                            Self.musicThresholdMax,
-                            max(Self.musicThresholdMin, report.truePeakDbTP)
-                        )
-                    }
-                    self.liveGR = 0
-                    self.peakGR = 0
-                    self.filePeakGR = 0
-                    self.playback.load(pre: store, post: nil)
-                    if self.preset.isMaximizer {
-                        self.isBusy = false
-                        self.playAfter = true
-                        self.syncLiveMaximizer()
-                        self.playback.setPlayPost(true)
-                    }
-                    self.status = String(
-                        format: "Loaded · %@ · %d ch · %.0f Hz · integrated %.1f LUFS",
-                        Self.formatTime(seconds: report.durationSec),
-                        report.channelCount,
-                        report.sampleRate,
-                        report.integratedLUFS
+                    self.acceptLoadedFile(
+                        url: url,
+                        name: resolvedName,
+                        stamp: stamp,
+                        store: store,
+                        report: report
                     )
-                    self.process()
                 }
             } catch {
                 await MainActor.run {
@@ -277,11 +279,34 @@ public final class LevelerSession: ObservableObject {
     }
 
     func process() {
+        process(useCache: true)
+    }
+
+    /// Same settings as the last level, but run the processor again.
+    func relevel() {
+        process(useCache: false)
+    }
+
+    private func process(useCache: Bool) {
         guard let sourceStore else {
             status = "Load a file first."
             return
         }
         let maximizer = preset.isMaximizer
+        let key = currentProcessKey()
+        if useCache, let stamp = loadedStamp,
+           let hit = scanCache.result(for: stamp, key: key),
+           let leveled = hit.store {
+            processGeneration += 1
+            measureAgain = false
+            applyProcessedResult(
+                report: hit.report,
+                gain: hit.appliedGainDb,
+                peakGR: hit.peakGR,
+                store: leveled
+            )
+            return
+        }
         if maximizer, isMeasuring {
             measureAgain = true
             return
@@ -294,6 +319,8 @@ public final class LevelerSession: ObservableObject {
         let store = sourceStore
         let threshold = musicThresholdDb
         let ceiling = Self.musicCeilingDb
+        let stamp = loadedStamp
+        let knownBefore: LoudnessReport? = before.durationSec > 0.05 && before.channelCount > 0 ? before : nil
         syncLiveMaximizer()
         if maximizer {
             isMeasuring = true
@@ -314,7 +341,8 @@ public final class LevelerSession: ObservableObject {
                     let result = try LoudnessEngine.maximize(
                         store,
                         thresholdDb: threshold,
-                        ceilingDb: ceiling
+                        ceilingDb: ceiling,
+                        knownBefore: knownBefore
                     ) { fraction in
                         Task { @MainActor in
                             guard self.processGeneration == gen else { return }
@@ -328,7 +356,8 @@ public final class LevelerSession: ObservableObject {
                     (out, report, gain) = try LoudnessEngine.normalize(
                         store,
                         targetLUFS: target,
-                        truePeakCeilingDbTP: tp
+                        truePeakCeilingDbTP: tp,
+                        knownBefore: knownBefore
                     ) { fraction in
                         Task { @MainActor in
                             guard self.processGeneration == gen else { return }
@@ -342,25 +371,20 @@ public final class LevelerSession: ObservableObject {
                 }
                 await MainActor.run {
                     guard self.processGeneration == gen else { return }
-                    self.leveledStore = out
-                    self.after = report
-                    self.appliedGainDb = gain
-                    self.hasResult = true
-                    self.playback.setPost(out)
-                    self.syncLiveMaximizer()
-                    if maximizer {
-                        self.filePeakGR = renderGR
-                        self.peakGR = max(self.peakGR, renderGR)
-                        self.isMeasuring = false
-                        if self.measureAgain {
-                            self.process()
-                            return
-                        }
-                    } else {
-                        self.isBusy = false
+                    if let stamp {
+                        self.scanCache.storeResult(
+                            stamp: stamp,
+                            key: key,
+                            report: report,
+                            appliedGainDb: gain,
+                            peakGR: renderGR,
+                            store: out
+                        )
                     }
-                    self.consumePendingListen()
-                    self.status = self.isPlaying ? self.playingStatus() : self.readyStatus()
+                    self.applyProcessedResult(report: report, gain: gain, peakGR: renderGR, store: out)
+                    if maximizer, self.measureAgain {
+                        self.process()
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -427,18 +451,121 @@ public final class LevelerSession: ObservableObject {
         }
     }
 
+    /// Shows a finished level. Playback position is left as it is, except a fresh load
+    /// which resets the playhead before calling this.
+    private func applyProcessedResult(
+        report: LoudnessReport,
+        gain: Float,
+        peakGR renderGR: Float,
+        store: PCMStore
+    ) {
+        leveledStore = store
+        after = report
+        appliedGainDb = gain
+        hasResult = true
+        playback.setPost(store)
+        syncLiveMaximizer()
+        if preset.isMaximizer {
+            filePeakGR = renderGR
+            peakGR = max(peakGR, renderGR)
+            isMeasuring = false
+        } else {
+            isBusy = false
+        }
+        consumePendingListen()
+        status = isPlaying ? playingStatus() : readyStatus()
+    }
+
+    /// Installs a decoded file and, when this preset was already leveled, its result.
+    /// Does not run "Analyzing…" when the report is already known.
+    private func acceptLoadedFile(
+        url: URL,
+        name: String,
+        stamp: LevelerFileStamp?,
+        store: PCMStore,
+        report: LoudnessReport
+    ) {
+        sourceURL = url
+        sourceName = name
+        loadedStamp = stamp
+        sourceStore = store
+        before = report
+        sampleRate = store.sampleRate
+        durationFrames = store.frameCount
+        if let pending = pendingMusicThreshold {
+            musicThresholdDb = min(Self.musicThresholdMax, max(Self.musicThresholdMin, pending))
+            pendingMusicThreshold = nil
+        } else {
+            musicThresholdDb = min(
+                Self.musicThresholdMax,
+                max(Self.musicThresholdMin, report.truePeakDbTP)
+            )
+        }
+        liveGR = 0
+        peakGR = 0
+        filePeakGR = 0
+        isMeasuring = false
+        measureAgain = false
+        resetMeterUI()
+        playback.load(pre: store, post: nil)
+        playheadFrame = 0
+        playAfter = false
+        hasResult = false
+        after = .empty
+        appliedGainDb = 0
+        leveledStore = nil
+        if preset.isMaximizer {
+            isBusy = false
+            playAfter = true
+            syncLiveMaximizer()
+            playback.setPlayPost(true)
+        }
+        if let stamp,
+           let hit = scanCache.result(for: stamp, key: currentProcessKey()),
+           let leveled = hit.store {
+            applyProcessedResult(
+                report: hit.report,
+                gain: hit.appliedGainDb,
+                peakGR: hit.peakGR,
+                store: leveled
+            )
+            return
+        }
+        status = String(
+            format: "Loaded · %@ · %d ch · %.0f Hz · integrated %.1f LUFS",
+            Self.formatTime(seconds: report.durationSec),
+            report.channelCount,
+            report.sampleRate,
+            report.integratedLUFS
+        )
+        process()
+    }
+
+    private func currentProcessKey() -> LevelerScanCache.ProcessKey {
+        LevelerScanCache.ProcessKey(
+            presetID: preset.id,
+            targetLUFSMilli: LevelerScanCache.milli(activeTargetLUFS),
+            truePeakMilli: LevelerScanCache.milli(activeTruePeak),
+            musicThresholdMilli: preset.isMaximizer ? LevelerScanCache.milli(musicThresholdDb) : 0,
+            maximizer: preset.isMaximizer
+        )
+    }
+
     /// Stops playback and drops the working audio. Does not delete depot files.
+    /// The scan cache stays for the rest of the app launch.
     public func teardown() {
         stopPlayback()
         loadGeneration += 1
         processGeneration += 1
         isBusy = false
+        isExporting = false
         isMeasuring = false
         measureAgain = false
         hasResult = false
         renderFraction = 0
         sourceStore = nil
         leveledStore = nil
+        loadedStamp = nil
         playback.load(pre: nil, post: nil)
         sourceURL = nil
         sourceName = ""
@@ -471,9 +598,17 @@ public final class LevelerSession: ObservableObject {
         let ceiling = Self.musicCeilingDb
         let settings = output
         let generation = loadGeneration
+        let knownBefore: LoudnessReport? = before.durationSec > 0.05 && before.channelCount > 0 ? before : nil
         isBusy = true
+        isExporting = true
         renderFraction = 0
         status = "Rendering…"
+        let holdExporting = !releaseBusy
+        defer {
+            if !holdExporting {
+                isExporting = false
+            }
+        }
         let report: @Sendable (Double) -> Void = { fraction in
             Task { @MainActor in
                 guard self.loadGeneration == generation else { return }
@@ -488,7 +623,8 @@ public final class LevelerSession: ObservableObject {
                     let result = try LoudnessEngine.maximize(
                         sourceStore,
                         thresholdDb: threshold,
-                        ceilingDb: ceiling
+                        ceilingDb: ceiling,
+                        knownBefore: knownBefore
                     ) { fraction in
                         report(0.7 * fraction)
                     }

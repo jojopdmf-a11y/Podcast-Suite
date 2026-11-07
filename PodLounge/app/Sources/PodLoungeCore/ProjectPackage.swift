@@ -237,15 +237,21 @@ public final class ProjectPackage {
         return asset
     }
 
-    /// Copies a rendered file into `depot/results` and selects it.
+    /// Copies a rendered file into `depot/results`.
     /// The source file is only read. A second atomic save stores the display name.
+    ///
+    /// Selection is left alone unless `select` is true. Saving a leveled file
+    /// therefore keeps the depot on the file being worked on. When nothing was
+    /// selected and `select` is false, the selection stays nil: the new file
+    /// appears in the list and nothing jumps to it.
     @discardableResult
     public func importResult(
         from source: URL,
         producedBy: String,
-        displayName: String
+        displayName: String,
+        select: Bool = false
     ) throws -> DepotAsset {
-        let asset = try importMedia(from: source, kind: .result, producedBy: producedBy, select: true)
+        let asset = try importMedia(from: source, kind: .result, producedBy: producedBy, select: select)
         let cleaned = Self.sanitizedDisplayName(displayName)
         guard let index = manifest.assets.firstIndex(where: { $0.id == asset.id }) else {
             return asset

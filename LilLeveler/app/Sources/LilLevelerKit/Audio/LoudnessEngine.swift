@@ -142,9 +142,10 @@ enum LoudnessEngine {
         _ store: PCMStore,
         targetLUFS: Float,
         truePeakCeilingDbTP: Float,
+        knownBefore: LoudnessReport? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws -> (PCMStore, LoudnessReport, Float) {
-        let before = analyze(store) { progress?(0.45 * $0) }
+        let before = resolvedBefore(knownBefore, store: store, progressWeight: 0.45, progress: progress)
         guard before.durationSec > 0.05 else {
             throw LevelerError.processFailed("Audio too short to level.")
         }
@@ -209,9 +210,10 @@ enum LoudnessEngine {
         _ store: PCMStore,
         thresholdDb: Float,
         ceilingDb: Float,
+        knownBefore: LoudnessReport? = nil,
         progress: (@Sendable (Double) -> Void)? = nil
     ) throws -> (PCMStore, LoudnessReport, Float, Float) {
-        let before = analyze(store) { progress?(0.40 * $0) }
+        let before = resolvedBefore(knownBefore, store: store, progressWeight: 0.40, progress: progress)
         guard before.durationSec > 0.05 else {
             throw LevelerError.processFailed("Audio too short to level.")
         }
@@ -247,6 +249,21 @@ enum LoudnessEngine {
         progress?(1)
         let netGainDb = after.integratedLUFS - before.integratedLUFS
         return (dest, after, netGainDb, peakGR)
+    }
+
+    /// A cached source report skips the first walk of the file. The leveled
+    /// audio is still measured after gain.
+    private static func resolvedBefore(
+        _ knownBefore: LoudnessReport?,
+        store: PCMStore,
+        progressWeight: Double,
+        progress: (@Sendable (Double) -> Void)?
+    ) -> LoudnessReport {
+        if let knownBefore, knownBefore.durationSec > 0 {
+            progress?(progressWeight)
+            return knownBefore
+        }
+        return analyze(store) { progress?(progressWeight * $0) }
     }
 
     // MARK: - Streaming helpers

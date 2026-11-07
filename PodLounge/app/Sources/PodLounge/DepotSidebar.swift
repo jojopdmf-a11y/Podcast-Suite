@@ -21,7 +21,16 @@ struct DepotSidebar: View {
                     Spacer(minLength: 8)
                     Button("Import Audio") { session.importAudio() }
                         .buttonStyle(LoungeButtonStyle(prominent: true))
-                        .disabled(session.package == nil)
+                        .disabled(session.package == nil || session.limiterExporting)
+                }
+                if session.limiterExporting {
+                    Text("Exporting…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.amber)
+                    Text("The depot stays locked until the file is written.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Text("Files live inside this project. Import copies once. Save Project does not copy them again.")
                     .font(.system(size: 11))
@@ -83,6 +92,8 @@ struct DepotSidebar: View {
                 DepotRow(asset: asset)
             }
         }
+        .opacity(session.limiterExporting ? 0.35 : 1)
+        .allowsHitTesting(!session.limiterExporting)
     }
 
     private var selectedSection: some View {
@@ -106,6 +117,7 @@ struct DepotSidebar: View {
                     healthLabel(session.health(of: asset))
                     Button("Delete from Project") { session.deleteAsset(asset) }
                         .buttonStyle(LoungeButtonStyle())
+                        .disabled(session.limiterExporting)
                         .padding(.top, 4)
                 }
                 .padding(10)
@@ -181,7 +193,7 @@ private struct DepotRow: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(!canPlay)
+                .disabled(!canPlay || session.limiterExporting)
                 .help(playing ? "Stop" : "Play this file as it is, with no processing")
                 .accessibilityLabel(playing ? "Stop \(asset.displayName)" : "Play \(asset.displayName)")
 
@@ -205,6 +217,7 @@ private struct DepotRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(session.limiterExporting)
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
@@ -229,6 +242,7 @@ private struct DepotRow: View {
         }
         .contextMenu {
             Button("Delete from Project…") { session.deleteAsset(asset) }
+                .disabled(session.limiterExporting)
         }
         .task(id: asset.id) {
             length = await loadLength()

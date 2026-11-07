@@ -238,7 +238,7 @@ public struct LevelerRootView: View {
             }
             .buttonStyle(LevelerPrimaryButtonStyle())
             .disabled(!session.canExportLeveled || onSaveToDepot == nil || output.container == .mp3)
-            .help("Render the leveled file into the project. The original is not changed.")
+            .help("Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.")
         }
     }
 
@@ -250,7 +250,7 @@ public struct LevelerRootView: View {
                 resultName: resultName,
                 followsSource: resultNameFollowsSource,
                 primaryTitle: session.isBusy ? "WORKING…" : "Save Result to Depot",
-                primaryHelp: "Render the leveled file into the project. The original is not changed.",
+                primaryHelp: "Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.",
                 primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
                 primaryAction: saveToDepot,
                 fillsColumn: false,
@@ -752,7 +752,7 @@ public struct LevelerRootView: View {
                 .disabled(!session.canListenPost)
                 .help("PRE is the file you dropped. POST is the live maximizer (MUSIC LOUD) or the leveled file. Time stays put when you flip.")
 
-                Button("RE-LEVEL") { session.process() }
+                Button("RE-LEVEL") { session.relevel() }
                     .buttonStyle(LevelerGhostButtonStyle())
                     .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
 
@@ -795,6 +795,8 @@ public struct LevelerRootView: View {
         let temp = FileManager.default.temporaryDirectory
             .appendingPathComponent("podleveler-\(UUID().uuidString).\(ext)")
         Task {
+            session.isExporting = true
+            defer { session.isExporting = false }
             do {
                 try await session.writeLeveled(to: temp, output: settings, releaseBusy: false)
                 try await onSaveToDepot(temp, display)

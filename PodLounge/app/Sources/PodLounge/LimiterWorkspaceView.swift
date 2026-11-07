@@ -13,6 +13,7 @@ struct LimiterWorkspaceView: View {
             HStack(alignment: .center, spacing: 10) {
                 Button("← Lounge") { session.leaveWorkspace() }
                     .buttonStyle(LoungeButtonStyle())
+                    .disabled(session.limiterExporting)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Limiter")
                         .font(.system(size: 18, weight: .semibold))
@@ -50,6 +51,7 @@ struct LimiterWorkspaceView: View {
             session.stopLimiterPlayback = {
                 leveler.stopTransportIfPlaying()
             }
+            session.limiterExporting = leveler.isExporting
             leveler.applyControls(controlSnapshot)
             loadSelected()
             acceptControlEdits = true
@@ -58,7 +60,11 @@ struct LimiterWorkspaceView: View {
             leveler.teardown()
             session.endLimiterPlayback = nil
             session.stopLimiterPlayback = nil
+            session.limiterExporting = false
             session.stopDepotPlayback()
+        }
+        .onChange(of: leveler.isExporting) { _, exporting in
+            session.limiterExporting = exporting
         }
         .onChange(of: session.selectedAssetID) { _, _ in
             loadSelected()

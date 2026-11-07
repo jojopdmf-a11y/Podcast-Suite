@@ -24,7 +24,7 @@ ShowName.podlounge/
 
 **Save As** copies the folder once, then writes the manifest on the copy. Moving the folder does not break the relative paths.
 
-**Save Result to Depot** in the Limiter workspace writes a new file into `depot/results` (`producedBy` is `limiter`) and selects it. The depot file you leveled is not modified.
+**Save Result to Depot** in the Limiter workspace writes a new file into `depot/results` (`producedBy` is `limiter`). The depot selection stays on the file you were leveling. The depot file you leveled is not modified.
 
 Opening a newer `formatVersion`, a broken manifest, or a path that escapes the folder fails and leaves the folder untouched. A missing depot file stays listed as missing. Save does not recreate it.
 
