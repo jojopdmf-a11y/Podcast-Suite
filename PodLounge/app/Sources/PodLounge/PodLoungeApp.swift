@@ -1,3 +1,4 @@
+import LilLevelerKit
 import SwiftUI
 
 @main
@@ -39,6 +40,14 @@ struct PodLoungeApp: App {
             CommandGroup(replacing: .appInfo) {
                 Button("About Pod Lounge") { session.showAbout = true }
                 Button("Third-Party Notices") { session.showThirdPartyNotices = true }
+            }
+            if UITestMode.enabled {
+                CommandMenu("Quick Check") {
+                    Button("Fit Minimum Window") {
+                        NotificationCenter.default.post(name: .uiTestFitMinimumWindow, object: nil)
+                    }
+                    .keyboardShortcut("m", modifiers: [.command, .option, .shift])
+                }
             }
         }
     }

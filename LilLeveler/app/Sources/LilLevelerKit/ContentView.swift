@@ -11,11 +11,21 @@ public extension Notification.Name {
 public struct LevelerAppRoot: View {
     @StateObject private var session = LevelerSession()
     @State private var output = LevelerOutputSettings.standaloneDefaults
+    @State private var windowFitReport = ""
 
     public init() {}
 
     public var body: some View {
         LevelerRootView(session: session, mode: .application, output: $output)
+            .overlay(alignment: .topLeading) {
+                UITestFitProbe(report: windowFitReport)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .uiTestFitMinimumWindow)) { _ in
+                windowFitReport = UITestWindowFit.shrinkKeyWindow()
+                Task { @MainActor in
+                    windowFitReport = UITestWindowFit.measureKeyWindow()
+                }
+            }
     }
 }
 
@@ -385,9 +395,11 @@ public struct LevelerRootView: View {
             HStack(spacing: 8) {
                 Button("ABOUT") { showAbout = true }
                     .buttonStyle(LevelerGhostButtonStyle())
+                    .accessibilityIdentifier("leveler.about")
                 if mode == .application, session.sourceURL != nil {
                     Button("LOAD OTHER…") { pickFile() }
                         .buttonStyle(LevelerGhostButtonStyle())
+                        .accessibilityIdentifier("leveler.loadOther")
                 }
             }
             .fixedSize()
@@ -516,6 +528,7 @@ public struct LevelerRootView: View {
                     .foregroundStyle(LevelerTheme.textSecondary)
                 Button("CHOOSE FILE…") { pickFile() }
                     .buttonStyle(LevelerPrimaryButtonStyle())
+                    .accessibilityIdentifier("leveler.chooseFile")
                     .padding(.top, 6)
             }
         }
@@ -827,6 +840,7 @@ public struct LevelerRootView: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundStyle(LevelerTheme.textPrimary)
                     .lineLimit(1)
+                    .accessibilityIdentifier("leveler.sourceName")
             }
             Spacer()
             if session.hasResult {
@@ -911,11 +925,21 @@ public struct LevelerRootView: View {
     }
 
     private var statusBar: some View {
-        Text(session.status)
+        let label = Text(session.status)
             .font(.system(size: 11, weight: .medium, design: .rounded))
             .foregroundStyle(LevelerTheme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 4)
+            .accessibilityIdentifier("leveler.status")
+        return Group {
+            if UITestMode.enabled {
+                label.accessibilityValue(
+                    "status=\(session.status);analyses=\(session.sourceAnalysisCount);levels=\(session.levelingMeasureCount)"
+                )
+            } else {
+                label
+            }
+        }
     }
 
     private var automaticResultName: String {
@@ -952,12 +976,33 @@ public struct LevelerRootView: View {
     }
 
     private func chooseExportDestination() {
-        guard let sourceURL = session.sourceURL else {
+        guard session.sourceURL != nil else {
             session.status = "Nothing to export yet."
             return
         }
         let settings = output
         let ext = settings.container.fileExtension
+        if UITestMode.enabled {
+            guard let path = UITestMode.argument("-UITestExportDir") else {
+                session.status = "UI test export folder is missing."
+                return
+            }
+            let destination = URL(fileURLWithPath: path, isDirectory: true)
+                .appendingPathComponent("\(exportFileStem).\(ext)")
+            Task {
+                do {
+                    try await session.writeLeveled(to: destination, output: settings)
+                    session.status = "Exported → \(destination.lastPathComponent)"
+                } catch {
+                    session.status = error.localizedDescription
+                }
+            }
+            return
+        }
+        guard let sourceURL = session.sourceURL else {
+            session.status = "Nothing to export yet."
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "Export Leveled"
         panel.message = settings.container == .mp3
@@ -990,6 +1035,7 @@ public struct LevelerRootView: View {
     }
 
     private func promptSavePreset() {
+        if UITestMode.enabled { return }
         let alert = NSAlert()
         alert.messageText = "Name this loudness preset"
         alert.informativeText = String(
@@ -1010,6 +1056,14 @@ public struct LevelerRootView: View {
     }
 
     private func pickFile() {
+        if UITestMode.enabled {
+            guard let path = UITestMode.argument("-UITestOpen") else {
+                session.status = "UI test file path is missing."
+                return
+            }
+            session.load(url: URL(fileURLWithPath: path))
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -1073,6 +1127,9 @@ private struct LevelerWindowClamp: NSViewRepresentable {
             )
             window.contentMinSize = NSSize(width: fitted.minWidth, height: fitted.minHeight)
             window.minSize = NSSize(width: fitted.minWidth, height: fitted.minHeight + titleBar)
+            // The quick check shrinks the window itself. Skip the one-time
+            // expand-to-ideal so that shrink is not undone.
+            guard UITestMode.enabled == false else { return }
             guard context.coordinator.fitsApplied < 2 else { return }
             context.coordinator.fitsApplied += 1
 

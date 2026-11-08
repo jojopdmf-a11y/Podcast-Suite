@@ -45,6 +45,17 @@ enum UserLoudnessPresetStore {
     }
 
     static func fileURL() throws -> URL {
+        if UITestMode.enabled {
+            let dir: URL
+            if let path = UITestMode.argument("-UITestPresets") {
+                dir = URL(fileURLWithPath: path, isDirectory: true)
+            } else {
+                dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("podleveler-uitest-presets", isDirectory: true)
+            }
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.appendingPathComponent("user-presets.json")
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         let dir = base.appendingPathComponent("CougarCalc/LilLeveler", isDirectory: true)

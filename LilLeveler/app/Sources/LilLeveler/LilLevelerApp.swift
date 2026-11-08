@@ -26,6 +26,14 @@ struct LilLevelerApp: App {
                 }
                 .keyboardShortcut("?", modifiers: [.command, .shift])
             }
+            if UITestMode.enabled {
+                CommandMenu("Quick Check") {
+                    Button("Fit Minimum Window") {
+                        NotificationCenter.default.post(name: .uiTestFitMinimumWindow, object: nil)
+                    }
+                    .keyboardShortcut("m", modifiers: [.command, .option, .shift])
+                }
+            }
         }
     }
 }

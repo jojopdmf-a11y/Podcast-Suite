@@ -16,6 +16,7 @@ struct ContentView: View {
     @AppStorage(DepotChrome.widthKey) private var depotWidthStorage = DepotChrome.defaultWidth
     @AppStorage(DepotChrome.hiddenKey) private var depotHidden = false
     @State private var depotDragStart: CGFloat?
+    @State private var windowFitReport = ""
 
     private func depotMax(in containerWidth: CGFloat) -> CGFloat {
         guard session.activeWorkspace == .limiter else { return DepotChrome.maxWidth }
@@ -65,6 +66,15 @@ struct ContentView: View {
             minWidth: LevelerPaneMetrics.limiterWorkspaceMinimum + DepotChrome.minWidth,
             minHeight: 800
         )
+        .overlay(alignment: .topLeading) {
+            UITestFitProbe(report: windowFitReport)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .uiTestFitMinimumWindow)) { _ in
+            windowFitReport = UITestWindowFit.shrinkKeyWindow()
+            Task { @MainActor in
+                windowFitReport = UITestWindowFit.measureKeyWindow()
+            }
+        }
         .onChange(of: session.activeWorkspace) { _, _ in
             session.stopDepotPlayback()
         }
@@ -170,6 +180,7 @@ struct ContentView: View {
             )
             .disabled(session.package == nil)
             .frame(maxWidth: 420)
+            .accessibilityIdentifier("lounge.projectName")
             if session.isDirty {
                 Text("Unsaved")
                     .font(.system(size: 11, weight: .semibold))
@@ -179,6 +190,7 @@ struct ContentView: View {
             Button("New") { session.newProject() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.limiterExporting)
+                .accessibilityIdentifier("lounge.new")
             Button("Open") { session.openProject() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.limiterExporting)
@@ -298,6 +310,7 @@ struct WorkspaceCard: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(workspace.title). \(workspace.subtitle)")
+        .accessibilityIdentifier("lounge.card.\(workspace.rawValue)")
     }
 
     @ViewBuilder
