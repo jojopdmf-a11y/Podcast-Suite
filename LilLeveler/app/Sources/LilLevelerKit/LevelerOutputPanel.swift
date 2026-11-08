@@ -46,6 +46,24 @@ struct LevelerOutputPanel: View {
                 Text("AAC · 256 kbps stereo · 44.1 or 48 kHz")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
+            } else if settings.container == .mp3 {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("BITRATE")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(LevelerTheme.cyanDim)
+                    HStack(spacing: 8) {
+                        ForEach(LevelerOutputSettings.mp3Bitrates, id: \.self) { bitrate in
+                            choiceButton(
+                                title: "\(bitrate)",
+                                detail: "kbps",
+                                selected: settings.mp3BitrateKbps == bitrate,
+                                enabled: true
+                            ) {
+                                settings.mp3BitrateKbps = bitrate
+                            }
+                        }
+                    }
+                }
             } else {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("BIT DEPTH")
@@ -124,7 +142,7 @@ struct LevelerOutputPanel: View {
             if includesPrimaryButton {
                 Button(primaryTitle, action: primaryAction)
                     .buttonStyle(LevelerPrimaryButtonStyle())
-                    .disabled(primaryDisabled || settings.container == .mp3)
+                    .disabled(primaryDisabled || settings.container.isWritable == false)
                     .help(primaryHelp)
             }
         }
@@ -132,7 +150,7 @@ struct LevelerOutputPanel: View {
         .frame(maxWidth: .infinity, maxHeight: fillsColumn ? .infinity : nil, alignment: .top)
         .levelerPanel(glow: true)
         .onChange(of: settings.container) { _, container in
-            guard container == .m4a else { return }
+            guard container == .m4a || container == .mp3 else { return }
             if case let .explicit(rate) = settings.rateMode,
                settings.rateIsEnabled(rate) == false {
                 settings.rateMode = .explicit(48_000)
@@ -151,11 +169,11 @@ struct LevelerOutputPanel: View {
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                if container == .mp3 {
-                    Text("coming next")
+                if container == .mp3, enabled == false {
+                    Text("encoder missing")
                         .font(.system(size: 8, weight: .bold, design: .rounded))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.6)
+                        .minimumScaleFactor(0.5)
                 }
             }
             .frame(maxWidth: .infinity)

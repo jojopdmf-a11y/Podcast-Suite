@@ -30,6 +30,10 @@ public enum LevelerPaneMetrics {
     public static let presetKey = "podlounge.limiter.presetWidth"
     public static let outputKey = "podlounge.limiter.outputWidth"
     public static let loudnessExtraKey = "podlounge.limiter.loudnessExtra"
+    /// Standalone PodLeveler remembers its own dividers. Lounge keys stay put.
+    public static let applicationPresetKey = "podleveler.standalone.presetWidth"
+    public static let applicationOutputKey = "podleveler.standalone.outputWidth"
+    public static let applicationLoudnessExtraKey = "podleveler.standalone.loudnessExtra"
 }
 
 public struct LevelerColumnSplit: Equatable, Sendable {

@@ -188,16 +188,113 @@ private func wavPayload(_ url: URL) throws -> Data {
     #expect(packedMismatches == 0)
 }
 
-@Test func mp3WriterRefusesToEncode() throws {
+@Test func mp3EncodesMonoAndStereoAtPodcastRates() async throws {
+    try #require(LAMELibrary.isAvailable, "Run ThirdParty/lame/build_lame.sh before the MP3 tests.")
     let folder = try scratchFolder()
     defer { try? FileManager.default.removeItem(at: folder) }
-    let store = try makeStore(rate: 48_000, frames: 256) { _, _ in 0.1 }
-    let url = folder.appendingPathComponent("nope.mp3")
-    let settings = LevelerOutputSettings(container: .mp3, bitDepth: .int16, rateMode: .matchSource)
-    #expect(throws: (any Error).self) {
-        try LevelerOutputWriter.write(store: store, to: url, settings: settings)
+    for rate in [44_100.0, 48_000.0] {
+        let frames = Int(rate * 2)
+        for channels in [1, 2] {
+            let store = try makeStore(rate: rate, frames: frames, channels: channels) { frame, channel in
+                let t = Double(frame) / rate
+                return Float(sin(2 * Double.pi * (channel == 0 ? 440 : 554) * t) * 0.25)
+            }
+            let url = folder.appendingPathComponent("tone-\(channels)ch-\(Int(rate)).mp3")
+            let settings = LevelerOutputSettings(
+                container: .mp3,
+                bitDepth: .int24,
+                rateMode: .explicit(rate),
+                mp3BitrateKbps: 128
+            )
+            try LevelerOutputWriter.write(store: store, to: url, settings: settings)
+            try await expectMP3(url, rate: rate, channels: channels, seconds: 2, bitrate: 128)
+        }
     }
-    #expect(FileManager.default.fileExists(atPath: url.path) == false)
+
+    let wide = try makeStore(rate: 48_000, frames: 48_000, channels: 3) { _, _ in 0.1 }
+    let rejected = folder.appendingPathComponent("wide.mp3")
+    #expect(throws: (any Error).self) {
+        try LevelerOutputWriter.write(
+            store: wide,
+            to: rejected,
+            settings: LevelerOutputSettings(container: .mp3, bitDepth: .int16, rateMode: .matchSource)
+        )
+    }
+    #expect(FileManager.default.fileExists(atPath: rejected.path) == false)
+
+    let stereo = try makeStore(rate: 48_000, frames: 96_000) { frame, channel in
+        Float(sin(2 * Double.pi * 330 * Double(frame) / 48_000) * (channel == 0 ? 0.2 : 0.15))
+    }
+    var sizes: [Int: Int] = [:]
+    for bitrate in LevelerOutputSettings.mp3Bitrates {
+        let url = folder.appendingPathComponent("rate-\(bitrate).mp3")
+        try LevelerOutputWriter.write(
+            store: stereo,
+            to: url,
+            settings: LevelerOutputSettings(
+                container: .mp3,
+                bitDepth: .int16,
+                rateMode: .explicit(48_000),
+                mp3BitrateKbps: bitrate
+            )
+        )
+        let size = try fileSize(url)
+        sizes[bitrate] = size
+        let expected = Double(bitrate * 1_000) / 8.0 * 2.0
+        let ratio = Double(size) / expected
+        #expect(ratio > 0.85 && ratio < 1.2, "\(bitrate) kbps file is \(size) bytes, expected about \(Int(expected))")
+    }
+    #expect((sizes[192] ?? 0) > (sizes[160] ?? 0))
+    #expect((sizes[160] ?? 0) > (sizes[128] ?? 0))
+    #expect((sizes[128] ?? 0) > (sizes[96] ?? 0))
+
+    for rate in [88_200.0, 96_000.0] {
+        let frames = Int(rate)
+        let store = try makeStore(rate: rate, frames: frames) { frame, _ in
+            Float(sin(2 * Double.pi * 440 * Double(frame) / rate) * 0.2)
+        }
+        let url = folder.appendingPathComponent("fallback-\(Int(rate)).mp3")
+        let settings = LevelerOutputSettings(
+            container: .mp3,
+            bitDepth: .int24,
+            rateMode: .explicit(rate),
+            mp3BitrateKbps: 128
+        )
+        #expect(settings.rateIsEnabled(rate) == false)
+        #expect(abs(settings.resolvedSampleRate(sourceRate: rate) - 48_000) < 1)
+        try LevelerOutputWriter.write(store: store, to: url, settings: settings)
+        let file = try AVAudioFile(forReading: url)
+        #expect(abs(file.fileFormat.sampleRate - 48_000) < 1)
+        #expect(file.fileFormat.channelCount == 2)
+    }
+}
+
+@Test func mp3SixtySecondFileIsLayer3() async throws {
+    try #require(LAMELibrary.isAvailable, "Run ThirdParty/lame/build_lame.sh before the MP3 tests.")
+    let rate = 48_000.0
+    let frames = Int(rate * 60)
+    let store = try makeStore(rate: rate, frames: frames) { frame, channel in
+        let t = Double(frame) / rate
+        return Float(sin(2 * Double.pi * (channel == 0 ? 220 : 277) * t) * 0.2)
+    }
+    let folder = try scratchFolder()
+    let url = folder.appendingPathComponent("minute.mp3")
+    try LevelerOutputWriter.write(
+        store: store,
+        to: url,
+        settings: LevelerOutputSettings(container: .mp3, bitDepth: .int24, rateMode: .explicit(rate), mp3BitrateKbps: 128)
+    )
+    try await expectMP3(url, rate: rate, channels: 2, seconds: 60, bitrate: 128)
+    let published = URL(fileURLWithPath: "/tmp/podleveler-mp3-e2e.mp3")
+    try? FileManager.default.removeItem(at: published)
+    try FileManager.default.copyItem(at: url, to: published)
+    let report = try afinfo(published)
+    print(report)
+    #expect(report.contains(".mp3"))
+    #expect(report.localizedCaseInsensitiveContains("mpeg") || report.contains(".mp3"))
+    #expect(report.contains("48000"))
+    #expect(report.contains("128"))
+    try? FileManager.default.removeItem(at: folder)
 }
 
 @Test func outputRateFollowsSourceUnlessAsked() {
@@ -219,6 +316,81 @@ private func wavPayload(_ url: URL) throws -> Data {
     #expect(abs(aac.resolvedSampleRate(sourceRate: 96_000) - 48_000) < 1)
     #expect(aac.rateIsEnabled(88_200) == false)
     #expect(aac.rateIsEnabled(48_000))
+
+    #expect(standalone.mp3BitrateKbps == 128)
+    #expect(lounge.mp3BitrateKbps == 128)
+    let odd = LevelerOutputSettings(container: .mp3, bitDepth: .int16, rateMode: .explicit(48_000), mp3BitrateKbps: 320)
+    #expect(odd.mp3BitrateKbps == 128)
+
+    var mp3 = lounge
+    mp3.container = .mp3
+    mp3.rateMode = .explicit(96_000)
+    #expect(abs(mp3.resolvedSampleRate(sourceRate: 96_000) - 48_000) < 1)
+    mp3.rateMode = .explicit(88_200)
+    #expect(abs(mp3.resolvedSampleRate(sourceRate: 88_200) - 48_000) < 1)
+    #expect(mp3.rateIsEnabled(88_200) == false)
+    #expect(mp3.rateIsEnabled(96_000) == false)
+    #expect(mp3.rateIsEnabled(44_100))
+    #expect(mp3.rateIsEnabled(48_000))
+    mp3.rateMode = .matchSource
+    #expect(abs(mp3.resolvedSampleRate(sourceRate: 44_100) - 44_100) < 1)
+    #expect(abs(mp3.resolvedSampleRate(sourceRate: 96_000) - 48_000) < 1)
+
+    var wav = lounge
+    wav.container = .wav
+    wav.rateMode = .explicit(96_000)
+    #expect(abs(wav.resolvedSampleRate(sourceRate: 96_000) - 96_000) < 1)
+    #expect(wav.rateIsEnabled(88_200))
+    #expect(wav.rateIsEnabled(96_000))
+}
+
+private func fileSize(_ url: URL) throws -> Int {
+    let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int
+    return try #require(size)
+}
+
+private func expectMP3(
+    _ url: URL,
+    rate: Double,
+    channels: Int,
+    seconds: Double,
+    bitrate: Int
+) async throws {
+    let size = try fileSize(url)
+    #expect(size > 0)
+    let header = try Data(contentsOf: url).prefix(2_048)
+    #expect(header.first == 0xFF)
+    #expect(header.prefix(3) != Data("ID3".utf8))
+    #expect(header.range(of: Data("LAME".utf8)) != nil)
+
+    let file = try AVAudioFile(forReading: url)
+    #expect(abs(file.fileFormat.sampleRate - rate) < 1)
+    #expect(Int(file.fileFormat.channelCount) == channels)
+    let formatID = file.fileFormat.settings[AVFormatIDKey] as? UInt32
+    #expect(formatID == kAudioFormatMPEGLayer3)
+    let fileSeconds = Double(file.length) / file.fileFormat.sampleRate
+    let asset = AVURLAsset(url: url)
+    let assetSeconds = CMTimeGetSeconds(try await asset.load(.duration))
+    let slop = (1_152.0 + 576.0) / rate
+    #expect(abs(fileSeconds - seconds) <= slop, "AVAudioFile duration \(fileSeconds) vs \(seconds)")
+    #expect(abs(assetSeconds - seconds) <= slop, "AVURLAsset duration \(assetSeconds) vs \(seconds)")
+
+    let expectedBytes = Double(bitrate * 1_000) / 8.0 * seconds
+    let ratio = Double(size) / expectedBytes
+    #expect(ratio > 0.85 && ratio < 1.2, "size \(size) vs \(Int(expectedBytes))")
+}
+
+private func afinfo(_ url: URL) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/afinfo")
+    process.arguments = [url.path]
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = pipe
+    try process.run()
+    process.waitUntilExit()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    return String(decoding: data, as: UTF8.self)
 }
 
 @Test func sampleRateConversionTruePeakReport() throws {

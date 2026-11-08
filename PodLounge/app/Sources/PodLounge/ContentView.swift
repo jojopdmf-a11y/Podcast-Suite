@@ -74,9 +74,17 @@ struct ContentView: View {
             Text(session.alertMessage ?? "")
         }
         .alert("About Pod Lounge", isPresented: aboutIsPresented) {
+            Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
             Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Limiter levels the selected depot file and can save a new result. Stripper, Fixer, and Trimmer do not process audio in this build.")
+        }
+        .alert("Third-Party Notices", isPresented: noticesIsPresented) {
+            Button("Show LGPL Text") { LAMENotice.openCopying() }
+            Button("LAME Website") { LAMENotice.openWebsite() }
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(LAMENotice.summary)
         }
         .confirmationDialog(
             "This project has unsaved changes.",
@@ -102,6 +110,13 @@ struct ContentView: View {
         Binding(
             get: { session.showAbout },
             set: { session.showAbout = $0 }
+        )
+    }
+
+    private var noticesIsPresented: Binding<Bool> {
+        Binding(
+            get: { session.showThirdPartyNotices },
+            set: { session.showThirdPartyNotices = $0 }
         )
     }
 

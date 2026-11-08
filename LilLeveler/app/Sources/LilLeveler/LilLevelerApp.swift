@@ -8,12 +8,16 @@ struct LilLevelerApp: App {
             LevelerAppRoot()
                 .preferredColorScheme(.dark)
         }
+        .defaultSize(width: LevelerWindowFit.idealContentWidth, height: LevelerWindowFit.idealContentHeight)
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(replacing: .appInfo) {
                 Button("About PodLeveler") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
+                }
+                Button("Third-Party Notices") {
+                    NotificationCenter.default.post(name: .cougarCalcShowThirdPartyNotices, object: nil)
                 }
             }
             CommandGroup(after: .help) {

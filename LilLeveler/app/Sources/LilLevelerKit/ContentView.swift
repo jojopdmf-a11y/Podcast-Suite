@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 public extension Notification.Name {
     static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
+    static let cougarCalcShowThirdPartyNotices = Notification.Name("cougarCalcShowThirdPartyNotices")
 }
 
 /// Standalone PodLeveler window. The Limiter workspace hosts `LevelerRootView`.
@@ -36,10 +37,15 @@ public struct LevelerRootView: View {
 
     @State private var isDropTargeted = false
     @State private var showAbout = false
-    @State private var showExportOptions = false
+    @State private var showNotices = false
+    @State private var standaloneResultName = ""
+    @State private var standaloneResultFollowsSource = true
     @AppStorage(LevelerPaneMetrics.presetKey) private var presetWidthStorage = Double(LevelerPaneMetrics.presetDefault)
     @AppStorage(LevelerPaneMetrics.outputKey) private var outputWidthStorage = Double(LevelerPaneMetrics.outputDefault)
     @AppStorage(LevelerPaneMetrics.loudnessExtraKey) private var loudnessExtraStorage = 0.0
+    @AppStorage(LevelerPaneMetrics.applicationPresetKey) private var appPresetWidthStorage = Double(LevelerLayout.appPresetDefault)
+    @AppStorage(LevelerPaneMetrics.applicationOutputKey) private var appOutputWidthStorage = Double(LevelerLayout.appOutputDefault)
+    @AppStorage(LevelerPaneMetrics.applicationLoudnessExtraKey) private var appLoudnessExtraStorage = 0.0
     @State private var presetDragOrigin: CGFloat?
     @State private var outputDragOrigin: CGFloat?
     @State private var loudnessDragOrigin: CGFloat?
@@ -72,8 +78,16 @@ public struct LevelerRootView: View {
                     .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
                         showAbout = true
                     }
+                    .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowThirdPartyNotices)) { _ in
+                        showAbout = false
+                        showNotices = true
+                    }
                     .onExitCommand {
-                        if showAbout { showAbout = false }
+                        if showNotices {
+                            showNotices = false
+                        } else if showAbout {
+                            showAbout = false
+                        }
                     }
             } else {
                 chrome
@@ -86,10 +100,14 @@ public struct LevelerRootView: View {
         .onChange(of: session.meterMode) { _, _ in onControlsChanged?() }
         .onChange(of: session.peakHold) { _, _ in onControlsChanged?() }
         .onChange(of: session.playAfter) { _, _ in onControlsChanged?() }
+        .onChange(of: session.sourceURL) { _, _ in
+            guard mode == .application else { return }
+            standaloneResultFollowsSource = true
+            standaloneResultName = ""
+        }
     }
 
     /// One screen inside Pod Lounge: presets, meters and loudness, output column.
-    /// The fixed `LevelerLayout` window stays on the standalone app.
     private var loungeLayout: some View {
         ZStack {
             VStack(alignment: .leading, spacing: 6) {
@@ -102,6 +120,9 @@ public struct LevelerRootView: View {
 
             if showAbout {
                 aboutOverlay
+            }
+            if showNotices {
+                noticesOverlay
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -265,18 +286,29 @@ public struct LevelerRootView: View {
         }
     }
 
+    private var fittedWindow: LevelerWindowFit.ContentSize {
+        let visible = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1512, height: 949)
+        return LevelerWindowFit.contentSize(
+            minimumWidth: LevelerWindowFit.minimumContentWidth,
+            minimumHeight: LevelerWindowFit.minimumContentHeight,
+            idealWidth: LevelerWindowFit.idealContentWidth,
+            idealHeight: LevelerWindowFit.idealContentHeight,
+            visible: visible,
+            titleBar: LevelerWindowFit.assumedTitleBarHeight
+        )
+    }
+
     private var chrome: some View {
-        ZStack {
-            VStack(alignment: .leading, spacing: 14) {
+        let fit = fittedWindow
+        return ZStack {
+            VStack(alignment: .leading, spacing: 8) {
                 header
-                if session.sourceURL == nil {
-                    if mode == .lounge {
-                        loungeEmpty
-                    } else {
+                GeometryReader { geo in
+                    if session.sourceURL == nil {
                         dropZone
+                    } else {
+                        applicationColumns(in: geo.size)
                     }
-                } else {
-                    mainWorkspace
                 }
                 statusBar
             }
@@ -285,29 +317,36 @@ public struct LevelerRootView: View {
             if showAbout {
                 aboutOverlay
             }
-            if showExportOptions, mode == .application {
-                exportOverlay
+            if showNotices {
+                noticesOverlay
             }
         }
-        // Minimum is the old desk size. Extra space goes to the meters.
-        // Ignoring the safe area slides PODLEVELER under the traffic lights.
+        // Minimum is the content floor. `ideal` matches it so the window can
+        // still shrink to that floor; the clamp opens it at the fitted ideal.
         .frame(
-            minWidth: LevelerLayout.windowWidth,
-            idealWidth: LevelerLayout.windowWidth,
+            minWidth: fit.minWidth,
+            idealWidth: fit.minWidth,
             maxWidth: .infinity,
-            minHeight: LevelerLayout.windowHeight,
-            idealHeight: LevelerLayout.windowHeight,
+            minHeight: fit.minHeight,
+            idealHeight: fit.minHeight,
             maxHeight: .infinity
         )
         .background { levelerBackdrop }
+        .background {
+            LevelerWindowClamp(fit: fit)
+        }
         .preferredColorScheme(.dark)
         .onDisappear { session.stopPlayback() }
         .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
             showAbout = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowThirdPartyNotices)) { _ in
+            showAbout = false
+            showNotices = true
+        }
         .onExitCommand {
-            if showExportOptions {
-                showExportOptions = false
+            if showNotices {
+                showNotices = false
             } else if showAbout {
                 showAbout = false
             }
@@ -367,7 +406,11 @@ public struct LevelerRootView: View {
                 AboutSupportPanel(
                     appName: "PodLeveler",
                     tagline: "Final mix → platform loudness",
-                    accent: LevelerTheme.cyan
+                    accent: LevelerTheme.cyan,
+                    onShowNotices: {
+                        showAbout = false
+                        showNotices = true
+                    }
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -387,28 +430,42 @@ public struct LevelerRootView: View {
         }
     }
 
-    private var exportOverlay: some View {
+    private var noticesOverlay: some View {
         ZStack {
             Color.black.opacity(0.58)
                 .contentShape(Rectangle())
-                .onTapGesture { showExportOptions = false }
-            VStack(spacing: 12) {
-                LevelerOutputPanel(
-                    session: session,
-                    settings: $output,
-                    resultName: nil,
-                    followsSource: nil,
-                    primaryTitle: session.isBusy ? "WORKING…" : "Export…",
-                    primaryHelp: "Then pick a folder. The default name and 16-bit WAV keep today’s export.",
-                    primaryDisabled: !session.canExportLeveled,
-                    primaryAction: chooseExportDestination
-                )
-                Button("CANCEL") { showExportOptions = false }
-                    .buttonStyle(LevelerGhostButtonStyle())
+                .onTapGesture { showNotices = false }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Third-Party Notices")
+                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textPrimary)
+                Text(LAMENotice.summary)
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(LevelerTheme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                HStack(spacing: 10) {
+                    Button("SHOW LGPL TEXT") { LAMENotice.openCopying() }
+                        .buttonStyle(.bordered)
+                        .disabled(LAMENotice.copyingURL() == nil)
+                    Button("LAME WEBSITE") { LAMENotice.openWebsite() }
+                        .buttonStyle(.bordered)
+                }
+                Button("CLOSE") { showNotices = false }
+                    .buttonStyle(LevelerPrimaryButtonStyle())
                     .keyboardShortcut(.cancelAction)
             }
             .padding(20)
-            .frame(width: 460)
+            .frame(maxWidth: 460)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(LevelerTheme.panelRaised)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(LevelerTheme.cyan.opacity(0.4), lineWidth: 1.1)
+            )
         }
     }
 
@@ -468,32 +525,135 @@ public struct LevelerRootView: View {
         }
     }
 
-    private var mainWorkspace: some View {
-        HStack(alignment: .top, spacing: LevelerLayout.columnGap) {
-            presetColumn
-                .frame(width: LevelerLayout.presetColumnWidth)
+    private func applicationColumnSplit(in size: CGSize) -> LevelerColumnSplit {
+        LevelerPaneMath.columns(
+            available: size.width,
+            preset: CGFloat(appPresetWidthStorage),
+            output: CGFloat(appOutputWidthStorage),
+            showsPreset: true,
+            presetMin: LevelerLayout.appPresetMin,
+            presetMax: LevelerLayout.appPresetMax,
+            outputMin: LevelerLayout.appOutputMin,
+            outputMax: LevelerLayout.appOutputMax,
+            centerMin: LevelerLayout.appCenterMin,
+            divider: LevelerPaneMetrics.divider,
+            lock: columnLock
+        )
+    }
 
-            VStack(alignment: .leading, spacing: 12) {
-                fileRow
-                GeometryReader { proxy in
-                    DorroughMeterDeck(session: session, expands: true)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                LoudnessCompareBoard(
-                    before: session.before,
-                    after: session.after,
-                    hasResult: session.hasResult,
-                    targetLUFS: session.activeTargetLUFS,
-                    targetTP: session.activeTruePeak,
-                    isMaximizer: session.preset.isMaximizer,
-                    maximizerMakeupDb: session.musicMakeupDb
-                )
-                transportRow
+    /// Presets, the meter stack, and Output side by side. Extra width and height go to the meters.
+    private func applicationColumns(in size: CGSize) -> some View {
+        let split = applicationColumnSplit(in: size)
+        return HStack(alignment: .top, spacing: 0) {
+            presetColumn
+                .frame(width: split.preset, height: size.height, alignment: .top)
+            paneDivider(axis: .vertical, help: "Drag to resize presets. Double-click to reset.") {
+                if presetDragOrigin == nil { presetDragOrigin = split.preset }
+                appPresetWidthStorage = Double((presetDragOrigin ?? split.preset) + $0)
+            } onEnded: {
+                appPresetWidthStorage = Double(split.preset)
+                presetDragOrigin = nil
+            } onReset: {
+                appPresetWidthStorage = Double(LevelerLayout.appPresetDefault)
+                presetDragOrigin = nil
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            applicationCenter
+                .frame(width: split.center, height: size.height, alignment: .top)
+            paneDivider(axis: .vertical, help: "Drag to resize Output. Double-click to reset.") {
+                if outputDragOrigin == nil { outputDragOrigin = split.output }
+                appOutputWidthStorage = Double((outputDragOrigin ?? split.output) - $0)
+            } onEnded: {
+                appOutputWidthStorage = Double(split.output)
+                outputDragOrigin = nil
+            } onReset: {
+                appOutputWidthStorage = Double(LevelerLayout.appOutputDefault)
+                outputDragOrigin = nil
+            }
+            applicationOutput
+                .frame(width: split.output, height: size.height, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(width: size.width, height: size.height, alignment: .top)
+    }
+
+    private var applicationCenter: some View {
+        LevelerCenterLayout(
+            extra: CGFloat(appLoudnessExtraStorage),
+            meterMin: LevelerLayout.applicationMeterMin,
+            spacing: 8
+        ) {
+            fileRow
+            GeometryReader { proxy in
+                DorroughMeterDeck(session: session, expands: true)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+            }
+            paneDivider(
+                axis: .horizontal,
+                help: "Drag to resize the meters. Double-click to reset."
+            ) {
+                if loudnessDragOrigin == nil { loudnessDragOrigin = CGFloat(appLoudnessExtraStorage) }
+                let next = (loudnessDragOrigin ?? CGFloat(appLoudnessExtraStorage)) - $0
+                appLoudnessExtraStorage = Double(min(400, max(0, next)))
+            } onEnded: {
+                loudnessDragOrigin = nil
+            } onReset: {
+                appLoudnessExtraStorage = 0
+                loudnessDragOrigin = nil
+            }
+            LoudnessCompareBoard(
+                before: session.before,
+                after: session.after,
+                hasResult: session.hasResult,
+                targetLUFS: session.activeTargetLUFS,
+                targetTP: session.activeTruePeak,
+                isMaximizer: session.preset.isMaximizer,
+                maximizerMakeupDb: session.musicMakeupDb
+            )
+            .frame(maxWidth: .infinity, alignment: .top)
+            transportRow
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var applicationOutput: some View {
+        LevelerOutputPanel(
+            session: session,
+            settings: $output,
+            resultName: standaloneResultBinding,
+            followsSource: $standaloneResultFollowsSource,
+            primaryTitle: session.isBusy ? "WORKING…" : "EXPORT LEVELED…",
+            primaryHelp: "Choose a file type, bit depth, and sample rate, then a folder. MUSIC LOUD exports the current THRESHOLD.",
+            primaryDisabled: !session.canExportLeveled,
+            primaryAction: chooseExportDestination,
+            fillsColumn: true
+        )
+    }
+
+    private var standaloneResultBinding: Binding<String> {
+        Binding(
+            get: {
+                if standaloneResultFollowsSource { return defaultExportStem }
+                let typed = standaloneResultName.trimmingCharacters(in: .whitespacesAndNewlines)
+                return typed.isEmpty ? defaultExportStem : standaloneResultName
+            },
+            set: { standaloneResultName = $0 }
+        )
+    }
+
+    /// Same default the save panel used before Result Name was on the main screen: `{file}_leveled`.
+    private var defaultExportStem: String {
+        let base = session.sourceURL?.deletingPathExtension().lastPathComponent ?? "Audio"
+        return "\(base)_leveled"
+    }
+
+    private var exportFileStem: String {
+        var typed = standaloneResultBinding.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty { typed = defaultExportStem }
+        let ext = (typed as NSString).pathExtension.lowercased()
+        if ["wav", "aiff", "aif", "m4a", "mp3", "caf", "flac"].contains(ext) {
+            typed = (typed as NSString).deletingPathExtension
+        }
+        let cleaned = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? defaultExportStem : cleaned
     }
 
     private var presetColumn: some View {
@@ -505,12 +665,8 @@ public struct LevelerRootView: View {
                 .foregroundStyle(LevelerTheme.cyanDim)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if lounge {
-                ViewThatFits(in: .vertical) {
-                    presetList
-                    ScrollView { presetList }
-                }
-            } else {
+            ViewThatFits(in: .vertical) {
+                presetList
                 ScrollView { presetList }
             }
 
@@ -748,16 +904,6 @@ public struct LevelerRootView: View {
                 Button("RE-LEVEL") { session.relevel() }
                     .buttonStyle(LevelerGhostButtonStyle())
                     .disabled(session.sourceURL == nil || session.isBusy || session.isMeasuring)
-
-                if mode == .application {
-                    Spacer()
-                    Button(session.isBusy ? "WORKING…" : "EXPORT LEVELED…") {
-                        showExportOptions = true
-                    }
-                    .buttonStyle(LevelerPrimaryButtonStyle())
-                    .disabled(!session.canExportLeveled)
-                    .help("Choose a file type, bit depth, and sample rate, then a folder. MUSIC LOUD exports the current THRESHOLD.")
-                }
             }
         }
         .padding(mode == .lounge ? 8 : 12)
@@ -811,16 +957,17 @@ public struct LevelerRootView: View {
             return
         }
         let settings = output
-        let base = sourceURL.deletingPathExtension().lastPathComponent
         let ext = settings.container.fileExtension
         let panel = NSSavePanel()
         panel.title = "Export Leveled"
-        panel.message = "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
+        panel.message = settings.container == .mp3
+            ? "Leveling is already done. This writes that audio as MP3 at the bitrate and sample rate you picked."
+            : "Leveling is already done. This writes that audio in the file type, bit depth, and sample rate you picked."
         panel.prompt = "Export"
         panel.canCreateDirectories = true
         panel.isExtensionHidden = false
         panel.allowedContentTypes = [settings.contentType]
-        panel.nameFieldStringValue = "\(base)_leveled.\(ext)"
+        panel.nameFieldStringValue = "\(exportFileStem).\(ext)"
         panel.directoryURL = sourceURL.deletingLastPathComponent()
         panel.level = .modalPanel
         guard panel.runModal() == .OK, var dest = panel.url else {
@@ -830,7 +977,6 @@ public struct LevelerRootView: View {
         if dest.pathExtension.lowercased() != ext {
             dest = dest.deletingPathExtension().appendingPathExtension(ext)
         }
-        showExportOptions = false
         let destination = dest
         Task {
             do {
@@ -895,6 +1041,66 @@ public struct LevelerRootView: View {
             }
         }
         return true
+    }
+}
+
+/// Puts the standalone window on the visible screen. The floor stays the content
+/// minimum; a frame that is larger still fits, and a frame that spills past the
+/// menu bar or Dock is pulled back in.
+private struct LevelerWindowClamp: NSViewRepresentable {
+    var fit: LevelerWindowFit.ContentSize
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView {
+        NSView(frame: .zero)
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let requested = fit
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            let visible = (window.screen ?? NSScreen.main)?.visibleFrame
+            guard let visible else { return }
+            let titleBar = max(0, window.frame.height - window.contentLayoutRect.height)
+            let fitted = LevelerWindowFit.contentSize(
+                minimumWidth: requested.minWidth,
+                minimumHeight: requested.minHeight,
+                idealWidth: LevelerWindowFit.idealContentWidth,
+                idealHeight: LevelerWindowFit.idealContentHeight,
+                visible: visible,
+                titleBar: titleBar
+            )
+            window.contentMinSize = NSSize(width: fitted.minWidth, height: fitted.minHeight)
+            window.minSize = NSSize(width: fitted.minWidth, height: fitted.minHeight + titleBar)
+            guard context.coordinator.fitsApplied < 2 else { return }
+            context.coordinator.fitsApplied += 1
+
+            var frame = window.frame
+            let minFrameH = fitted.minHeight + titleBar
+            let idealFrameH = fitted.idealHeight + titleBar
+            // A brand-new window often lands on the floor. Open it at the fitted
+            // ideal instead, then leave later resizes alone.
+            let parkedOnFloor = abs(frame.width - fitted.minWidth) < 4
+                && abs(frame.height - minFrameH) < 4
+            if parkedOnFloor {
+                frame.size.width = min(fitted.idealWidth, visible.width)
+                frame.size.height = min(idealFrameH, visible.height)
+            }
+            frame.size.width = min(max(frame.width, fitted.minWidth), visible.width)
+            frame.size.height = min(max(frame.height, minFrameH), visible.height)
+            if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
+            if frame.minX < visible.minX { frame.origin.x = visible.minX }
+            if frame.maxY > visible.maxY { frame.origin.y = visible.maxY - frame.height }
+            if frame.minY < visible.minY { frame.origin.y = visible.minY }
+            if frame != window.frame {
+                window.setFrame(frame, display: true)
+            }
+        }
+    }
+
+    final class Coordinator {
+        var fitsApplied = 0
     }
 }
 

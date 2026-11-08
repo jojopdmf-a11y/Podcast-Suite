@@ -38,6 +38,7 @@ struct PodLoungeApp: App {
             }
             CommandGroup(replacing: .appInfo) {
                 Button("About Pod Lounge") { session.showAbout = true }
+                Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             }
         }
     }

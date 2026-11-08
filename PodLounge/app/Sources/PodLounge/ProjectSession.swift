@@ -24,6 +24,7 @@ final class ProjectSession: ObservableObject {
     @Published var alertMessage: String?
     @Published var confirmDiscard = false
     @Published var showAbout = false
+    @Published var showThirdPartyNotices = false
     @Published var limiterSettings = LimiterWorkspaceSettings.defaults
     /// True while the Limiter is rendering or copying a result. Depot clicks wait.
     @Published var limiterExporting = false

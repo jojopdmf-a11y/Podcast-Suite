@@ -39,6 +39,7 @@ struct AboutSupportPanel: View {
     var appName: String
     var tagline: String
     var accent: Color
+    var onShowNotices: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -103,6 +104,11 @@ struct AboutSupportPanel: View {
                 }
                 .buttonStyle(.bordered)
             }
+
+            Button("THIRD-PARTY NOTICES") {
+                onShowNotices()
+            }
+            .buttonStyle(.bordered)
 
             Text(CougarCalcBrand.supportEmail)
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
