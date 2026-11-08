@@ -192,9 +192,16 @@ struct EngineSetup: Equatable {
     var message: String = "Checking setup…"
 }
 
-struct EngineResult {
+struct EngineResult: Equatable {
     var outputDir: URL
     var tracks: [URL]
+}
+
+enum StripperOutputCleanup {
+    /// Standalone: remove an output folder only when this job created it and it is empty.
+    case standalone
+    /// Lounge staging under recovery/stripper-jobs: delete that folder on cancel or failure.
+    case ownedStaging
 }
 
 enum EngineError: LocalizedError {
@@ -226,8 +233,14 @@ final class EngineRunner: ObservableObject {
     @Published var result: EngineResult?
     @Published var elapsedSeconds = 0
     @Published var engineProgressStale = false
+    /// Kept after later status lines replace the live message. Lounge shows it.
+    @Published var musicFallbackWarning: String?
+    /// Changes once each time a split finishes successfully.
+    @Published var finishedToken = UUID()
 
     private var process: Process?
+    private var cleanupPolicy = StripperOutputCleanup.standalone
+    private var didConsumeStubPause = false
     private var lineBuffer = ""
     private var userCancelled = false
     private var outputDirForJob: URL?
@@ -255,6 +268,16 @@ final class EngineRunner: ObservableObject {
 
     func refreshSetup() {
         if isRunning {
+            return
+        }
+        if StripperUITest.stubbed {
+            isPreparingEngine = false
+            setup = EngineSetup(
+                ffmpegOK: true,
+                tokenOK: true,
+                ffmpegPath: nil,
+                message: "Ready. Drop in a podcast file."
+            )
             return
         }
         Task {
@@ -313,7 +336,7 @@ final class EngineRunner: ObservableObject {
         freezeElapsed()
         message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
         restoreIdleSetupMessage()
-        removeEmptyOutputDirIfNeeded()
+        cleanupAfterStop()
     }
 
     func split(
@@ -321,14 +344,17 @@ final class EngineRunner: ObservableObject {
         outputDir: URL,
         speakerCount: SpeakerCountChoice,
         sampleRate: ExportSampleRateChoice = .native,
-        audioFormat: ExportAudioFormatChoice = .wav16
+        audioFormat: ExportAudioFormatChoice = .wav16,
+        cleanup: StripperOutputCleanup = .standalone
     ) {
         errorMessage = nil
         result = nil
+        musicFallbackWarning = nil
         isRunning = true
         percent = 1
         lineBuffer = ""
         userCancelled = false
+        cleanupPolicy = cleanup
         outputDirForJob = outputDir
         outputDirExisted = FileManager.default.fileExists(atPath: outputDir.path)
         message = "Starting…"
@@ -340,6 +366,10 @@ final class EngineRunner: ObservableObject {
         startPulseTimer()
 
         Task {
+            if StripperUITest.stubbed {
+                await self.runStub(input: input, outputDir: outputDir, audioFormat: audioFormat)
+                return
+            }
             do {
                 let paths = try EnginePaths.resolve()
                 if paths.isBundled {
@@ -365,7 +395,7 @@ final class EngineRunner: ObservableObject {
                 freezeElapsed()
                 if userCancelled {
                     message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
-                    removeEmptyOutputDirIfNeeded()
+                    cleanupAfterStop()
                 } else if let done = lastEvent(from: output, named: "done"),
                    let dir = done["output_dir"] as? String
                 {
@@ -379,6 +409,7 @@ final class EngineRunner: ObservableObject {
                     } else {
                         message = "Saved \(tracks.count) speaker track\(tracks.count == 1 ? "" : "s").\(took)"
                     }
+                    finishedToken = UUID()
                 } else if let failed = lastEvent(from: output, named: "error") {
                     throw EngineError.failed(failed["message"] as? String ?? "Something went wrong.")
                 }
@@ -387,13 +418,13 @@ final class EngineRunner: ObservableObject {
                 if userCancelled {
                     message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
                     errorMessage = nil
-                    removeEmptyOutputDirIfNeeded()
+                    cleanupAfterStop()
                 } else {
                     errorMessage = error.localizedDescription
                     message = elapsedSeconds > 0
                         ? "Could not split this file. Stopped after \(elapsedLabel)."
                         : "Could not split this file."
-                    removeEmptyOutputDirIfNeeded()
+                    cleanupAfterStop()
                 }
             }
             isRunning = false
@@ -436,14 +467,11 @@ final class EngineRunner: ObservableObject {
 
     private func ensureRuntime(paths: EnginePaths) async throws {
         guard paths.isBundled, paths.venvDir != nil else { return }
-        if Self.runtimeIsReady(paths: paths) {
-            return
-        }
         if let prepareTask {
             try await prepareTask.value
             return
         }
-        let task = Task { try await self.performUvSync(paths: paths) }
+        let task = Task { try await self.performLockedSync(paths: paths) }
         prepareTask = task
         do {
             try await task.value
@@ -451,6 +479,13 @@ final class EngineRunner: ObservableObject {
             prepareTask = nil
             throw error
         }
+    }
+
+    private func performLockedSync(paths: EnginePaths) async throws {
+        let lock = try await StripperSetupLock.acquire()
+        defer { lock.release() }
+        if Self.runtimeIsReady(paths: paths) { return }
+        try await performUvSync(paths: paths)
     }
 
     private func performUvSync(paths: EnginePaths) async throws {
@@ -662,6 +697,9 @@ final class EngineRunner: ObservableObject {
             }
             if let message = json["message"] as? String {
                 self.message = message
+                if message.contains("Could not fully unmix") || message.contains("keeping intros and gaps") {
+                    musicFallbackWarning = message
+                }
             }
             lastEngineProgressAt = Date()
             engineProgressStale = false
@@ -726,13 +764,57 @@ final class EngineRunner: ObservableObject {
         }
     }
 
-    private func removeEmptyOutputDirIfNeeded() {
-        guard let outputDirForJob, !outputDirExisted else { return }
+    private func cleanupAfterStop() {
+        guard let outputDirForJob else { return }
         let manager = FileManager.default
         guard manager.fileExists(atPath: outputDirForJob.path) else { return }
+        if cleanupPolicy == .ownedStaging {
+            let path = outputDirForJob.standardizedFileURL.path
+            if path.contains("/recovery/stripper-jobs/") {
+                try? manager.removeItem(at: outputDirForJob)
+                return
+            }
+        }
+        guard !outputDirExisted else { return }
         if let items = try? manager.contentsOfDirectory(atPath: outputDirForJob.path), items.isEmpty {
             try? manager.removeItem(at: outputDirForJob)
         }
+    }
+
+    private func runStub(input: URL, outputDir: URL, audioFormat: ExportAudioFormatChoice) async {
+        let shouldPause = StripperUITest.pauseFirstJob && !didConsumeStubPause
+        if shouldPause {
+            didConsumeStubPause = true
+            message = "Starting…"
+            for _ in 0..<300 {
+                if userCancelled { break }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+        freezeElapsed()
+        if userCancelled {
+            message = elapsedSeconds > 0 ? "Cancelled after \(elapsedLabel)." : "Cancelled."
+            errorMessage = nil
+            cleanupAfterStop()
+        } else {
+            do {
+                let written = try StripperStubJob.write(input: input, outputDir: outputDir, audioFormat: audioFormat)
+                result = EngineResult(outputDir: outputDir, tracks: written.tracks)
+                percent = 100
+                let took = elapsedSeconds > 0 ? " Took \(elapsedLabel)." : ""
+                message = "Saved 2 speaker tracks and a music/SFX track.\(took)"
+                finishedToken = UUID()
+            } catch {
+                errorMessage = error.localizedDescription
+                message = "Could not split this file."
+                cleanupAfterStop()
+            }
+        }
+        isRunning = false
+        isPreparingEngine = false
+        process = nil
+        freezeElapsed()
+        restoreIdleSetupMessage()
     }
 }
 

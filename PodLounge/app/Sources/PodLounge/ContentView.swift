@@ -19,10 +19,15 @@ struct ContentView: View {
     @State private var windowFitReport = ""
 
     private func depotMax(in containerWidth: CGFloat) -> CGFloat {
-        guard session.activeWorkspace == .limiter else { return DepotChrome.maxWidth }
+        let reserved: CGFloat? = switch session.activeWorkspace {
+        case .limiter: LevelerPaneMetrics.limiterWorkspaceMinimum
+        case .stripper: 780
+        default: nil
+        }
+        guard let reserved else { return DepotChrome.maxWidth }
         return LevelerPaneMath.depotMaximum(
             container: containerWidth,
-            reserved: LevelerPaneMetrics.limiterWorkspaceMinimum,
+            reserved: reserved,
             minimum: DepotChrome.minWidth,
             cap: DepotChrome.maxWidth
         )
@@ -37,11 +42,17 @@ struct ContentView: View {
             GeometryReader { geo in
                 let maxDepot = depotMax(in: geo.size.width)
                 let width = min(maxDepot, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
+                let depotOnLeft = session.activeWorkspace == .stripper
                 HStack(spacing: 0) {
+                    if !depotHidden, depotOnLeft {
+                        depotSidebar(width: width, maximum: maxDepot, onLeft: true)
+                    }
                     Group {
                         if let workspace = session.activeWorkspace {
                             if workspace == .limiter {
                                 LimiterWorkspaceView()
+                            } else if workspace == .stripper {
+                                StripperWorkspaceView()
                             } else {
                                 WorkspaceScaffoldView(workspace: workspace)
                             }
@@ -50,12 +61,8 @@ struct ContentView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    if !depotHidden {
-                        DepotSidebar()
-                            .frame(width: width)
-                            .overlay(alignment: .leading) {
-                                depotResizeHandle(current: width, maximum: maxDepot)
-                            }
+                    if !depotHidden, depotOnLeft == false {
+                        depotSidebar(width: width, maximum: maxDepot, onLeft: false)
                     }
                 }
             }
@@ -78,6 +85,13 @@ struct ContentView: View {
         .onChange(of: session.activeWorkspace) { _, _ in
             session.stopDepotPlayback()
         }
+        .onAppear {
+            if UITestMode.argument("-UITestAutoOpen") == "stripper" {
+                session.newProject()
+                session.importAudio()
+                session.openWorkspace(.stripper)
+            }
+        }
         .alert("Pod Lounge", isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { session.alertMessage = nil }
         } message: {
@@ -87,7 +101,7 @@ struct ContentView: View {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Limiter levels the selected depot file and can save a new result. Stripper, Fixer, and Trimmer do not process audio in this build.")
+            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Stripper splits the selected depot file into speaker tracks and music. Limiter levels the selected depot file and can save a new result. Fixer and Trimmer do not process audio in this build.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -189,17 +203,17 @@ struct ContentView: View {
             Spacer()
             Button("New") { session.newProject() }
                 .buttonStyle(LoungeButtonStyle())
-                .disabled(session.limiterExporting)
+                .disabled(session.navigationLocked)
                 .accessibilityIdentifier("lounge.new")
             Button("Open") { session.openProject() }
                 .buttonStyle(LoungeButtonStyle())
-                .disabled(session.limiterExporting)
+                .disabled(session.navigationLocked)
             Button("Save") { session.saveShowingError() }
                 .buttonStyle(LoungeButtonStyle(prominent: true))
                 .disabled(session.package == nil || !session.isDirty)
             Button("Save As") { session.saveAs() }
                 .buttonStyle(LoungeButtonStyle())
-                .disabled(session.package == nil || session.limiterExporting)
+                .disabled(session.package == nil || session.navigationLocked)
             Button(depotHidden ? "Show Depot" : "Hide Depot") {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     depotHidden.toggle()
@@ -213,13 +227,22 @@ struct ContentView: View {
         .background(LoungeTheme.backgroundRaised)
     }
 
-    private func depotResizeHandle(current: CGFloat, maximum: CGFloat) -> some View {
+    private func depotSidebar(width: CGFloat, maximum: CGFloat, onLeft: Bool) -> some View {
+        DepotSidebar()
+            .frame(width: width)
+            .overlay(alignment: onLeft ? .trailing : .leading) {
+                depotResizeHandle(current: width, maximum: maximum, onLeft: onLeft)
+            }
+    }
+
+    private func depotResizeHandle(current: CGFloat, maximum: CGFloat, onLeft: Bool) -> some View {
         LevelerPaneDivider(
             axis: .vertical,
             help: "Drag to resize the depot. Double-click to reset."
         ) { delta in
             if depotDragStart == nil { depotDragStart = current }
-            let next = (depotDragStart ?? current) - delta
+            let signed = onLeft ? delta : -delta
+            let next = (depotDragStart ?? current) + signed
             let clamped = min(maximum, max(DepotChrome.minWidth, next))
             depotWidthStorage = Double(clamped)
         } onDragEnded: {
@@ -256,7 +279,7 @@ struct LoungeHomeView: View {
                         WorkspaceCard(workspace: workspace) {
                             session.openWorkspace(workspace)
                         }
-                        .disabled(session.limiterExporting)
+                        .disabled(session.navigationLocked)
                     }
                 }
                 .frame(minHeight: 560)

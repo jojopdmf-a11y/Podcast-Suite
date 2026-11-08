@@ -9,7 +9,8 @@ The results replace the previous run in `~/GrokBot/QuickCheck-Results/`. That fo
 - PodLeveler and the Pod Lounge Limiter each open, load a short test recording, and show loudness numbers.
 - Each one exports a 24-bit WAV and a 128 kbps MP3, both at 48 kHz. Each export writes one file, and that file decodes with the right length, sample rate, and channel count.
 - In Pod Lounge, Export File to Depot is under Result Name. Saving to the depot leaves the current file selected and does not start another scan. Choosing a file that was already scanned shows the numbers again without measuring it a second time.
-- At its smallest size, each window fits on a 1512 by 982 point screen. PodLeveler’s content floor is 1180 by 840.
+- At its smallest size, each window fits on a 1512 by 982 point screen. PodLeveler’s content floor is 1180 by 840. The Lounge is also checked again on the Stripper workspace.
+- Pod Lounge Stripper imports nothing new for this pass: it uses a file already in the depot. Cancel adds no tracks. A finished split shows prefilled names, one rename is kept, Add to Depot leaves the original file selected, the new tracks decode at the source length, a repeat split is marked `(Split 2)`, and discarding that repeat adds nothing.
 - Neither app crashes, and no new crash report is left behind.
 
 The test recording is made while the check runs. It is a 30 second stereo 48 kHz file with a tone and short noise bursts. It is not stored in the project.
@@ -19,6 +20,8 @@ The test recording is made while the check runs. It is a 30 second stereo 48 kHz
 File dialogs are not clicked. A normal launch never sees this. The check starts each app with `-UITestMode` and passes the file, export folder, project, and preset folder on the command line. Choose File, New, Import Audio, and the export buttons still run the real load, scan, and save code. They just skip the open and save panels. Finder is not opened, and Save As, Open, Export Copy, and Show in Finder do nothing during the check so they cannot wander into real files.
 
 The copies that get launched use a throwaway preferences name, so window sizes and recent settings stay out of the real PodLeveler and Pod Lounge preferences.
+
+Stripper’s check does not download the speaker model or the multi-gigabyte engine. The Lounge is started with `-UITestStripperStub`, which writes the tracks from the test recording itself. A normal launch never sees that switch.
 
 ## Permission prompt
 

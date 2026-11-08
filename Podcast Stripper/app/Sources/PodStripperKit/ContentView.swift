@@ -2,9 +2,20 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ContentView: View {
+public struct StripperRootView: View {
+    @ObservedObject var model: StripperLoungeModel
     @StateObject private var runner = EngineRunner()
     @State private var inputFile: URL?
+
+    public init(model: StripperLoungeModel) {
+        self.model = model
+    }
+
+    private var lounge: Bool { model.chrome == .lounge }
+
+    private var activeInput: URL? {
+        lounge ? model.inputURL : inputFile
+    }
     @State private var outputFolder: URL?
     @State private var speakerCount: SpeakerCountChoice = .two
     @State private var exportSampleRate: ExportSampleRateChoice = .native
@@ -13,7 +24,7 @@ struct ContentView: View {
     @State private var showMacNeeds = false
     @State private var isDropTargeted = false
 
-    var body: some View {
+    public var body: some View {
         ZStack {
             StripperTheme.windowBackground.ignoresSafeArea()
             // Soft vignette / panel depth
@@ -25,11 +36,21 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: lounge ? 8 : 18) {
                 header
                 dropZone
                 controlsPanel
+                if lounge, model.namingVisible {
+                    namingPanel
+                }
                 statusPanel
+                if lounge, let warning = runner.musicFallbackWarning {
+                    Text(warning)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(StripperTheme.lime)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("stripper.fallback")
+                }
                 if let result = runner.result {
                     resultRow(result)
                 }
@@ -39,12 +60,40 @@ struct ContentView: View {
                 Spacer(minLength: 0)
                 footerBrand
             }
-            .padding(24)
+            .padding(lounge ? 10 : 24)
         }
         .preferredColorScheme(.dark)
         .onAppear {
             runner.refreshSetup()
-            restoreOutputFolder()
+            if lounge == false {
+                restoreOutputFolder()
+            }
+        }
+        .onChange(of: runner.isRunning) { _, running in
+            if lounge {
+                model.sourceLocked = running
+                model.onRunningChange?(running)
+            }
+        }
+        .onChange(of: runner.finishedToken) { _, _ in
+            guard lounge, let result = runner.result else { return }
+            model.onSplitFinished?(
+                StripperFinishedJob(
+                    outputDirectory: result.outputDir,
+                    tracks: result.tracks,
+                    speakersJSON: result.outputDir.appendingPathComponent("speakers.json"),
+                    musicFallback: runner.musicFallbackWarning
+                )
+            )
+        }
+        .confirmationDialog("Discard this split?", isPresented: $model.askDiscardNaming, titleVisibility: .visible) {
+            Button("Discard Split", role: .destructive) {
+                model.onDiscardNaming?()
+            }
+            .accessibilityIdentifier("stripper.confirmDiscard")
+            Button("Keep Naming", role: .cancel) {}
+        } message: {
+            Text("The new tracks are not in the depot yet. Closing removes this split.")
         }
         .sheet(isPresented: $showSettings) {
             SettingsView {
@@ -60,8 +109,8 @@ struct ContentView: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("PODSTRIPPER")
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
-                    .tracking(1.5)
+                    .font(.system(size: lounge ? 18 : 28, weight: .bold, design: .rounded))
+                    .tracking(lounge ? 1.0 : 1.5)
                     .foregroundStyle(StripperTheme.cyan)
                     .shadow(color: StripperTheme.cyan.opacity(0.45), radius: 10)
                 Text("Stereo Mix → Separate Speaker Tracks + Music / SFX")
@@ -85,6 +134,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(StripperGhostButtonStyle())
                 .help("This Mac’s chip, RAM, and a scaled wait estimate")
+                .accessibilityIdentifier("stripper.mac")
                 Button {
                     showSettings = true
                 } label: {
@@ -95,6 +145,7 @@ struct ContentView: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(StripperGhostButtonStyle())
+                .accessibilityIdentifier("stripper.settings")
             }
         }
     }
@@ -111,16 +162,37 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(
                     isDropTargeted ? StripperTheme.lime : StripperTheme.cyan.opacity(0.55),
-                    style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1.2, dash: inputFile == nil ? [7, 6] : [])
+                    style: StrokeStyle(lineWidth: isDropTargeted ? 2 : 1.2, dash: activeInput == nil ? [7, 6] : [])
                 )
                 .shadow(color: (isDropTargeted ? StripperTheme.lime : StripperTheme.cyan).opacity(0.4), radius: isDropTargeted ? 12 : 6)
 
             VStack(spacing: 10) {
                 Image(systemName: "waveform")
-                    .font(.system(size: 40, weight: .light))
+                    .font(.system(size: lounge ? 22 : 40, weight: .light))
                     .foregroundStyle(isDropTargeted ? StripperTheme.lime : StripperTheme.cyan)
                     .shadow(color: StripperTheme.cyan.opacity(0.5), radius: 8)
-                if let inputFile {
+                if lounge {
+                    if model.inputTitle.isEmpty {
+                        Text("SELECT A DEPOT FILE")
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .tracking(1.2)
+                            .foregroundStyle(StripperTheme.textPrimary)
+                        Text("Drop or choose a file to import it. Splitting starts only from the button.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(StripperTheme.textSecondary)
+                    } else {
+                        Text(model.inputTitle.uppercased())
+                            .font(.system(size: 14, weight: .bold, design: .rounded))
+                            .tracking(0.6)
+                            .foregroundStyle(StripperTheme.textPrimary)
+                            .lineLimit(1)
+                            .accessibilityIdentifier("stripper.input")
+                        Text(model.inputDetail.isEmpty ? "Selected depot file" : model.inputDetail)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(StripperTheme.textSecondary)
+                            .lineLimit(1)
+                    }
+                } else if let inputFile {
                     Text(inputFile.lastPathComponent.uppercased())
                         .font(.system(size: 14, weight: .bold, design: .rounded))
                         .tracking(0.6)
@@ -142,14 +214,17 @@ struct ContentView: View {
             }
             .padding(20)
         }
-        .frame(maxWidth: .infinity, minHeight: 168)
-        .onTapGesture { pickInput() }
+        .frame(maxWidth: .infinity, minHeight: lounge ? 64 : 168)
+        .onTapGesture {
+            guard model.sourceLocked == false, runner.isRunning == false else { return }
+            pickInput()
+        }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted, perform: handleDrop)
         .animation(.easeOut(duration: 0.18), value: isDropTargeted)
     }
 
     private var controlsPanel: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: lounge ? 8 : 16) {
             HStack(alignment: .center, spacing: 14) {
                 Text("SPEAKERS")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -206,13 +281,21 @@ struct ContentView: View {
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyanDim)
                     .frame(width: 102, alignment: .leading)
-                Text(outputFolder?.path ?? "Same folder as the podcast · new _speakers folder")
+                Text(saveToText)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(StripperTheme.textSecondary)
                     .lineLimit(1)
+                    .accessibilityIdentifier("stripper.saveTo")
                 Spacer(minLength: 8)
+                if lounge, model.outsideFolder != nil {
+                    Button("USE DEPOT") { model.onUseDepot?() }
+                        .buttonStyle(StripperGhostButtonStyle())
+                        .accessibilityIdentifier("stripper.useDepot")
+                }
                 Button("CHOOSE…") { pickOutput() }
                     .buttonStyle(StripperGhostButtonStyle())
+                    .disabled(model.sourceLocked || runner.isRunning)
+                    .accessibilityIdentifier("stripper.choose")
             }
 
             HStack(spacing: 12) {
@@ -225,12 +308,14 @@ struct ContentView: View {
                         .frame(minWidth: 180)
                 }
                 .buttonStyle(StripperPrimaryButtonStyle())
-                .disabled(inputFile == nil || runner.isRunning || runner.isPreparingEngine)
+                .disabled(activeInput == nil || runner.isRunning || runner.isPreparingEngine || model.sourceLocked || (lounge && model.namingVisible))
                 .keyboardShortcut(.defaultAction)
+                .accessibilityIdentifier("stripper.split")
 
                 if runner.isRunning {
                     Button("CANCEL") { runner.cancel() }
                         .buttonStyle(StripperGhostButtonStyle())
+                        .accessibilityIdentifier("stripper.cancel")
                 }
             }
         }
@@ -339,9 +424,14 @@ struct ContentView: View {
             }
             Spacer()
             Button("SHOW IN FINDER") {
-                NSWorkspace.shared.activateFileViewerSelecting([result.outputDir])
+                if lounge, let reveal = model.onShowInFinder {
+                    reveal()
+                } else {
+                    NSWorkspace.shared.activateFileViewerSelecting([result.outputDir])
+                }
             }
             .buttonStyle(StripperPrimaryButtonStyle(compact: true))
+            .accessibilityIdentifier("stripper.showInFinder")
         }
         .padding(14)
         .stripperPanel(glow: true)
@@ -360,6 +450,7 @@ struct ContentView: View {
                     NSPasteboard.general.setString(error, forType: .string)
                 }
                 .buttonStyle(StripperGhostButtonStyle())
+                .accessibilityIdentifier("stripper.copyError")
             }
             ScrollView {
                 Text(error)
@@ -368,7 +459,7 @@ struct ContentView: View {
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 140)
+            .frame(maxHeight: lounge ? 72 : 140)
         }
         .padding(14)
         .background(
@@ -414,16 +505,92 @@ struct ContentView: View {
             }
             guard let url else { return }
             DispatchQueue.main.async {
-                inputFile = url
-                if outputFolder == nil {
-                    outputFolder = defaultOutput(for: url)
+                guard model.sourceLocked == false, runner.isRunning == false else { return }
+                if lounge {
+                    model.onImportExternal?(url)
+                } else {
+                    inputFile = url
+                    if outputFolder == nil {
+                        outputFolder = defaultOutput(for: url)
+                    }
                 }
             }
         }
         return true
     }
 
+    private var saveToText: String {
+        if lounge {
+            return model.saveToLabel
+        }
+        return outputFolder?.path ?? "Same folder as the podcast · new _speakers folder"
+    }
+
+    private var namingPanel: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("NAME THE NEW TRACKS")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(1.0)
+                .foregroundStyle(StripperTheme.cyan)
+            ForEach(model.namingRows.indices, id: \.self) { index in
+                HStack(spacing: 8) {
+                    Text(model.namingRows[index].roleLabel.uppercased())
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(StripperTheme.cyanDim)
+                        .frame(width: 110, alignment: .leading)
+                    TextField("Name", text: namingBinding(index))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(StripperTheme.textPrimary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(StripperTheme.panelRaised))
+                        .accessibilityIdentifier("stripper.name.\(index)")
+                        .accessibilityValue(model.namingRows[index].displayName)
+                }
+            }
+            if let namingMessage = model.namingMessage, namingMessage.isEmpty == false {
+                Text(namingMessage)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.lime)
+                    .accessibilityIdentifier("stripper.namingMessage")
+            }
+            HStack(spacing: 8) {
+                Button("Add to Depot") { model.onAddToDepot?() }
+                    .buttonStyle(StripperPrimaryButtonStyle(compact: true))
+                    .accessibilityIdentifier("stripper.addToDepot")
+                Button("Close") { model.askDiscardNaming = true }
+                    .buttonStyle(StripperGhostButtonStyle())
+                    .accessibilityIdentifier("stripper.closeNaming")
+            }
+        }
+        .padding(10)
+        .stripperPanel(glow: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("stripper.naming")
+    }
+
+    private func namingBinding(_ index: Int) -> Binding<String> {
+        Binding(
+            get: {
+                guard model.namingRows.indices.contains(index) else { return "" }
+                return model.namingRows[index].displayName
+            },
+            set: { newValue in
+                guard model.namingRows.indices.contains(index) else { return }
+                model.namingRows[index].displayName = newValue
+            }
+        )
+    }
+
     private func pickInput() {
+        guard model.sourceLocked == false, runner.isRunning == false else { return }
+        if lounge, StripperUITest.enabled {
+            if let raw = StripperUITest.argument("-UITestStripperImport") {
+                model.onImportExternal?(URL(fileURLWithPath: raw))
+            }
+            return
+        }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -433,14 +600,30 @@ struct ContentView: View {
         ].compactMap { $0 }
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            inputFile = url
-            if outputFolder == nil {
-                outputFolder = defaultOutput(for: url)
+            if lounge {
+                model.onImportExternal?(url)
+            } else {
+                inputFile = url
+                if outputFolder == nil {
+                    outputFolder = defaultOutput(for: url)
+                }
             }
         }
     }
 
     private func pickOutput() {
+        guard model.sourceLocked == false, runner.isRunning == false else { return }
+        if lounge {
+            if StripperUITest.enabled {
+                if let raw = StripperUITest.argument("-UITestStripperOutside") {
+                    model.onChooseOutsideFolder?()
+                    _ = raw
+                }
+                return
+            }
+            model.onChooseOutsideFolder?()
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -453,7 +636,30 @@ struct ContentView: View {
     }
 
     private func startSplit() {
-        guard let inputFile, !runner.isRunning, !runner.isPreparingEngine else { return }
+        guard let activeInput, !runner.isRunning, !runner.isPreparingEngine, model.sourceLocked == false else { return }
+        if lounge {
+            guard let make = model.makeStagingDirectory else { return }
+            let dest: URL
+            do {
+                dest = try make()
+            } catch {
+                runner.errorMessage = error.localizedDescription
+                return
+            }
+            model.activeStagingURL = dest
+            model.namingVisible = false
+            model.namingRows = []
+            runner.split(
+                input: activeInput,
+                outputDir: dest,
+                speakerCount: speakerCount,
+                sampleRate: exportSampleRate,
+                audioFormat: exportAudioFormat,
+                cleanup: .ownedStaging
+            )
+            return
+        }
+        guard let inputFile else { return }
         let dest = outputFolder ?? defaultOutput(for: inputFile)
         outputFolder = dest
         UserDefaults.standard.set(dest.path, forKey: "lastOutputFolder")

@@ -13,7 +13,8 @@ struct LimiterWorkspaceView: View {
             HStack(alignment: .center, spacing: 10) {
                 Button("← Lounge") { session.leaveWorkspace() }
                     .buttonStyle(LoungeButtonStyle())
-                    .disabled(session.limiterExporting)
+                    .disabled(session.navigationLocked)
+                    .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Limiter")
                         .font(.system(size: 18, weight: .semibold))

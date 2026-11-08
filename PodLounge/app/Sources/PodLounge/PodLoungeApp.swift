@@ -17,10 +17,10 @@ struct PodLoungeApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Project") { session.newProject() }
                     .keyboardShortcut("n")
-                    .disabled(session.limiterExporting)
+                    .disabled(session.navigationLocked)
                 Button("Open Project…") { session.openProject() }
                     .keyboardShortcut("o")
-                    .disabled(session.limiterExporting)
+                    .disabled(session.navigationLocked)
             }
             CommandGroup(replacing: .saveItem) {
                 Button("Save Project") { session.saveShowingError() }
@@ -28,14 +28,14 @@ struct PodLoungeApp: App {
                     .disabled(session.package == nil || !session.isDirty)
                 Button("Save Project As…") { session.saveAs() }
                     .keyboardShortcut("S")
-                    .disabled(session.package == nil || session.limiterExporting)
+                    .disabled(session.package == nil || session.navigationLocked)
                 Button("Save Result") {}
                     .disabled(true)
             }
             CommandGroup(after: .sidebar) {
                 Button("Back to Lounge") { session.leaveWorkspace() }
                     .keyboardShortcut(.leftArrow, modifiers: [.command])
-                    .disabled(session.activeWorkspace == nil || session.limiterExporting)
+                    .disabled(session.activeWorkspace == nil || session.navigationLocked)
             }
             CommandGroup(replacing: .appInfo) {
                 Button("About Pod Lounge") { session.showAbout = true }

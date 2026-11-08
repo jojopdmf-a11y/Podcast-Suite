@@ -22,7 +22,7 @@ struct DepotSidebar: View {
                     Spacer(minLength: 8)
                     Button("Import Audio") { session.importAudio() }
                         .buttonStyle(LoungeButtonStyle(prominent: true))
-                        .disabled(session.package == nil || session.limiterExporting)
+                        .disabled(session.package == nil || session.navigationLocked)
                         .accessibilityIdentifier("lounge.import")
                 }
                 if session.limiterExporting {
@@ -30,6 +30,14 @@ struct DepotSidebar: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LoungeTheme.amber)
                     Text("The depot stays locked until the file is written.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if session.stripperRunning {
+                    Text("Splitting…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.amber)
+                    Text("The depot stays locked until the split finishes or you press Cancel.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -94,8 +102,8 @@ struct DepotSidebar: View {
                 DepotRow(asset: asset)
             }
         }
-        .opacity(session.limiterExporting ? 0.35 : 1)
-        .allowsHitTesting(!session.limiterExporting)
+        .opacity(session.navigationLocked ? 0.35 : 1)
+        .allowsHitTesting(!session.navigationLocked)
     }
 
     private var selectedSection: some View {
@@ -128,7 +136,7 @@ struct DepotSidebar: View {
                             .disabled(exportActionsDisabled(asset))
                         Button("Delete from Project") { session.deleteAsset(asset) }
                             .buttonStyle(LoungeButtonStyle())
-                            .disabled(session.limiterExporting)
+                            .disabled(session.navigationLocked)
                     }
                     .padding(.top, 4)
                 }
@@ -165,7 +173,7 @@ struct DepotSidebar: View {
     }
 
     private func exportActionsDisabled(_ asset: DepotAsset) -> Bool {
-        session.limiterExporting || session.health(of: asset) == .missing
+        session.navigationLocked || session.health(of: asset) == .missing
     }
 
     @ViewBuilder
@@ -209,9 +217,10 @@ private struct DepotRow: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .disabled(!canPlay || session.limiterExporting)
+                .disabled(!canPlay || session.navigationLocked)
                 .help(playing ? "Stop" : "Play this file as it is, with no processing")
                 .accessibilityLabel(playing ? "Stop \(asset.displayName)" : "Play \(asset.displayName)")
+                .accessibilityIdentifier("depot.play.\(asset.displayName)")
 
                 Button {
                     session.select(asset)
@@ -233,7 +242,7 @@ private struct DepotRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(session.limiterExporting)
+                .disabled(session.navigationLocked)
                 .accessibilityIdentifier("depot.file.\(asset.displayName)")
             }
             .padding(.horizontal, 6)
@@ -259,11 +268,11 @@ private struct DepotRow: View {
         }
         .contextMenu {
             Button("Export Copy…") { session.exportCopy(of: asset) }
-                .disabled(session.limiterExporting || session.health(of: asset) == .missing)
+                .disabled(session.navigationLocked || session.health(of: asset) == .missing)
             Button("Show in Finder") { session.showInFinder(asset) }
-                .disabled(session.limiterExporting || session.health(of: asset) == .missing)
+                .disabled(session.navigationLocked || session.health(of: asset) == .missing)
             Button("Delete from Project…") { session.deleteAsset(asset) }
-                .disabled(session.limiterExporting)
+                .disabled(session.navigationLocked)
         }
         .task(id: asset.id) {
             length = await loadLength()

@@ -1,6 +1,7 @@
 #!/bin/zsh
-# Builds PodLeveler and Pod Lounge, clicks through the loudness checks, then
-# deletes everything that run created. Exit 0 means every check passed.
+# Builds PodLeveler and Pod Lounge, clicks through the loudness and Stripper
+# checks, then deletes everything that run created. Exit 0 means every check passed.
+# The Stripper section uses the app's test stub and does not download models.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

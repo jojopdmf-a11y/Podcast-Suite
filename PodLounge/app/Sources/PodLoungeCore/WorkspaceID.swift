@@ -42,7 +42,7 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
     public var scaffoldMessage: String {
         switch self {
         case .stripper:
-            "Stripper will split a mixed episode into speaker tracks and music. This workspace is not connected to PodStripper, and it does not separate audio."
+            "Stripper splits the selected depot file into speaker tracks and a music track."
         case .fixer:
             "Fixer will record and mix the show. This workspace is not connected to PodProducer, and it does not record."
         case .trimmer:
