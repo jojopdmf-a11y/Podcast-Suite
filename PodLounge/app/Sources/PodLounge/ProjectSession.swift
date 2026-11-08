@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import LilLevelerKit
 import PodLoungeCore
 
 enum PendingNavigation: Equatable {
@@ -173,6 +174,10 @@ final class ProjectSession: ObservableObject {
     }
 
     func saveAs() {
+        if UITestMode.enabled {
+            alertMessage = "UI test does not use Save As."
+            return
+        }
         guard !limiterExporting else { return }
         guard package != nil else {
             presentNewPanel()
@@ -215,6 +220,15 @@ final class ProjectSession: ObservableObject {
             alertMessage = "Create or open a project before importing audio."
             return
         }
+        if UITestMode.enabled {
+            guard let raw = UITestMode.argument("-UITestImport") else {
+                alertMessage = "UI test import path is missing."
+                return
+            }
+            let urls = raw.split(separator: ",").map { URL(fileURLWithPath: String($0)) }
+            importFiles(urls)
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "Import Audio"
         panel.prompt = "Import"
@@ -228,6 +242,7 @@ final class ProjectSession: ObservableObject {
 
     /// Asks first, then removes the file from the depot and saves the project.
     func deleteAsset(_ asset: DepotAsset) {
+        if UITestMode.enabled { return }
         guard !limiterExporting else { return }
         guard let package else { return }
         let alert = NSAlert()
@@ -282,6 +297,10 @@ final class ProjectSession: ObservableObject {
 
     /// Copies the stored depot file out. The project and its audio are not changed.
     func exportCopy(of asset: DepotAsset) {
+        if UITestMode.enabled {
+            alertMessage = "UI test does not use Export Copy."
+            return
+        }
         guard !limiterExporting else { return }
         guard health(of: asset) != .missing, let package else { return }
         let panel = NSSavePanel()
@@ -303,6 +322,7 @@ final class ProjectSession: ObservableObject {
 
     /// Reveals the stored depot file. This is a user action, so Finder may open.
     func showInFinder(_ asset: DepotAsset) {
+        if UITestMode.enabled { return }
         guard !limiterExporting else { return }
         guard health(of: asset) != .missing, let package else { return }
         guard let url = try? package.resolvedURL(for: asset) else { return }
@@ -316,6 +336,21 @@ final class ProjectSession: ObservableObject {
     // MARK: - Private
 
     private func presentNewPanel() {
+        if UITestMode.enabled {
+            guard let path = UITestMode.argument("-UITestProject") else {
+                alertMessage = "UI test project path is missing."
+                return
+            }
+            let folder = ProjectPackage.directoryURL(forPickedURL: URL(fileURLWithPath: path))
+            let name = folder.deletingPathExtension().lastPathComponent
+            do {
+                let created = try ProjectPackage.create(at: folder, name: name)
+                adopt(created)
+            } catch {
+                report(error)
+            }
+            return
+        }
         let panel = NSSavePanel()
         panel.title = "New Pod Lounge Project"
         panel.prompt = "Create"
@@ -333,6 +368,10 @@ final class ProjectSession: ObservableObject {
     }
 
     private func presentOpenPanel() {
+        if UITestMode.enabled {
+            alertMessage = "UI test does not use Open."
+            return
+        }
         let panel = NSOpenPanel()
         panel.title = "Open Pod Lounge Project"
         panel.prompt = "Open"

@@ -582,6 +582,7 @@ struct LoudnessCompareBoard: View {
                     .shadow(color: accent.opacity(0.35), radius: 6)
                     .minimumScaleFactor(0.7)
                     .lineLimit(1)
+                    .accessibilityIdentifier(title == "POST" ? "leveler.postIntegrated" : "leveler.preIntegrated")
                 Text("INTEGRATED LUFS")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(0.8)

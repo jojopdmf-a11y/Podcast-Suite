@@ -57,7 +57,8 @@ struct LevelerOutputPanel: View {
                                 title: "\(bitrate)",
                                 detail: "kbps",
                                 selected: settings.mp3BitrateKbps == bitrate,
-                                enabled: true
+                                enabled: true,
+                                identifier: "leveler.bitrate.\(bitrate)"
                             ) {
                                 settings.mp3BitrateKbps = bitrate
                             }
@@ -75,7 +76,8 @@ struct LevelerOutputPanel: View {
                                 title: depth.title,
                                 detail: depth.detail,
                                 selected: settings.bitDepth == depth,
-                                enabled: true
+                                enabled: true,
+                                identifier: "leveler.bit.\(depth.rawValue)"
                             ) {
                                 settings.bitDepth = depth
                             }
@@ -95,7 +97,8 @@ struct LevelerOutputPanel: View {
                             title: Self.rateLabel(rate),
                             detail: nil,
                             selected: abs(selectedRate - rate) < 1,
-                            enabled: enabled
+                            enabled: enabled,
+                            identifier: "leveler.rate.\(Int(rate))"
                         ) {
                             settings.rateMode = .explicit(rate)
                         }
@@ -110,6 +113,7 @@ struct LevelerOutputPanel: View {
                         .foregroundStyle(LevelerTheme.cyanDim)
                     TextField("Result name", text: resultNameBinding(resultName))
                         .textFieldStyle(.plain)
+                        .accessibilityIdentifier("leveler.resultName")
                         .font(.system(size: 12, weight: .medium, design: .rounded))
                         .lineLimit(1)
                         .foregroundStyle(LevelerTheme.textPrimary)
@@ -144,6 +148,7 @@ struct LevelerOutputPanel: View {
                     .buttonStyle(LevelerPrimaryButtonStyle())
                     .disabled(primaryDisabled || settings.container.isWritable == false)
                     .help(primaryHelp)
+                    .accessibilityIdentifier("leveler.export")
             }
         }
         .padding(fillsColumn ? 10 : 12)
@@ -191,6 +196,7 @@ struct LevelerOutputPanel: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityIdentifier("leveler.container.\(container.rawValue)")
     }
 
     private func choiceButton(
@@ -198,6 +204,7 @@ struct LevelerOutputPanel: View {
         detail: String?,
         selected: Bool,
         enabled: Bool,
+        identifier: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -228,6 +235,7 @@ struct LevelerOutputPanel: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityIdentifier(identifier)
     }
 
     private func resultNameBinding(_ source: Binding<String>) -> Binding<String> {

@@ -23,6 +23,7 @@ struct DepotSidebar: View {
                     Button("Import Audio") { session.importAudio() }
                         .buttonStyle(LoungeButtonStyle(prominent: true))
                         .disabled(session.package == nil || session.limiterExporting)
+                        .accessibilityIdentifier("lounge.import")
                 }
                 if session.limiterExporting {
                     Text("Exporting…")
@@ -108,6 +109,8 @@ struct DepotSidebar: View {
                     Text(asset.displayName)
                         .font(.system(size: 13, weight: .semibold))
                         .lineLimit(2)
+                        .accessibilityIdentifier("depot.selectedName")
+                        .accessibilityValue(asset.displayName)
                     Text("\(asset.kind.label)  ·  \(ByteCountLabel.string(asset.byteCount))")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
@@ -231,6 +234,7 @@ private struct DepotRow: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(session.limiterExporting)
+                .accessibilityIdentifier("depot.file.\(asset.displayName)")
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
