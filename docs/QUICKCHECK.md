@@ -2,7 +2,7 @@
 
 Double-click `Run QuickCheck.command` at the top of the project. It builds PodLeveler and Pod Lounge, clicks through the basic loudness steps, and prints PASS or FAIL for each one. The same steps can be run from a terminal with `scripts/quickcheck.sh`. Exit code 0 means every check passed.
 
-The results replace the previous run in `~/Desktop/PodStudio-QuickCheck-Results/`. That folder holds `summary.txt`, `report.json`, and at most a few failure pictures.
+The results replace the previous run in `~/GrokBot/QuickCheck-Results/`. That folder holds `summary.txt`, `report.json`, and at most a few failure pictures. If an older results folder is still at `~/Desktop/PodStudio-QuickCheck-Results`, the run deletes it.
 
 ## What is checked
 
@@ -30,4 +30,4 @@ The exact clicks are also written to `.ppjob/QUICKCHECK-BLOCKED.txt` when the pa
 
 ## Cleanup
 
-Every run, pass or fail, deletes the test recordings, the temporary project and depot, the exported files, the throwaway preferences, the test apps, and the Xcode build files it created. A trap does this even when a step fails. The Desktop results folder is the only thing left behind, and the next run replaces it. `summary.txt` records free disk space before and after.
+Every run, pass or fail, deletes the test recordings, the temporary project and depot, the exported files, the throwaway preferences, the test apps, the Xcode build files, and the UI test runner's temporary files. A trap does this even when a step fails. Afterward the check confirms those paths are gone: the work folder, DerivedData and build files, the xcresult bundle, exported audio, runner temp files, and temporary preferences. `summary.txt` records free disk space before and after as information only. The GrokBot results folder is the only thing left behind, and the next run replaces it.

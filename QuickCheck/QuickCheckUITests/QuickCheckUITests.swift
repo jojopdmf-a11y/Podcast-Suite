@@ -1,5 +1,4 @@
 import AppKit
-import ApplicationServices
 import AVFoundation
 import XCTest
 
@@ -79,17 +78,11 @@ final class QuickCheckUITests: XCTestCase {
     }
 
     func testPodStudioQuickCheck() throws {
-        let loaded = try QuickConfig.load()
+        // The runner can read the script's work folder, but the sandbox blocks
+        // writes there. Files this process creates go in its own temp directory.
+        // The apps still read and write that folder; they are not sandboxed.
+        let loaded = try prepareRunnerFiles(try QuickConfig.load())
         config = loaded
-        if accessibilityIsBlocked(loaded) {
-            record(
-                "The Mac allowed the quick check to click the apps",
-                false,
-                "macOS has not allowed the test runner to control the apps yet. See .ppjob/QUICKCHECK-BLOCKED.txt."
-            )
-            try writeChecks()
-            return
-        }
         try writeSignal(to: loaded.audioA, frequency: 220, burstOffset: 0.05)
         try writeSignal(to: loaded.audioB, frequency: 330, burstOffset: 0.4)
         sourceSeconds = try decodedSeconds(loaded.audioA)
@@ -170,14 +163,14 @@ final class QuickCheckUITests: XCTestCase {
                 return
             }
         }
-        empty(config.exportDir)
+        let before = Set(files(in: config.exportDir).map(\.path))
         guard waitEnabled("leveler.export", in: app, timeout: 20), click("leveler.export", in: app, timeout: 10) else {
             record(title, false, "Export was not available. \(statusText(statusRaw(app)))")
             shoot("leveler-no-\(kind)", app)
             return
         }
         let finished = poll(120) { statusText(statusRaw(app)).contains("Exported") }
-        let written = files(in: config.exportDir)
+        let written = files(in: config.exportDir).filter { before.contains($0.path) == false }
         guard finished, written.count == 1 else {
             record(
                 title,
@@ -398,11 +391,11 @@ final class QuickCheckUITests: XCTestCase {
 
     private func checkWindow(_ app: XCUIApplication, standalone: Bool, name: String) {
         app.activate()
-        app.typeKey("m", modifierFlags: [.command, .option, .shift])
+        let how = fitMinimumWindow(app)
         var last = ""
         var stable = 0
         let settled = poll(8) {
-            let raw = stringValue("quickcheck.windowFit", in: app)
+            let raw = fitReport(app)
             if raw == last, raw.contains("frame=") {
                 stable += 1
             } else {
@@ -412,15 +405,10 @@ final class QuickCheckUITests: XCTestCase {
             return stable >= 2
         }
         if settled == false {
-            let menu = app.menuBars.menuBarItems["Quick Check"]
-            if menu.waitForExistence(timeout: 3) {
-                menu.click()
-                let item = app.menuItems["Fit Minimum Window"]
-                if item.waitForExistence(timeout: 3) { item.click() }
-            }
+            _ = fitMinimumWindow(app)
             stable = 0
             _ = poll(8) {
-                let raw = stringValue("quickcheck.windowFit", in: app)
+                let raw = fitReport(app)
                 if raw == last, raw.contains("frame=") {
                     stable += 1
                 } else {
@@ -431,7 +419,7 @@ final class QuickCheckUITests: XCTestCase {
             }
         }
         guard let frame = pair(last, "frame"), let content = pair(last, "content"), let screen = pair(last, "screen") else {
-            record(name, false, "Could not read the window size (\(last)).")
+            record(name, false, "Could not read the window size (\(last)). Trigger: \(how).")
             shoot(standalone ? "leveler-window" : "lounge-window", app)
             return
         }
@@ -450,6 +438,39 @@ final class QuickCheckUITests: XCTestCase {
             true,
             String(format: "Window %.0f by %.0f points, content %.0f by %.0f.", frame.0, frame.1, content.0, content.1)
         )
+    }
+
+    /// Asks the app's test-only Quick Check menu to shrink the window.
+    private func fitMinimumWindow(_ app: XCUIApplication) -> String {
+        let menus = [
+            app.menuBars.menuBarItems["Quick Check"],
+            app.menuBarItems["Quick Check"],
+        ]
+        for menu in menus {
+            guard poll(4, { menu.exists }) else { continue }
+            menu.click()
+            let item = app.menuItems.matching(NSPredicate(format: "title CONTAINS %@", "Fit Minimum")).firstMatch
+            if poll(3, { item.exists }) {
+                if item.isHittable {
+                    item.click()
+                } else {
+                    item.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+                }
+                return "menu"
+            }
+            app.typeKey(.escape, modifierFlags: [])
+        }
+        app.typeKey("m", modifierFlags: [.command, .option, .shift])
+        return "key"
+    }
+
+    private func fitReport(_ app: XCUIApplication) -> String {
+        let target = element("quickcheck.windowFit", in: app)
+        guard target.exists else { return "" }
+        let value = (target.value as? String) ?? ""
+        if value.contains("frame=") { return value }
+        if target.label.contains("frame=") { return target.label }
+        return value.isEmpty ? target.label : value
     }
 
     private func minimumProblem(content: (CGFloat, CGFloat), screen: (CGFloat, CGFloat), standalone: Bool, raw: String) -> String? {
@@ -662,6 +683,39 @@ final class QuickCheckUITests: XCTestCase {
         sourceName(app) == file && statusText(statusRaw(app)).contains("Ready") && hasLoudnessNumber(app)
     }
 
+    /// Moves runner-created files into the sandbox temp directory. Export, the
+    /// project, and presets move with them so the apps and the runner share one
+    /// folder both can use. App bundles stay where the script built them.
+    private func prepareRunnerFiles(_ config: QuickConfig) throws -> QuickConfig {
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("podstudio-quickcheck", isDirectory: true)
+        let exportDir = scratch.appendingPathComponent("export", isDirectory: true)
+        let projectDir = scratch.appendingPathComponent("project", isDirectory: true)
+        let presetsLeveler = scratch.appendingPathComponent("presets-leveler", isDirectory: true)
+        let presetsLounge = scratch.appendingPathComponent("presets-lounge", isDirectory: true)
+        let screenshots = scratch.appendingPathComponent("screenshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: presetsLeveler, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: presetsLounge, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: screenshots, withIntermediateDirectories: true)
+        let probe = scratch.appendingPathComponent(".write-probe")
+        try Data("ok".utf8).write(to: probe, options: .atomic)
+        try FileManager.default.removeItem(at: probe)
+        NSLog("QUICKCHECK_SCRATCH %@", scratch.path)
+        var updated = config
+        updated.audioA = scratch.appendingPathComponent("QuickCheck-A.wav")
+        updated.audioB = scratch.appendingPathComponent("QuickCheck-B.wav")
+        updated.exportDir = exportDir
+        updated.project = projectDir.appendingPathComponent("QuickCheck.podlounge")
+        updated.presetsLeveler = presetsLeveler
+        updated.presetsLounge = presetsLounge
+        updated.checks = scratch.appendingPathComponent("checks.json")
+        updated.screenshots = screenshots
+        updated.blocked = scratch.appendingPathComponent("BLOCKED.txt")
+        return updated
+    }
+
     private func files(in directory: URL) -> [URL] {
         let items = (try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -672,12 +726,6 @@ final class QuickCheckUITests: XCTestCase {
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
             return values?.isRegularFile != false
         }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-    }
-
-    private func empty(_ directory: URL) {
-        for url in files(in: directory) {
-            try? FileManager.default.removeItem(at: url)
-        }
     }
 
     private func pair(_ raw: String, _ key: String) -> (CGFloat, CGFloat)? {
@@ -701,24 +749,6 @@ final class QuickCheckUITests: XCTestCase {
             _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(value: false), object: nil)], timeout: 0.2)
         }
         return condition()
-    }
-
-    private func accessibilityIsBlocked(_ config: QuickConfig) -> Bool {
-        let key = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
-        let options = [key: true] as CFDictionary
-        if AXIsProcessTrustedWithOptions(options) { return false }
-        let text = """
-        macOS is asking for permission before the quick check can click the apps.
-
-        1. Look for a prompt about controlling this computer. The name may be QuickCheckUITests-Runner, Terminal, Xcode, Xcode Helper, or xcodebuild.
-        2. Click Allow.
-        3. If you do not see a prompt, open System Settings, then Privacy & Security, then Accessibility.
-        4. Turn on QuickCheckUITests-Runner. If Terminal, Xcode, Xcode Helper, or xcodebuild is in that list, turn those on too.
-        5. If a second prompt appears for Automation, click Allow so the runner can control PodLeveler and Pod Lounge.
-        6. Double-click Run QuickCheck.command again.
-        """
-        try? text.write(to: config.blocked, atomically: true, encoding: .utf8)
-        return true
     }
 
     private func record(_ name: String, _ pass: Bool, _ detail: String) {

@@ -4,7 +4,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-RESULTS="${HOME}/Desktop/PodStudio-QuickCheck-Results"
+RESULTS="${HOME}/GrokBot/QuickCheck-Results"
+OLD_RESULTS="${HOME}/Desktop/PodStudio-QuickCheck-Results"
 WORK=""
 STAMP=""
 DISK_BEFORE=""
@@ -17,9 +18,37 @@ LOG_TAIL=""
 BLOCKED=0
 FINALIZED=0
 OVERALL="FAIL"
+LEFTOVER_OK=0
+LEFTOVER_DETAIL="Cleanup was not checked."
+RUNNER_SCRATCH=""
+typeset -a MUST_REMOVE
+MUST_REMOVE=()
+typeset -a QUICKCHECK_DOMAINS
+QUICKCHECK_DOMAINS=(
+  com.cougarcalc.quickcheck.podleveler
+  com.cougarcalc.quickcheck.podlounge
+  com.cougarcalc.quickcheck.host
+  com.cougarcalc.quickcheck.uitests
+  com.cougarcalc.quickcheck.uitests.xctrunner
+)
 
 disk_free_bytes() {
   df -k "${HOME}" | awk 'NR==2 { printf "%.0f\n", $4 * 1024 }'
+}
+
+remember() {
+  local item="$1"
+  [[ -n "$item" ]] || return 0
+  MUST_REMOVE+=("$item")
+}
+
+json_escape() {
+  local text="$1"
+  text="${text//\\/\\\\}"
+  text="${text//\"/\\\"}"
+  text="${text//$'\n'/; }"
+  text="${text//$'\r'/}"
+  print -r -- "$text"
 }
 
 format_bytes() {
@@ -84,17 +113,14 @@ stop_test_apps() {
 
 forget_quickcheck_domains() {
   local domain
-  for domain in \
-    com.cougarcalc.quickcheck.podleveler \
-    com.cougarcalc.quickcheck.podlounge \
-    com.cougarcalc.quickcheck.host \
-    com.cougarcalc.quickcheck.uitests
-  do
+  for domain in "${QUICKCHECK_DOMAINS[@]}"; do
     defaults delete "$domain" >/dev/null 2>&1 || true
     rm -f "${HOME}/Library/Preferences/${domain}.plist"
+    rm -f "${HOME}/Library/Preferences/ByHost/${domain}".*.plist(N)
     rm -rf "${HOME}/Library/Saved Application State/${domain}.savedState"
     rm -rf "${HOME}/Library/Caches/${domain}"
-    rm -rf "${HOME}/Library/Containers/${domain}"
+    rm -rf "${HOME}/Library/Containers/${domain}/Data"
+    rm -rf "${HOME}/Library/Containers/${domain}" 2>/dev/null || true
     rm -rf "${HOME}/Library/HTTPStorages/${domain}"
     rm -rf "${HOME}/Library/WebKit/${domain}"
     rm -rf "${HOME}/Library/Application Support/${domain}"
@@ -103,39 +129,182 @@ forget_quickcheck_domains() {
   rm -f /tmp/podstudio-quickcheck-active.json
 }
 
+remember_created_paths() {
+  local domain preset_root
+  remember "$WORK"
+  remember "$WORK/DerivedData"
+  remember "$WORK/DerivedData/Build"
+  remember "$WORK/Result.xcresult"
+  remember "$WORK/export"
+  remember "$WORK/audio"
+  remember "$WORK/project"
+  remember "$WORK/apps"
+  remember "$WORK/presets-leveler"
+  remember "$WORK/presets-lounge"
+  remember "/tmp/podstudio-quickcheck-active.json"
+  remember "$OLD_RESULTS"
+  preset_root="${TMPDIR:-/tmp}"
+  preset_root="${preset_root%/}"
+  remember "$preset_root/podleveler-uitest-presets"
+  for domain in "${QUICKCHECK_DOMAINS[@]}"; do
+    remember "${HOME}/Library/Preferences/${domain}.plist"
+    remember "${HOME}/Library/Saved Application State/${domain}.savedState"
+    remember "${HOME}/Library/Caches/${domain}"
+    remember "${HOME}/Library/HTTPStorages/${domain}"
+    remember "${HOME}/Library/WebKit/${domain}"
+    remember "${HOME}/Library/Application Support/${domain}"
+  done
+}
+
+discover_runner_scratch() {
+  local line scratch_path container found scratch
+  RUNNER_SCRATCH=""
+  if [[ -n "$WORK" && -f "$WORK/xcodebuild.log" ]]; then
+    line="$(/usr/bin/grep 'QUICKCHECK_SCRATCH ' "$WORK/xcodebuild.log" | /usr/bin/tail -n 1 || true)"
+    if [[ -n "$line" ]]; then
+      scratch_path="${line##*QUICKCHECK_SCRATCH }"
+      scratch_path="${scratch_path%%$'\r'}"
+      scratch_path="${scratch_path%%$'\n'}"
+      if [[ "$scratch_path" == *"/podstudio-quickcheck" || "$scratch_path" == *"/podstudio-quickcheck/"* ]]; then
+        RUNNER_SCRATCH="${scratch_path%/}"
+      fi
+    fi
+  fi
+  if [[ -z "$RUNNER_SCRATCH" || ! -e "$RUNNER_SCRATCH" ]]; then
+    for container in "${HOME}/Library/Containers"/com.cougarcalc.quickcheck.*(N); do
+      found="$(/usr/bin/find "$container" -path '*/podstudio-quickcheck/checks.json' -print 2>/dev/null | /usr/bin/head -n 1 || true)"
+      if [[ -n "$found" ]]; then
+        RUNNER_SCRATCH="$(dirname "$found")"
+        break
+      fi
+      scratch="$container/Data/tmp/podstudio-quickcheck"
+      if [[ -d "$scratch" ]]; then
+        RUNNER_SCRATCH="$scratch"
+        break
+      fi
+    done
+  fi
+  if [[ -z "$RUNNER_SCRATCH" || ! -e "$RUNNER_SCRATCH" ]]; then
+    local tmp_root="${TMPDIR:-/tmp}"
+    tmp_root="${tmp_root%/}"
+    found="$(/usr/bin/find "$tmp_root" /tmp -maxdepth 4 -path '*/podstudio-quickcheck/checks.json' -print 2>/dev/null | /usr/bin/head -n 1 || true)"
+    if [[ -n "$found" ]]; then
+      RUNNER_SCRATCH="$(dirname "$found")"
+    fi
+  fi
+}
+
+remember_runner_scratch() {
+  [[ -n "$RUNNER_SCRATCH" ]] || return 0
+  remember "$RUNNER_SCRATCH"
+  remember "$RUNNER_SCRATCH/checks.json"
+  remember "$RUNNER_SCRATCH/BLOCKED.txt"
+  remember "$RUNNER_SCRATCH/QuickCheck-A.wav"
+  remember "$RUNNER_SCRATCH/QuickCheck-B.wav"
+  remember "$RUNNER_SCRATCH/export"
+  remember "$RUNNER_SCRATCH/project"
+  remember "$RUNNER_SCRATCH/screenshots"
+  remember "$RUNNER_SCRATCH/presets-leveler"
+  remember "$RUNNER_SCRATCH/presets-lounge"
+}
+
 cleanup_generated() {
   stop_test_apps
+  pkill -f QuickCheckUITests-Runner >/dev/null 2>&1 || true
+  if [[ "$RUNNER_SCRATCH" == *"/podstudio-quickcheck" && -e "$RUNNER_SCRATCH" ]]; then
+    rm -rf "$RUNNER_SCRATCH"
+  fi
   forget_quickcheck_domains
   if [[ -n "$WORK" && -d "$WORK" ]]; then
     rm -rf "$WORK"
   fi
+  if [[ -e "$OLD_RESULTS" ]]; then
+    rm -rf "$OLD_RESULTS"
+  fi
+}
+
+leftovers_remaining() {
+  local item domain found preset_root
+  LEFTOVER_DETAIL=""
+  for item in "${MUST_REMOVE[@]}"; do
+    if [[ -e "$item" || -L "$item" ]]; then
+      LEFTOVER_DETAIL+="$item"$'\n'
+    fi
+  done
+  for domain in "${QUICKCHECK_DOMAINS[@]}"; do
+    if defaults read "$domain" >/dev/null 2>&1; then
+      LEFTOVER_DETAIL+="defaults domain ${domain}"$'\n'
+    fi
+    for found in "${HOME}/Library/Preferences/ByHost/${domain}".*.plist(N); do
+      LEFTOVER_DETAIL+="$found"$'\n'
+    done
+  done
+  preset_root="${TMPDIR:-/tmp}"
+  preset_root="${preset_root%/}"
+  if [[ -e "$preset_root/podleveler-uitest-presets" ]]; then
+    LEFTOVER_DETAIL+="$preset_root/podleveler-uitest-presets"$'\n'
+  fi
+  local container scratch_left
+  for container in "${HOME}/Library/Containers"/com.cougarcalc.quickcheck.*(N); do
+    scratch_left="$(/usr/bin/find "$container" \( -path '*/podstudio-quickcheck' -o -path '*/podstudio-quickcheck/*' -o -name 'QuickCheck-A.wav' -o -name 'QuickCheck-B.wav' -o -name 'checks.json' \) -print 2>/dev/null | /usr/bin/head -n 1 || true)"
+    if [[ -n "$scratch_left" ]]; then
+      LEFTOVER_DETAIL+="$scratch_left"$'\n'
+    fi
+  done
+  if [[ -n "$LEFTOVER_DETAIL" ]]; then
+    LEFTOVER_OK=0
+  else
+    LEFTOVER_OK=1
+    LEFTOVER_DETAIL="Work folder, build files, exports, runner temp, and temporary preferences were removed."
+  fi
+}
+
+copy_tree_shots() {
+  local source="$1"
+  local staging="$2"
+  [[ -d "$source" ]] || return 0
+  mkdir -p "$staging/shots"
+  local total=0 copied=0 img size
+  for img in "$source"/*.jpg(N); do
+    size=$(stat -f %z "$img")
+    (( copied >= 4 )) && break
+    (( total + size > 5 * 1024 * 1024 )) && continue
+    cp "$img" "$staging/shots/"
+    (( total += size ))
+    (( copied++ ))
+  done
 }
 
 write_results() {
-  local staging checks_file summary report line pass name
+  local staging checks_file summary report shots_dir blocked_file
+  discover_runner_scratch
+  remember_runner_scratch
   staging="$(mktemp -d /tmp/podstudio-quickcheck-report.XXXXXX)"
   checks_file="$staging/checks.json"
-  if [[ -n "$WORK" && -f "$WORK/checks.json" ]]; then
+  if [[ -n "$RUNNER_SCRATCH" && -f "$RUNNER_SCRATCH/checks.json" ]]; then
+    cp "$RUNNER_SCRATCH/checks.json" "$checks_file"
+  elif [[ -n "$WORK" && -f "$WORK/checks.json" ]]; then
     cp "$WORK/checks.json" "$checks_file"
   else
     print "[]" > "$checks_file"
   fi
-  if [[ -n "$WORK" && -d "$WORK/screenshots" ]]; then
-    mkdir -p "$staging/shots"
-    local total=0 copied=0 img size
-    for img in "$WORK"/screenshots/*.jpg(N); do
-      size=$(stat -f %z "$img")
-      (( copied >= 4 )) && break
-      (( total + size > 5 * 1024 * 1024 )) && continue
-      cp "$img" "$staging/shots/"
-      (( total += size ))
-      (( copied++ ))
-    done
+  if [[ -n "$RUNNER_SCRATCH" && -d "$RUNNER_SCRATCH/screenshots" ]]; then
+    shots_dir="$RUNNER_SCRATCH/screenshots"
+  else
+    shots_dir="$WORK/screenshots"
   fi
-  if [[ -n "$WORK" && -f "$WORK/BLOCKED.txt" ]]; then
+  copy_tree_shots "$shots_dir" "$staging"
+  if [[ -n "$RUNNER_SCRATCH" && -f "$RUNNER_SCRATCH/BLOCKED.txt" ]]; then
+    blocked_file="$RUNNER_SCRATCH/BLOCKED.txt"
+  elif [[ -n "$WORK" && -f "$WORK/BLOCKED.txt" ]]; then
+    blocked_file="$WORK/BLOCKED.txt"
+  else
+    blocked_file=""
+  fi
+  if [[ -n "$blocked_file" ]]; then
     BLOCKED=1
     mkdir -p "$ROOT/.ppjob"
-    cp "$WORK/BLOCKED.txt" "$ROOT/.ppjob/QUICKCHECK-BLOCKED.txt"
+    cp "$blocked_file" "$ROOT/.ppjob/QUICKCHECK-BLOCKED.txt"
   fi
   if [[ -n "$WORK" && -f "$WORK/xcodebuild.log" ]]; then
     LOG_TAIL="$(tail -n 30 "$WORK/xcodebuild.log")"
@@ -143,16 +312,10 @@ write_results() {
 
   cleanup_generated
   DISK_AFTER="$(disk_free_bytes)"
+  leftovers_remaining
 
-  local disk_ok=1 disk_note
   local delta=$(( DISK_BEFORE - DISK_AFTER ))
   if (( delta < 0 )); then delta=$(( -delta )); fi
-  if (( delta > 200 * 1024 * 1024 )); then
-    disk_ok=0
-    disk_note="Free space moved by more than 200 MB."
-  else
-    disk_note="Free space stayed within 200 MB."
-  fi
 
   local crash_ok=1
   if [[ -n "$CRASH_DETAIL" ]]; then
@@ -162,10 +325,13 @@ write_results() {
   fi
 
   OVERALL="PASS"
-  if [[ "$ISOLATION_OK" != 1 || "$disk_ok" != 1 || "$crash_ok" != 1 || "$XCODE_STATUS" != 0 || "$BLOCKED" == 1 ]]; then
+  if [[ "$ISOLATION_OK" != 1 || "$LEFTOVER_OK" != 1 || "$crash_ok" != 1 || "$XCODE_STATUS" != 0 || "$BLOCKED" == 1 ]]; then
     OVERALL="FAIL"
   fi
   if grep -q '"pass" : false' "$checks_file"; then
+    OVERALL="FAIL"
+  fi
+  if [[ "$XCODE_STATUS" == 0 ]] && ! grep -q '"name"' "$checks_file"; then
     OVERALL="FAIL"
   fi
 
@@ -176,7 +342,6 @@ write_results() {
     print ""
     print "Disk free before: $(format_bytes "$DISK_BEFORE")"
     print "Disk free after:  $(format_bytes "$DISK_AFTER")"
-    print "$disk_note"
     print ""
     awk '
       /"name"/ {
@@ -205,10 +370,15 @@ write_results() {
       print "FAIL  No new crash reports"
       print "      $CRASH_DETAIL"
     fi
-    if [[ "$disk_ok" == 1 ]]; then
-      print "PASS  Disk free space stayed within 200 MB"
+    if [[ "$LEFTOVER_OK" == 1 ]]; then
+      print "PASS  Nothing created by the run was left behind"
     else
-      print "FAIL  Disk free space stayed within 200 MB"
+      print "FAIL  Nothing created by the run was left behind"
+      local leftover_line
+      while IFS= read -r leftover_line; do
+        [[ -n "$leftover_line" ]] || continue
+        print "      $leftover_line"
+      done <<< "$LEFTOVER_DETAIL"
     fi
     print ""
     print "Overall: $OVERALL"
@@ -229,10 +399,12 @@ write_results() {
     print "  \"overall\": \"$OVERALL\","
     print "  \"diskFreeBytesBefore\": $DISK_BEFORE,"
     print "  \"diskFreeBytesAfter\": $DISK_AFTER,"
-    print "  \"diskNote\": \"$disk_note\","
+    print "  \"diskDeltaBytes\": $delta,"
     print "  \"isolation\": \"$([[ "$ISOLATION_OK" == 1 ]] && print PASS || print FAIL)\","
-    print "  \"isolationDetail\": \"${ISOLATION_DETAIL//\"/\\\"}\","
-    print "  \"crashes\": \"${CRASH_DETAIL//\"/\\\"}\","
+    print "  \"isolationDetail\": \"$(json_escape "$ISOLATION_DETAIL")\","
+    print "  \"crashes\": \"$(json_escape "$CRASH_DETAIL")\","
+    print "  \"leftovers\": \"$([[ "$LEFTOVER_OK" == 1 ]] && print PASS || print FAIL)\","
+    print "  \"leftoverDetail\": \"$(json_escape "$LEFTOVER_DETAIL")\","
     print "  \"checks\":"
     cat "$checks_file"
     print "}"
@@ -249,6 +421,11 @@ write_results() {
     done
   fi
   rm -rf "$staging"
+  if [[ -e "$staging" ]]; then
+    OVERALL="FAIL"
+    sed -i '' 's/^Overall: PASS$/Overall: FAIL/' "$RESULTS/summary.txt"
+    print "      $staging" >> "$RESULTS/summary.txt"
+  fi
   print ""
   cat "$RESULTS/summary.txt"
 }
@@ -262,12 +439,14 @@ finalize() {
 }
 trap finalize EXIT
 
+rm -f "$ROOT/.ppjob/QUICKCHECK-BLOCKED.txt"
 DISK_BEFORE="$(disk_free_bytes)"
 WORK="$(mktemp -d /tmp/podstudio-quickcheck.XXXXXX)"
 STAMP="$WORK/started"
 touch "$STAMP"
 mkdir -p "$WORK/apps" "$WORK/audio" "$WORK/export" "$WORK/project" \
   "$WORK/presets-leveler" "$WORK/presets-lounge" "$WORK/screenshots" "$WORK/snapshot-before"
+remember_created_paths
 snapshot_user_state "$WORK/snapshot-before"
 
 print "Building PodLeveler..."

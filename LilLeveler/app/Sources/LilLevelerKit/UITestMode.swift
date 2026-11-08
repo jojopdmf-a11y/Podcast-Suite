@@ -33,12 +33,14 @@ public struct UITestFitProbe: View {
 
     public var body: some View {
         if UITestMode.enabled {
-            Color.clear
+            Text(report.isEmpty ? "window fit" : report)
+                .font(.system(size: 1))
+                .foregroundStyle(.clear)
                 .frame(width: 1, height: 1)
                 .allowsHitTesting(false)
                 .accessibilityElement(children: .ignore)
                 .accessibilityIdentifier("quickcheck.windowFit")
-                .accessibilityLabel("window fit")
+                .accessibilityLabel(report.isEmpty ? "window fit" : report)
                 .accessibilityValue(report)
         }
     }
