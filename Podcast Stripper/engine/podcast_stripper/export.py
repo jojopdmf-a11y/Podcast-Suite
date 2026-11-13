@@ -68,6 +68,23 @@ def speaker_label(index: int) -> str:
 MUSIC_LABEL = "Music and SFX"
 
 
+def downmix_to_mono(audio: np.ndarray) -> np.ndarray:
+    """Average every channel into one mono speaker strip.
+
+    Stereo becomes (L + R) / 2. Wider audio uses the same mean. Dividing
+    before the samples are stored keeps the average from clipping. A file
+    that is already mono is returned unchanged.
+    """
+    if audio.ndim == 1:
+        audio = audio.reshape(-1, 1)
+    channels = int(audio.shape[1]) if audio.ndim == 2 else 1
+    if channels <= 1:
+        return np.ascontiguousarray(audio.reshape(-1, 1))
+    averaged = audio.astype(np.float64).sum(axis=1) / float(channels)
+    mono = np.clip(np.rint(averaged), -32768, 32767).astype(np.int16)
+    return mono.reshape(-1, 1)
+
+
 def build_speaker_track(
     audio: np.ndarray,
     sample_rate: int,
@@ -182,7 +199,8 @@ def export_speaker_tracks(
     for index, speaker in enumerate(speakers):
         label = speaker_label(index)
         dest_base = output_dir / f"{label.replace(' ', '_')}"
-        track = apply_gate(voice_audio, gates[index])
+        # Speaker strips are one person. Music/SFX below keeps the source layout.
+        track = downmix_to_mono(apply_gate(voice_audio, gates[index]))
         dest = _write_finished_track(
             dest_base,
             track,
