@@ -452,21 +452,18 @@ final class EngineRunner: ObservableObject {
         return "This copy is missing the speaker model. Re-download PodStripper, or add a backup token in Settings."
     }
 
-    private static func runtimeIsReady(paths: EnginePaths) -> Bool {
+    /// Packaged Lounge and standalone Stripper share one venv. Ready means
+    /// `bin/python3` exists, the stamped `uv.lock` matches the bundle, and
+    /// `engine-source.stamp` matches a hash of that bundle's package sources.
+    /// Pass `support` from tests so they never touch the live Application Support folder.
+    nonisolated static func runtimeIsReady(paths: EnginePaths, support: URL? = nil) -> Bool {
         guard paths.isBundled, let venv = paths.venvDir else { return true }
-        let fm = FileManager.default
-        let support = EnginePaths.applicationSupportDir()
-        let lockBundled = paths.engineDir.appendingPathComponent("uv.lock")
-        let stamp = support.appendingPathComponent("uv.lock")
-        let python = venv.appendingPathComponent("bin/python3")
-        guard fm.isExecutableFile(atPath: python.path),
-              fm.fileExists(atPath: stamp.path),
-              fm.fileExists(atPath: lockBundled.path),
-              let a = try? Data(contentsOf: stamp),
-              let b = try? Data(contentsOf: lockBundled),
-              a == b
-        else { return false }
-        return true
+        let supportDir = support ?? EnginePaths.applicationSupportDir()
+        return EngineSourceStamp.isReady(
+            venvPython: venv.appendingPathComponent("bin/python3"),
+            engineDir: paths.engineDir,
+            support: supportDir
+        )
     }
 
     private func ensureRuntime(paths: EnginePaths) async throws {
@@ -498,14 +495,9 @@ final class EngineRunner: ObservableObject {
         try fm.createDirectory(at: support, withIntermediateDirectories: true)
         try await runUv(
             paths: paths,
-            arguments: ["sync", "--project", paths.engineDir.path, "--frozen", "--no-dev", "--no-editable"]
+            arguments: EngineSourceStamp.syncArguments(project: paths.engineDir.path)
         )
-        let lockBundled = paths.engineDir.appendingPathComponent("uv.lock")
-        let stamp = support.appendingPathComponent("uv.lock")
-        if fm.fileExists(atPath: lockBundled.path) {
-            try? fm.removeItem(at: stamp)
-            try? fm.copyItem(at: lockBundled, to: stamp)
-        }
+        try EngineSourceStamp.write(engineDir: paths.engineDir, support: support)
     }
 
     private func runUv(paths: EnginePaths, arguments: [String]) async throws {
