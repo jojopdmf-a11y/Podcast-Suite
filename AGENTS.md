@@ -36,8 +36,8 @@ Common commands (run from `Podcast Stripper/engine/`, or add `--project "Podcast
 
 ```bash
 uv sync --group dev                      # install/refresh deps (idempotent)
-uv run pytest                            # run the test suite (36 tests)
-uv run podcast-stripper --check-setup    # verify ffmpeg + token, exit 0 if ffmpeg found
+uv run pytest                            # run the test suite (52 tests)
+uv run podcast-stripper --check-setup    # ffmpeg, bundled speaker model, optional token; exit 0 if ffmpeg found
 uv run podcast-stripper --version
 ```
 
@@ -54,7 +54,11 @@ uv run podcast-stripper /tmp/demo/episode.wav -o /tmp/demo/tracks \
 
 This writes `Speaker_1.wav`, `Speaker_2.wav`, `Music_and_SFX.wav`, and `speakers.json`. Splitting always happens at the file's native sample rate; sample-rate/format conversion only happens on export.
 
-**Full speaker diarization** (the real AI model, no `--from-segments`) additionally needs a **Hugging Face token** and one-time acceptance of the model terms at <https://huggingface.co/pyannote/speaker-diarization-community-1>. Provide the token via the `HF_TOKEN` env var, `--hf-token`, or `podcast-stripper --save-token <token>`. Never commit a token.
+**Full speaker diarization** (the real AI model, no `--from-segments`) loads **pyannote/speaker-diarization-community-1** (CC-BY-4.0) from a local folder. Customers do not need a Hugging Face account. The app looks in the bundle (`Contents/Resources/models/speaker-diarization-community-1`), then in `~/Library/Application Support/CougarCalc/Podcast Stripper/models/`. A token is only a backup if that folder is missing.
+
+Developers download the model once, at build time, with `Podcast Stripper/scripts/fetch_speaker_model.py`. The script reads a token from the macOS Keychain (service `com.podcaststripper.huggingface`) or from `HF_TOKEN` in that process. The token stays in memory. It is not printed, committed, or copied into the app. `scripts/bundle_runtime.sh` copies the cache into the `.app`. Do not commit the weights. If the packaged model would be more than about 2 GB, the build stops.
+
+Credit for the model authors is in `Podcast Stripper/NOTICE` and in the app About and Settings. Never commit a token.
 
 ## macOS apps (build only on a Mac)
 
@@ -78,11 +82,11 @@ cd PodLounge/app && swift test
 ./scripts/build_app.sh          # -> PodLounge/dist/PodLounge.app
 ```
 
-`build_app.sh` uses `zsh`, and for PodStripper it also bundles the engine + a macOS `uv` into the app. Set `SKIP_REVEAL=1` to skip the Finder reveal.
+`build_app.sh` uses `zsh`, and for PodStripper it also bundles the engine, the speaker model, and a macOS `uv` into the app. Set `SKIP_REVEAL=1` to skip the Finder reveal. The speaker-model download uses a developer token only in that build process and does not store it in the app.
 
 ## Cursor Cloud specific instructions
 
 - The Cloud Agent environment is defined in `.cursor/environment.json` and installs the Python engine via `.cursor/install.sh` (bootstraps `uv` + Python 3.12, then `uv sync --group dev`). System `ffmpeg` is present in the base image; `imageio-ffmpeg` is a bundled fallback.
 - **Cloud agents can fully work on and test the Python engine** (install, `pytest`, end-to-end splits, and Demucs music separation on CPU all work on Linux).
 - **Cloud agents cannot build or test the SwiftUI apps** (PodStripper, PodProducer, PodLeveler, Pod Lounge). For any change that needs an app built or its UI tested, hand off to a **local agent on a macOS 14+ Mac** (e.g. via Move to Cloud / Remote Control, or run the build scripts above on the Mac).
-- For diarization tests in the cloud, add the Hugging Face token as a Cursor **Secret** named `HF_TOKEN`; otherwise use the `--from-segments` path, which needs no token.
+- The speaker model weights are not in git. Cloud diarization tests should use `--from-segments` (no token). To download the model in the cloud, set a Cursor **Secret** named `HF_TOKEN` and run `Podcast Stripper/scripts/fetch_speaker_model.py`. Never commit a token or the weights.

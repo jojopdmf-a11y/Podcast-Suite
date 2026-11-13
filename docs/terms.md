@@ -91,11 +91,15 @@ PodStudio is a set of local audio tools. In particular:
 
 ---
 
-## 6. Hugging Face (PodStripper)
+## 6. Speaker model (PodStripper)
 
-Speaker detection uses a model hosted by Hugging Face under **their** terms. You must create their account, accept their model terms, and keep a token on your Mac. That relationship is between you and Hugging Face. We are not Hugging Face.
+PodStripper includes the pyannote **speaker-diarization-community-1** model to detect who spoke when. That model is licensed under Creative Commons Attribution 4.0 (CC-BY-4.0). We credit the authors in the app and in the NOTICE file that ships with the app. We do not claim to own the model.
 
-PodProducer and PodLeveler do not require that account.
+You do not need a Hugging Face account. A developer token may be used only when the app is built, to download the model. That token is not part of the app you receive.
+
+Settings can store a token as an optional backup if the included model is missing. That is not the usual path.
+
+PodProducer and PodLeveler do not use this model.
 
 ---
 

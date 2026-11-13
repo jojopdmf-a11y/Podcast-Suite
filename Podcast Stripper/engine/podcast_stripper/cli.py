@@ -19,7 +19,14 @@ from podcast_stripper.convert import (
 from podcast_stripper.export import export_speaker_tracks
 from podcast_stripper.ffmpeg_bin import FFmpegError, find_ffmpeg
 from podcast_stripper.progress import done, error, heartbeat, status
-from podcast_stripper.token_store import TokenError, resolve_token, save_token, token_is_set
+from podcast_stripper.model_bundle import (
+    MODEL_ID,
+    MODEL_TERMS_URL,
+    SpeakerModelError,
+    ensure_speaker_model_ready,
+    speaker_model_status,
+)
+from podcast_stripper.token_store import TokenError, save_token, token_is_set
 
 
 class SegmentsError(Exception):
@@ -89,6 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         error(str(exc), exc.code, json_progress=json_progress)
         _remove_empty_output_dir(output_dir, created=not output_existed)
         return 2
+    except SpeakerModelError as exc:
+        error(str(exc), exc.code, json_progress=json_progress)
+        _remove_empty_output_dir(output_dir, created=not output_existed)
+        return 2
     except SegmentsError as exc:
         error(str(exc), exc.code, json_progress=json_progress)
         _remove_empty_output_dir(output_dir, created=not output_existed)
@@ -124,6 +135,11 @@ def main(argv: list[str] | None = None) -> int:
 def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_progress: bool) -> dict:
     def report(stage: str, percent: float, message: str) -> None:
         status(stage, percent, message, json_progress=json_progress)
+
+    # Speaker detection is the step that needs the model. Check it before
+    # converting audio or running Demucs, which can take many minutes.
+    if not args.from_segments:
+        ensure_speaker_model_ready(args.hf_token)
 
     export_sample_rate = parse_export_sample_rate(args.sample_rate)
     audio_format = parse_export_audio_format(args.audio_format)
@@ -183,11 +199,10 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
 
             from podcast_stripper.diarize import run_diarization
 
-            token = resolve_token(args.hf_token)
             bounds = _speaker_bounds(args)
             segments = run_diarization(
                 diarize_wav,
-                token=token,
+                token=args.hf_token,
                 on_progress=report,
                 **bounds,
             )
@@ -316,6 +331,7 @@ def _print_setup(json_progress: bool) -> int:
     except Exception as exc:
         ffmpeg_error = str(exc)
 
+    model = speaker_model_status()
     payload = {
         "event": "setup",
         "version": __version__,
@@ -323,15 +339,29 @@ def _print_setup(json_progress: bool) -> int:
         "ffmpeg_ok": ffmpeg_path is not None,
         "ffmpeg_error": ffmpeg_error,
         "token_ok": token_is_set(),
-        "model": "pyannote/speaker-diarization-community-1",
-        "model_terms_url": "https://huggingface.co/pyannote/speaker-diarization-community-1",
+        "model_ok": bool(model["ready"]),
+        "model_source": model["source"],
+        "model_path": model["path"],
+        "model": MODEL_ID,
+        "model_license": "cc-by-4.0",
+        "model_terms_url": MODEL_TERMS_URL,
     }
     if json_progress:
         print(json.dumps(payload), flush=True)
     else:
         print(f"ffmpeg: {'ok — ' + ffmpeg_path if ffmpeg_path else 'missing'}")
-        print(f"Hugging Face token: {'saved' if payload['token_ok'] else 'not saved'}")
-        print("Accept model terms at", payload["model_terms_url"])
+        source = payload["model_source"]
+        if source == "missing":
+            print("speaker model: missing (no bundled model and no backup token)")
+        elif source == "token":
+            print("speaker model: not bundled; a saved token can download it")
+        else:
+            print(f"speaker model: {source} — {payload['model_path']}")
+        if payload["token_ok"]:
+            print("Hugging Face token: saved (optional backup)")
+        else:
+            print("Hugging Face token: not saved (not required when the model is bundled)")
+        print(f"model: {payload['model']} ({payload['model_license']})")
     return 0 if payload["ffmpeg_ok"] else 1
 
 
@@ -350,7 +380,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--hf-token", help="Hugging Face access token (otherwise Keychain or HF_TOKEN)")
     parser.add_argument("--save-token", metavar="TOKEN", help="Save a Hugging Face token to the Keychain and exit")
     parser.add_argument("--json-progress", action="store_true", help="Print machine-readable progress lines")
-    parser.add_argument("--check-setup", action="store_true", help="Check ffmpeg and token, then exit")
+    parser.add_argument(
+        "--check-setup",
+        action="store_true",
+        help="Check ffmpeg and whether the speaker model is ready, then exit",
+    )
     parser.add_argument(
         "--from-segments",
         help="Skip the AI diarization model and split using a JSON file of speaker turns (for tests)",

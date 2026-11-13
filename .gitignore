@@ -26,3 +26,8 @@ xcuserdata/
 
 # LAME is LGPL and loaded at runtime. Do not commit the tarball or the dylib.
 ThirdParty/lame/build/
+
+# Speaker model weights. A developer download fills the Application Support
+# cache, and the build copies that folder into the .app. Never commit weights.
+**/speaker-diarization-community-1/
+speaker-model-info.json

@@ -170,7 +170,11 @@ def test_failed_job_does_not_leave_empty_output_folder(tmp_path: Path, monkeypat
     monkeypatch.setattr(cli_mod, "convert_for_export", fake_export_convert)
     monkeypatch.setattr(cli_mod, "convert_for_diarization", fake_diarize_convert)
     monkeypatch.setattr(cli_mod, "find_ffmpeg", lambda: "/usr/bin/true")
-    monkeypatch.setattr(cli_mod, "resolve_token", lambda *_args, **_kwargs: "hf_test")
+    monkeypatch.setattr(
+        "podcast_stripper.model_bundle.find_local_model",
+        lambda: Path("/tmp/podcast-stripper-test-model"),
+    )
+    monkeypatch.setattr("podcast_stripper.model_bundle.token_is_set", lambda: True)
     monkeypatch.setattr("podcast_stripper.diarize.run_diarization", boom)
 
     code = main(

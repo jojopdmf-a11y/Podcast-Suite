@@ -187,6 +187,7 @@ enum ExportAudioFormatChoice: String, CaseIterable, Identifiable {
 
 struct EngineSetup: Equatable {
     var ffmpegOK = false
+    var modelOK = false
     var tokenOK = false
     var ffmpegPath: String?
     var message: String = "Checking setup…"
@@ -283,11 +284,13 @@ final class EngineRunner: ObservableObject {
                 {
                     let ffmpegOK = json["ffmpeg_ok"] as? Bool ?? false
                     let tokenOK = json["token_ok"] as? Bool ?? false
+                    let modelOK = json["model_ok"] as? Bool ?? tokenOK
                     setup = EngineSetup(
                         ffmpegOK: ffmpegOK,
+                        modelOK: modelOK,
                         tokenOK: tokenOK,
                         ffmpegPath: json["ffmpeg"] as? String,
-                        message: summary(ffmpegOK: ffmpegOK, tokenOK: tokenOK)
+                        message: summary(ffmpegOK: ffmpegOK, modelOK: modelOK)
                     )
                     if message.hasPrefix("Installing the engine") {
                         message = "Drop a podcast file to start."
@@ -404,17 +407,17 @@ final class EngineRunner: ObservableObject {
         }
     }
 
-    private func summary(ffmpegOK: Bool, tokenOK: Bool) -> String {
-        switch (ffmpegOK, tokenOK) {
-        case (true, true):
-            return "Ready. Drop in a podcast file."
-        case (true, false):
-            return "Add your Hugging Face token in Settings before splitting."
-        case (false, true):
-            return "ffmpeg is still missing after setup. Close this window, use Update PodStripper, then open the new window."
-        case (false, false):
-            return "Wait until the engine finishes installing, then add your Hugging Face token in Settings."
+    private func summary(ffmpegOK: Bool, modelOK: Bool) -> String {
+        if !ffmpegOK && !modelOK {
+            return "Wait until the engine finishes installing. You do not need a Hugging Face account."
         }
+        if !ffmpegOK {
+            return "ffmpeg is still missing after setup. Close this window, use Update PodStripper, then open the new window."
+        }
+        if modelOK {
+            return "Ready. Drop in a podcast file."
+        }
+        return "This copy is missing the speaker model. Re-download PodStripper, or add a backup token in Settings."
     }
 
     private static func runtimeIsReady(paths: EnginePaths) -> Bool {
@@ -707,7 +710,7 @@ final class EngineRunner: ObservableObject {
     }
 
     private func restoreIdleSetupMessage() {
-        setup.message = summary(ffmpegOK: setup.ffmpegOK, tokenOK: setup.tokenOK)
+        setup.message = summary(ffmpegOK: setup.ffmpegOK, modelOK: setup.modelOK)
     }
 
     private func forceStop(_ process: Process) {

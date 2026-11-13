@@ -40,9 +40,9 @@ def resolve_token(explicit: str | None = None) -> str:
             return value
 
     raise TokenError(
-        "No Hugging Face token found. Open the app Settings, or run "
-        "`podcast-stripper --save-token YOUR_TOKEN`. You also need to accept "
-        "the model terms at https://huggingface.co/pyannote/speaker-diarization-community-1",
+        "No bundled speaker model was found, and no Hugging Face token is saved. "
+        "Re-download PodStripper, or save a backup token with "
+        "`podcast-stripper --save-token YOUR_TOKEN`.",
         "missing_token",
     )
 
