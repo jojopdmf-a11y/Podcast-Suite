@@ -95,16 +95,16 @@ struct ContentView: View {
                 session.openWorkspace(.stripper)
             }
         }
-        .alert("Pod Lounge", isPresented: alertIsPresented) {
+        .alert(ClubPodNaming.hubScreenTitle, isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { session.alertMessage = nil }
         } message: {
             Text(session.alertMessage ?? "")
         }
-        .alert("About Pod Lounge", isPresented: aboutIsPresented) {
+        .alert("About \(ClubPodNaming.product)", isPresented: aboutIsPresented) {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Stripper splits the selected depot file into speaker tracks and music. Fixer records and mixes with PodProducer. Limiter levels the selected depot file and can save a new result. Trimmer does not process audio in this build. The first time Fixer records, macOS asks Pod Lounge for the microphone.")
+            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected depot file into speaker tracks and music. TheDecks records and mixes. TheRoof levels the selected depot file and can save a new result. TheCut does not process audio in this build. The first time TheDecks records, macOS asks Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -122,7 +122,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest, Limiter settings, and the Fixer session. It does not rewrite depot audio.")
+            Text("Save Project writes the manifest, TheRoof settings, and the TheDecks session. It does not rewrite depot audio.")
         }
     }
 
@@ -164,15 +164,17 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             HStack(spacing: 10) {
-                Text("P")
+                Text("C")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color(red: 0.03, green: 0.08, blue: 0.10))
                     .frame(width: 32, height: 32)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(LoungeTheme.cyan))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Pod Lounge")
+                    Text(ClubPodNaming.product)
                         .font(.system(size: 18, weight: .semibold))
-                    Text("Project home")
+                        .accessibilityAddTraits(.isHeader)
+                    Text(ClubPodNaming.hubScreenTitle)
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                 }
@@ -301,9 +303,7 @@ struct WorkspaceCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(workspace.title)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(LoungeTheme.text)
+                        RoomTitleText(workspace: workspace, size: 22)
                         Text(workspace.subtitle)
                             .font(.system(size: 12))
                             .foregroundStyle(LoungeTheme.textDim)

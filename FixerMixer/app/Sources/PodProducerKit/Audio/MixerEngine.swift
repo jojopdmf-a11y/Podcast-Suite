@@ -695,7 +695,7 @@ final class MixerEngine: @unchecked Sendable {
         let wantsInput = recording || inputMetering
         if !wantsInput, frameCount <= 0 {
             lock.unlock()
-            throw MixerError.engine("Load tracks first, or ADD STRIP and Record.")
+            throw MixerError.engine("Load tracks first, or use New Track and Record.")
         }
         if wantsInput, recordMap.isEmpty {
             lock.unlock()

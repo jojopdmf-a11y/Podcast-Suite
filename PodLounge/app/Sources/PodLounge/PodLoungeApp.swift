@@ -1,4 +1,5 @@
 import LilLevelerKit
+import PodLoungeCore
 import SwiftUI
 
 @main
@@ -38,7 +39,7 @@ struct PodLoungeApp: App {
                     .disabled(session.activeWorkspace == nil || session.navigationLocked)
             }
             CommandGroup(replacing: .appInfo) {
-                Button("About Pod Lounge") { session.showAbout = true }
+                Button("About \(ClubPodNaming.product)") { session.showAbout = true }
                 Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             }
             if UITestMode.enabled {

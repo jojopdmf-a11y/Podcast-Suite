@@ -1087,7 +1087,7 @@ struct ChannelStripView: View {
                         isPresented: $confirmRemove,
                         titleVisibility: .visible
                     ) {
-                        Button("Remove Strip", role: .destructive) { onRemove?() }
+                        Button("Remove Track", role: .destructive) { onRemove?() }
                         Button("Cancel", role: .cancel) {}
                     } message: {
                         Text("Only empty speaker strips can be removed. This cannot be undone.")
@@ -1189,7 +1189,7 @@ struct ChannelStripView: View {
             inputPicker
                 .frame(maxWidth: .infinity)
                 .disabled(isRecording || hardwareInputChannels <= 0)
-                .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
+                .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through TheDecks.")
             if isRecording, channel.inputChannel != nil {
                 Text("REC")
                     .font(.system(size: 8, weight: .bold, design: .rounded))

@@ -114,7 +114,7 @@ struct ContentView: View {
             isPresented: $confirmRemoveStrip,
             titleVisibility: .visible
         ) {
-            Button("Remove Strip", role: .destructive) {
+            Button("Remove Track", role: .destructive) {
                 session.removeEmptyStrip(session.selectedChannelID)
             }
             Button("Cancel", role: .cancel) {}
@@ -123,7 +123,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
-                appName: "PodProducer",
+                appName: DeckWordmark.joined,
                 tagline: "Record a strip, punch a cough, mix — still not an editor",
                 accent: MixerTheme.cyan
             )
@@ -155,17 +155,21 @@ struct ContentView: View {
     private func updateMixFromMenu(_: Notification) { session.updateMix() }
     private func saveMixFromMenu(_: Notification) { session.saveMix() }
     private func loadMixFromMenu(_: Notification) { pickMixFile() }
-    private func addStripFromMenu(_: Notification) {
-        guard session.hasSession else { return }
-        session.addBlankStrip()
+    private func addStripFromMenu(_: Notification) { newTrack() }
+    private func newTrack() {
+        guard !session.isRecording else { return }
+        session.newTrack()
     }
     private func removeStripFromMenu(_: Notification) {
-        guard session.hasSession, session.canRemoveStrip(session.selectedChannelID) else { return }
+        guard session.hasSession, !session.isRecording, session.canRemoveStrip(session.selectedChannelID) else { return }
         confirmRemoveStrip = true
     }
     private func toggleReorderFromMenu(_: Notification) {
-        guard session.hasSession, !session.isRecording else { return }
-        reorderStrips.toggle()
+        reorderStrips = ProducerTrackControls.toggledReorder(
+            reorderStrips,
+            hasSession: session.hasSession,
+            isRecording: session.isRecording
+        )
     }
     private func importFolderFromMenu(_: Notification) { pickFolder() }
     private func importFilesFromMenu(_: Notification) { pickFiles(append: session.hasSession) }
@@ -234,34 +238,47 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("PODPRODUCER")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .tracking(1.0)
-                    .foregroundStyle(MixerTheme.cyan)
+                HStack(spacing: 0) {
+                    Text(DeckWordmark.quiet)
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .foregroundStyle(MixerTheme.cyan.opacity(0.55))
+                    Text(DeckWordmark.name)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.cyan)
+                }
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(DeckWordmark.joined)
                 Text(CougarCalcBrand.versionLabel)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.lime)
             }
+            .fixedSize()
             Spacer(minLength: 8)
-            if session.hasSession {
-                HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                trackControls
+                if session.hasSession {
                     if onAddSelectedDepot != nil {
-                        Button("ADD SELECTED") { onAddSelectedDepot?() }
-                            .buttonStyle(MixerGhostButtonStyle())
-                            .disabled(session.isRecording)
-                            .accessibilityIdentifier("fixer.addSelected")
-                            .help("Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                        deskButton(
+                            "ADD SELECTED",
+                            identifier: "fixer.addSelected",
+                            enabled: !session.isRecording,
+                            help: "Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
+                        ) { onAddSelectedDepot?() }
                     }
-                    Button("BACK TO TOP") {
+                    deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
                         session.restartPlay()
                     }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Jump to the start of the timeline")
-
-                    Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
+                    Button {
                         session.togglePlay()
+                    } label: {
+                        Text(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .lineLimit(1)
                     }
                     .buttonStyle(MixerPrimaryButtonStyle(compact: true))
+                    .fixedSize(horizontal: true, vertical: false)
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(session.isRecording)
                     .help(
@@ -269,42 +286,93 @@ struct ContentView: View {
                             ? "Spacebar stops Record"
                             : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
                     )
-
-                    Button("STANDBY") {
-                        session.toggleRecordStandby()
-                    }
-                    .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
-                    .disabled(session.isBouncing || session.isRecording)
-                    .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
-
+                    Button("STANDBY") { session.toggleRecordStandby() }
+                        .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .disabled(session.isBouncing || session.isRecording)
+                        .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
                     if session.isRecording {
                         Button("STOP REC") { session.toggleRecord() }
                             .buttonStyle(MixerRecordButtonStyle())
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .disabled(session.isBouncing)
                             .help(chrome == .lounge
-                                ? "Stop recording. The take is renamed into the project depot. Leaving Fixer does not stop a take."
-                                : "Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
+                                ? "Stop recording. The take is renamed into the project depot. Back to Lounge does not stop a take."
+                                : "Stop recording. TheDecks writes WAV takes into the session folder on the Desktop.")
                     } else {
-                        Button("RECORD") { session.toggleRecord() }
-                            .buttonStyle(MixerGhostButtonStyle())
-                            .disabled(session.isBouncing)
-                            .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back. Standby is optional.")
+                        deskButton(
+                            "RECORD",
+                            enabled: !session.isBouncing,
+                            help: "Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — TheDecks does not play the mic back. Standby is optional."
+                        ) { session.toggleRecord() }
                     }
                     if session.isRecording {
                         Text("Dropouts: \(session.recordDropouts)")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize()
                     }
-                }
-            } else {
-                HStack(spacing: 8) {
-                    Button("ABOUT") { showAbout = true }
-                        .buttonStyle(MixerGhostButtonStyle())
-                    Button("LOAD MIX…") { pickMixFile() }
-                        .buttonStyle(MixerGhostButtonStyle())
+                } else {
+                    deskButton("ABOUT", help: "About TheDecks") { showAbout = true }
+                    deskButton("LOAD MIX…", help: "Load a saved mix") { pickMixFile() }
                 }
             }
         }
+    }
+
+    private var trackControls: some View {
+        HStack(spacing: 6) {
+            deskButton(
+                "NEW TRACK",
+                identifier: "decks.newTrack",
+                label: ProducerTrackControls.newTrackTitle,
+                enabled: !session.isRecording,
+                help: "Adds an empty speaker strip. If the mixer is not open yet, this starts it and adds the strip. Arm IN, then Record."
+            ) { newTrack() }
+            deskButton(
+                "REMOVE TRACK",
+                identifier: "decks.removeTrack",
+                label: ProducerTrackControls.removeTrackTitle,
+                enabled: !session.isRecording && session.canRemoveStrip(session.selectedChannelID),
+                help: "Removes the selected empty speaker strip. Strips that already have audio stay."
+            ) { removeStripFromMenu(Notification(name: .fixerMixerRemoveStrip)) }
+            Button { toggleReorderFromMenu(Notification(name: .fixerMixerToggleReorder)) } label: {
+                Text("REORDER")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+            }
+            .buttonStyle(MixerGhostButtonStyle(engaged: reorderStrips))
+            .fixedSize(horizontal: true, vertical: false)
+            .disabled(!session.hasSession || session.isRecording)
+            .accessibilityIdentifier("decks.reorder")
+            .accessibilityLabel(ProducerTrackControls.reorderTitle)
+            .help(reorderStrips ? "Reorder is on. Drag strips, then click Reorder again." : "Turn on drag-to-reorder for the strips.")
+        }
+    }
+
+    private func deskButton(
+        _ title: String,
+        identifier: String? = nil,
+        label: String? = nil,
+        enabled: Bool = true,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .lineLimit(1)
+        }
+        .buttonStyle(MixerGhostButtonStyle())
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(!enabled)
+        .help(help)
+        .modifier(DeckButtonIdentity(identifier: identifier, label: label))
     }
 
     private var dropZone: some View {
@@ -321,11 +389,11 @@ struct ContentView: View {
                 Image(systemName: "rectangle.stack.badge.play")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(MixerTheme.cyan)
-                Text("DROP AUDIO OR A STRIPPER FOLDER")
+                Text("DROP AUDIO OR A TheStrip FOLDER")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — mono files are speakers (up to 8), stereo files are beds (up to 2). A _speakers folder still builds the Stripper layout. Or NEW SESSION for an empty mixer.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — mono files are speakers (up to 8), stereo files are beds (up to 2). A _speakers folder still builds the TheStrip layout. New Track adds one empty speaker strip.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -333,7 +401,7 @@ struct ContentView: View {
                 Button("NEW SESSION") { session.newRecordSession() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
-                    .help("Empty mixer, no channels. ADD STRIP or drop audio. Arm IN, then Record. Monitor through your interface.")
+                    .help("Empty mixer, no tracks. New Track adds one empty speaker strip. Arm IN, then Record. Monitor through your interface.")
                 if let onAddSelectedDepot {
                     Button("ADD SELECTED") { onAddSelectedDepot() }
                         .buttonStyle(MixerPrimaryButtonStyle())
@@ -986,5 +1054,40 @@ struct ContentView: View {
             }
         }
         return true
+    }
+}
+
+private struct DeckButtonIdentity: ViewModifier {
+    var identifier: String?
+    var label: String?
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(OptionalAccessibilityID(identifier: identifier))
+            .modifier(OptionalAccessibilityLabel(label: label))
+    }
+}
+
+private struct OptionalAccessibilityID: ViewModifier {
+    var identifier: String?
+
+    func body(content: Content) -> some View {
+        if let identifier {
+            content.accessibilityIdentifier(identifier)
+        } else {
+            content
+        }
+    }
+}
+
+private struct OptionalAccessibilityLabel: ViewModifier {
+    var label: String?
+
+    func body(content: Content) -> some View {
+        if let label {
+            content.accessibilityLabel(label)
+        } else {
+            content
+        }
     }
 }

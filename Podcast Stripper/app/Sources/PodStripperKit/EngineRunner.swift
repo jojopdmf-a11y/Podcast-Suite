@@ -214,7 +214,7 @@ enum EngineError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .engineNotFound:
-            return "Could not find the Stripper engine. Re-download PodStripper, or keep this app next to the project folder if you are building from GitHub."
+            return "Could not find the engine. Re-download TheStrip, or keep this app next to the project folder if you are building from GitHub."
         case .uvMissing:
             return "The Python helper (uv) is missing from this copy. Use Update PodStripper, or re-download the app."
         case .startFailed(let message), .failed(let message):
@@ -449,7 +449,7 @@ final class EngineRunner: ObservableObject {
         if modelOK {
             return "Ready. Drop in a podcast file."
         }
-        return "This copy is missing the speaker model. Re-download PodStripper, or add a backup token in Settings."
+        return "This copy is missing the speaker model. Re-download TheStrip, or add a backup token in Settings."
     }
 
     /// Packaged Lounge and standalone Stripper share one venv. Ready means

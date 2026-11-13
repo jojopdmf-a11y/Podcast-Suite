@@ -14,8 +14,7 @@ struct WorkspaceScaffoldView: View {
                         .disabled(session.navigationLocked)
                         .accessibilityIdentifier("lounge.back")
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(workspace.title)
-                            .font(.system(size: 28, weight: .semibold))
+                        RoomTitleText(workspace: workspace, size: 28)
                         Text("\(workspace.title) — coming next")
                             .font(.system(size: 14, weight: .semibold))
                             .foregroundStyle(LoungeTheme.cyan)
@@ -30,7 +29,7 @@ struct WorkspaceScaffoldView: View {
                     // FUTURE Fixer integration: while a take is recording, the user
                     // stays in Fixer until Stop. Back to Lounge must not stop a take.
                     // This scaffold does not record; there is nothing to stop.
-                    Text("While a take is recording, stay in Fixer until Stop. Leaving this screen does not stop a take.")
+                    Text("While a take is recording, stay in TheDecks until Stop. Leaving this screen does not stop a take.")
                         .font(.system(size: 13))
                         .foregroundStyle(LoungeTheme.amber)
                         .padding(12)

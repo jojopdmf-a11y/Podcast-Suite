@@ -19,6 +19,27 @@ enum ProducerChrome {
     case lounge
 }
 
+/// On-screen mixer title. The is quieter in the header; the joined string is TheDecks.
+enum DeckWordmark {
+    static let quiet = "The"
+    static let name = "Decks"
+    static let joined = quiet + name
+    static let suite = "ClubPod"
+}
+
+/// New Track, Remove Track, and Reorder. The File menu posts the same actions.
+enum ProducerTrackControls {
+    static let newTrackTitle = "New Track"
+    static let removeTrackTitle = "Remove Track"
+    static let reorderTitle = "Reorder"
+
+    /// Recording and a closed mixer leave the toggle where it is.
+    static func toggledReorder(_ isOn: Bool, hasSession: Bool, isRecording: Bool) -> Bool {
+        guard hasSession, !isRecording else { return isOn }
+        return !isOn
+    }
+}
+
 /// While a take is recording, leaving is refused. The stop closure is not called.
 public enum ProducerLeaveGate {
     @discardableResult
@@ -140,7 +161,7 @@ public final class ProducerLoungeModel: ObservableObject {
     public init() {
         let session = MixerSession()
         self.session = session
-        session.permissionAppName = "Pod Lounge"
+        session.permissionAppName = "Lounge"
         session.protectTakeUntilStop = true
         session.suppressExportReveal = true
         session.onRecordingFlagChanged = { [weak self] recording in

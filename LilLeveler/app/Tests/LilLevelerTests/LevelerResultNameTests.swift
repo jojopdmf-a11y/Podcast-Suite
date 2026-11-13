@@ -51,3 +51,7 @@ import Testing
         ) == "My – Leveled (draft) notes – Leveled (MONO PODCAST)"
     )
 }
+
+@Test func theRoofAboutNamesClubPod() {
+    #expect(CougarCalcBrand.suiteName == "ClubPod")
+}

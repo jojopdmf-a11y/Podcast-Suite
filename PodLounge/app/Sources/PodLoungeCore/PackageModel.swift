@@ -80,15 +80,15 @@ public enum PackageError: Error, Equatable, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case let .unsupportedFormatVersion(found, supported):
-            "This project uses package format version \(found). Pod Lounge opens version \(supported) only and left the folder unchanged."
+            "This project uses package format version \(found). Lounge opens version \(supported) only and left the folder unchanged."
         case let .malformedManifest(detail):
-            "The project manifest is malformed (\(detail)). Pod Lounge left the folder unchanged."
+            "The project manifest is malformed (\(detail)). Lounge left the folder unchanged."
         case let .pathEscapesPackage(path):
-            "The project points outside its folder (\(path)). Pod Lounge left the folder unchanged."
+            "The project points outside its folder (\(path)). Lounge left the folder unchanged."
         case let .importFailed(detail):
             "Import failed (\(detail)). The project manifest was not changed."
         case let .notAPackage(path):
-            "That folder is not a Pod Lounge project (\(path))."
+            "That folder is not a Lounge project (\(path))."
         case let .destinationExists(path):
             "A file or folder already exists there (\(path))."
         case let .atomicWriteFailed(detail):

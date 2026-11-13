@@ -217,7 +217,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.title = "Save Pod Lounge Project As"
+        panel.title = "Save Lounge Project As"
         panel.prompt = "Save As"
         panel.nameFieldStringValue = package?.rootURL.deletingPathExtension().lastPathComponent ?? "Project"
         panel.canCreateDirectories = true
@@ -526,7 +526,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.title = "New Pod Lounge Project"
+        panel.title = "New Lounge Project"
         panel.prompt = "Create"
         panel.nameFieldStringValue = "Untitled Project"
         panel.canCreateDirectories = true
@@ -547,7 +547,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSOpenPanel()
-        panel.title = "Open Pod Lounge Project"
+        panel.title = "Open Lounge Project"
         panel.prompt = "Open"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
@@ -555,7 +555,7 @@ final class ProjectSession: ObservableObject {
         panel.message = "Choose a .podlounge folder."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let root = ProjectPackage.locateRoot(from: url) else {
-            alertMessage = "That folder does not contain a Pod Lounge manifest.json."
+            alertMessage = "That folder does not contain a Lounge manifest.json."
             return
         }
         do {

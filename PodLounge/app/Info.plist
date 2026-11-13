@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Pod Lounge</string>
+	<string>Lounge</string>
 	<key>CFBundleExecutable</key>
 	<string>PodLounge</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Pod Lounge</string>
+	<string>Lounge</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -25,7 +25,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Pod Lounge records in Fixer from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. The first recording asks for the microphone. Monitor through your interface — Pod Lounge does not play the mic back.</string>
+	<string>Lounge records in TheDecks from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. The first recording asks for the microphone. Monitor through your interface — Lounge does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

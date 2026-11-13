@@ -25,13 +25,13 @@ struct FixerMixerApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 Divider()
-                Button("Add Strip") {
+                Button("New Track") {
                     NotificationCenter.default.post(name: .fixerMixerAddStrip, object: nil)
                 }
-                Button("Remove Strip") {
+                Button("Remove Track") {
                     NotificationCenter.default.post(name: .fixerMixerRemoveStrip, object: nil)
                 }
-                Button("Reorder Strips") {
+                Button("Reorder") {
                     NotificationCenter.default.post(name: .fixerMixerToggleReorder, object: nil)
                 }
                 Divider()
@@ -51,7 +51,7 @@ struct FixerMixerApp: App {
                 }
             }
             CommandGroup(replacing: .appInfo) {
-                Button("About PodProducer") {
+                Button("About TheDecks") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
                 }
             }

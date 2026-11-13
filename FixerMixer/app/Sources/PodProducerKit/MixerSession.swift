@@ -429,7 +429,7 @@ final class MixerSession: ObservableObject {
     /// Live auto-mix / auto-duck gains in dB (one per voice). Additive while active; fader stays on baseline.
     @Published var autoGainDb: [Float] = []
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
-    @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
+    @Published var status: String = "Drop audio, a TheStrip folder, or use New Track to record from your interface."
     @Published var isPlaying = false
     @Published var isRecording = false {
         didSet {
@@ -458,8 +458,8 @@ final class MixerSession: ObservableObject {
     var protectTakeUntilStop = false
     /// Lounge imports the bounce itself and does not open Finder.
     var suppressExportReveal = false
-    /// Name in the microphone-denied status. Standalone stays PodProducer.
-    var permissionAppName = "PodProducer"
+    /// Name in the microphone-denied status. Standalone is TheDecks. Lounge sets its own.
+    var permissionAppName = "TheDecks"
     var onRecordingFlagChanged: ((Bool) -> Void)?
     var onStopRecord: (() -> Void)?
     var onWorkingTakesWritten: (([URL]) -> Void)?
@@ -622,7 +622,7 @@ final class MixerSession: ObservableObject {
         refreshWaveform()
         syncRTASource()
         syncParamsToEngine()
-        status = "Empty mixer · \(Int(sampleRate.rounded())) Hz from your interface. Drop audio or ADD STRIP. Pick IN on a speaker, then Record. Monitor through your interface."
+        status = "Empty mixer · \(Int(sampleRate.rounded())) Hz from your interface. Drop audio or use New Track. Pick IN on a speaker, then Record. Monitor through your interface."
     }
 
     private func unfinishedRecordingStatus(in folder: URL) -> String? {
@@ -648,9 +648,19 @@ final class MixerSession: ObservableObject {
             .replacingOccurrences(of: " ", with: "-")
         let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop")
-        let folder = desktop.appendingPathComponent("PodProducer-\(stamp)", isDirectory: true)
+        let folder = desktop.appendingPathComponent("TheDecks-\(stamp)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         sourceFolder = folder
+    }
+
+    /// New Track. Opens an empty mixer when there is no session, then adds one empty speaker strip.
+    func newTrack() {
+        if isRecording || refuseIfTakeIsProtected() { return }
+        if !hasSession {
+            newRecordSession()
+        }
+        guard hasSession else { return }
+        addBlankStrip()
     }
 
     func addBlankStrip() {
@@ -679,7 +689,7 @@ final class MixerSession: ObservableObject {
         selectedChannelID = ch.id
         refreshWaveform()
         syncParamsToEngine()
-        status = "Added \(ch.name). Pick IN on the strip to record it. REMOVE STRIP if you do not need it."
+        status = "Added \(ch.name). Pick IN on the strip to record it. Remove Track if you do not need it."
     }
 
     func canRemoveStrip(_ id: Int) -> Bool {
@@ -843,7 +853,7 @@ final class MixerSession: ObservableObject {
         refreshInputDevices()
         guard voices.contains(where: { $0.inputChannel != nil }) else {
             status = voices.isEmpty
-                ? "ADD STRIP, pick IN 1 / IN 2, then Standby for live meters."
+                ? "Use New Track, pick IN 1 / IN 2, then Standby for live meters."
                 : "Pick IN 1 / IN 2 on a speaker strip, then Standby for live meters."
             return
         }
@@ -910,12 +920,12 @@ final class MixerSession: ObservableObject {
         refreshInputDevices()
         guard voices.contains(where: { $0.inputChannel != nil }) else {
             status = voices.isEmpty
-                ? "ADD STRIP, pick IN 1 / IN 2, then Record. Monitor through your interface."
+                ? "Use New Track, pick IN 1 / IN 2, then Record. Monitor through your interface."
                 : "Pick IN 1 / IN 2 on a speaker strip, then Record. Monitor through your interface."
             return
         }
         if protectTakeUntilStop && recordDirectoryOverride == nil {
-            status = "Open a Pod Lounge project before recording."
+            status = "Open a Lounge project before recording."
             return
         }
         ensureSessionFolder()
@@ -963,7 +973,7 @@ final class MixerSession: ObservableObject {
             isRecording = true
             isRecordStandby = true
             sampleRate = engine.sampleRate
-            status = "Recording \(Int(sampleRate.rounded())) Hz — overwrites from the playhead on armed strips. Monitor mics on your interface, not through PodProducer."
+            status = "Recording \(Int(sampleRate.rounded())) Hz — overwrites from the playhead on armed strips. Monitor mics on your interface, not through TheDecks."
         } catch {
             status = error.localizedDescription
         }
@@ -1003,7 +1013,7 @@ final class MixerSession: ObservableObject {
                 } else if recordDirectoryOverride != nil {
                     status = "Recorded to the project depot. The take is a new result. Original files were left as they are."
                 } else {
-                    status = "Recorded to \(place). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
+                    status = "Recorded to \(place). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through TheDecks."
                 }
             } catch {
                 status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription) Kept the .recording.wav files."
@@ -1376,7 +1386,7 @@ final class MixerSession: ObservableObject {
 
         let audio = unique.filter { MixerAudioIO.isSupportedAudioURL($0) }
         if audio.isEmpty {
-            status = "Drop audio (WAV, AIFF, MP3, M4A…) or a Stripper _speakers folder."
+            status = "Drop audio (WAV, AIFF, MP3, M4A…) or a TheStrip _speakers folder."
             return
         }
         importAudioFiles(audio, append: frameCount > 0)
@@ -1896,7 +1906,7 @@ final class MixerSession: ObservableObject {
         waveformPeaks = []
         channelOrder = []
         selectedChannelID = ChannelStripState.masterID
-        status = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
+        status = "Drop audio, a TheStrip folder, or use New Track to record from your interface."
     }
 
     func producerDocument() -> ProducerSessionDocument {
@@ -2017,7 +2027,7 @@ final class MixerSession: ObservableObject {
 
     private func refuseIfTakeIsProtected() -> Bool {
         guard protectTakeUntilStop, isRecording else { return false }
-        status = "Stop the take before changing the session. Leaving Fixer will not stop it."
+        status = "Stop the take before changing the session. Back to Lounge will not stop it."
         return true
     }
 
@@ -2113,7 +2123,7 @@ enum MixerError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .notAFolder: return "Drop audio files, or a Stripper _speakers folder."
+        case .notAFolder: return "Drop audio files, or a TheStrip _speakers folder."
         case .noTracks: return "No audio tracks found in that folder."
         case .loadFailed(let m): return "Could not load audio: \(m)"
         case .engine(let m): return m

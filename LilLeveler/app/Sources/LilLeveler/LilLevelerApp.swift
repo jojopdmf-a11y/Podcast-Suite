@@ -13,7 +13,7 @@ struct LilLevelerApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {}
             CommandGroup(replacing: .appInfo) {
-                Button("About PodLeveler") {
+                Button("About TheRoof") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
                 }
                 Button("Third-Party Notices") {

@@ -367,10 +367,7 @@ public struct LevelerRootView: View {
         let lounge = mode == .lounge
         return HStack(alignment: .center, spacing: lounge ? 8 : 10) {
             VStack(alignment: .leading, spacing: lounge ? 1 : 3) {
-                Text("PODLEVELER")
-                    .font(.system(size: lounge ? 16 : 22, weight: .bold, design: .rounded))
-                    .tracking(lounge ? 0.8 : 1.1)
-                    .foregroundStyle(LevelerTheme.cyan)
+                QuietTheTitle(name: "Roof", size: lounge ? 16 : 22, color: LevelerTheme.cyan)
                     .shadow(color: LevelerTheme.cyan.opacity(0.35), radius: 6)
                     .lineLimit(1)
                     .padding(.vertical, lounge ? 0 : 2)
@@ -416,7 +413,7 @@ public struct LevelerRootView: View {
 
             VStack(spacing: 12) {
                 AboutSupportPanel(
-                    appName: "PodLeveler",
+                    appName: "TheRoof",
                     tagline: "Final mix → platform loudness",
                     accent: LevelerTheme.cyan,
                     onShowNotices: {

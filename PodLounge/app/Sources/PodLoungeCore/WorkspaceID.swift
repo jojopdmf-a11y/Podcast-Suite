@@ -9,14 +9,8 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
 
     public var id: String { rawValue }
 
-    public var title: String {
-        switch self {
-        case .stripper: "Stripper"
-        case .fixer: "Fixer"
-        case .trimmer: "Trimmer"
-        case .limiter: "Limiter"
-        }
-    }
+    /// Visible room title. No space after The: TheStrip, TheDecks, TheCut, TheRoof.
+    public var title: String { ClubPodNaming.roomLabel(for: self).joined }
 
     public var subtitle: String {
         switch self {
@@ -42,14 +36,43 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
     public var scaffoldMessage: String {
         switch self {
         case .stripper:
-            "Stripper splits the selected depot file into speaker tracks and a music track."
+            "TheStrip splits the selected depot file into speaker tracks and a music track."
         case .fixer:
-            "Fixer records and mixes with PodProducer. While a take is recording, stay here until Stop."
+            "TheDecks records and mixes. While a take is recording, stay here until Stop."
         case .trimmer:
-            "Trimmer is a new tool for cuts, intros, and commercials. There is no Trimmer app and no engine in this build."
+            "TheCut is a new tool for cuts, intros, and commercials. There is no TheCut app and no engine in this build."
         case .limiter:
-            "Limiter will set final loudness and peak. This workspace is not connected to PodLeveler, and it does not measure or limit audio."
+            "TheRoof sets final loudness and peak on the selected depot file."
         }
+    }
+}
+
+/// ClubPod is the suite. Lounge is the hub screen, not another name for ClubPod.
+public enum ClubPodNaming {
+    public static let product = "ClubPod"
+    /// Title of the hub screen. This is not the product name.
+    public static let hubScreenTitle = "Lounge"
+
+    public struct RoomLabel: Equatable, Sendable {
+        public var quiet: String
+        public var name: String
+        public var joined: String { quiet + name }
+
+        public init(quiet: String, name: String) {
+            self.quiet = quiet
+            self.name = name
+        }
+    }
+
+    public static func roomLabel(for workspace: WorkspaceID) -> RoomLabel {
+        let name: String
+        switch workspace {
+        case .stripper: name = "Strip"
+        case .fixer: name = "Decks"
+        case .trimmer: name = "Cut"
+        case .limiter: name = "Roof"
+        }
+        return RoomLabel(quiet: "The", name: name)
     }
 }
 

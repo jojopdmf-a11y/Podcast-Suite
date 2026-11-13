@@ -4,7 +4,7 @@ import SwiftUI
 /// Shared publisher identity for the CougarCalc podcast tools suite.
 enum CougarCalcBrand {
     static let company = "CougarCalc"
-    static let suiteName = "PodStudio"
+    static let suiteName = "ClubPod"
     /// Update when the real domain is live.
     static let websiteURL = URL(string: "https://cougarcalc.com")!
     static let privacyURL = URL(string: "https://cougarcalc.com/privacy")!
@@ -40,6 +40,14 @@ struct AboutSupportPanel: View {
     var tagline: String
     var accent: Color
 
+    private var badgeLetter: String {
+        if appName.hasPrefix("The"), appName.count > 3 {
+            let index = appName.index(appName.startIndex, offsetBy: 3)
+            return String(appName[index])
+        }
+        return String(appName.prefix(1))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 12) {
@@ -47,7 +55,7 @@ struct AboutSupportPanel: View {
                     .fill(accent.opacity(0.2))
                     .frame(width: 56, height: 56)
                     .overlay(
-                        Text(String(appName.prefix(1)))
+                        Text(badgeLetter)
                             .font(.system(size: 26, weight: .bold, design: .rounded))
                             .foregroundStyle(accent)
                     )
@@ -68,7 +76,7 @@ struct AboutSupportPanel: View {
             Divider().overlay(accent.opacity(0.25))
 
             VStack(alignment: .leading, spacing: 6) {
-                Text(CougarCalcBrand.suiteName)
+                Text("Part of \(CougarCalcBrand.suiteName)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(Color(red: 0.88, green: 0.94, blue: 0.96))
                 Text(CougarCalcBrand.copyrightLine)

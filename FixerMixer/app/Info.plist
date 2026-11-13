@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>PodProducer</string>
+	<string>TheDecks</string>
 	<key>CFBundleExecutable</key>
 	<string>FixerMixer</string>
 	<key>CFBundleIdentifier</key>
@@ -13,7 +13,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>PodProducer</string>
+	<string>TheDecks</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,7 +27,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>PodProducer records from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. Monitor through your interface — PodProducer does not play the mic back.</string>
+	<string>TheDecks records from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. Monitor through your interface — TheDecks does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
