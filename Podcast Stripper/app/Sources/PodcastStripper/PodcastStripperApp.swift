@@ -14,6 +14,11 @@ struct PodcastStripperApp: App {
         .windowStyle(.automatic)
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About PodStripper") {
+                    NotificationCenter.default.post(name: .showStripperAbout, object: nil)
+                }
+            }
             CommandGroup(replacing: .newItem) {}
         }
     }

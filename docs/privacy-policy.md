@@ -11,7 +11,7 @@
 
 ## Short version
 
-CougarCalc PodStudio (PodStripper, PodProducer, and PodLeveler) processes your audio **on your Mac**. We do not run a cloud render farm. We do not want your episodes. Card payments, when you buy, go through **Paddle** (they are the seller of record for checkout). Stripper’s speaker model comes from **Hugging Face** under *your* login, not ours.
+CougarCalc PodStudio (PodStripper, PodProducer, and PodLeveler) processes your audio **on your Mac**. We do not run a cloud render farm. We do not want your episodes. Card payments, when you buy, go through **Paddle** (they are the seller of record for checkout). Stripper includes the speaker model. You do not need a Hugging Face account.
 
 ---
 
@@ -57,26 +57,24 @@ Typical local data:
 | PodProducer “Save Mix” JSON | Next to your tracks, on disk |
 | PodLeveler personal loudness presets | On this Mac |
 | PodStripper output folder preference | On this Mac |
-| Hugging Face token (PodStripper) | **macOS Keychain** (not in the project, not on our servers) |
+| Optional backup token (PodStripper) | **macOS Keychain**, only if you add one. The usual app does not need it. |
 | License key for an app you bought | **macOS Keychain** on this Mac |
 
 Uninstalling the app does not automatically delete your audio. The Keychain item can be removed from PodStripper **Settings → Remove**, or from Keychain Access.
 
 ---
 
-## Hugging Face (PodStripper only)
+## Speaker model (PodStripper only)
 
-Speaker detection uses the **pyannote speaker-diarization-community-1** model. Hugging Face, not CougarCalc, hosts that model and its terms.
+Speaker detection uses **pyannote/speaker-diarization-community-1**. That model is **included with PodStripper**. It is licensed under **CC-BY-4.0**. Credit for the authors is in the app (About and Settings) and in `Podcast Stripper/NOTICE`. CougarCalc does not claim to own the model.
 
-You:
+You do **not** need a Hugging Face account to split an episode. The episode is processed on this Mac. It is not uploaded to CougarCalc or to Hugging Face.
 
-1. Create a Hugging Face account if you do not have one  
-2. Accept *their* model terms  
-3. Paste a **read** token into PodStripper Settings  
+When the app is built, a developer may use a Hugging Face token **once** to download that model. The token is not shipped in the app, not stored in the project, and not given to you.
 
-The token is stored in **Keychain**. The app uses it to **download the model onto your Mac** and to run speaker detection **locally**. Your episode is not sent to CougarCalc. Hugging Face’s own privacy policy applies to their account, website, and model download.
+Settings still has a token field. It is an **optional backup** if a copy of the app is missing the included model. If you never paste a token, nothing is stored. If you do, it stays in the **macOS Keychain** and is used only to download a replacement model.
 
-You can skip PodStripper’s speaker step only by not using PodStripper. PodProducer and PodLeveler do not need a Hugging Face account.
+The first time you open PodStripper it still installs its engine on this Mac (about 2 GB, needs Wi-Fi). That install is the Python tools, not a Hugging Face login. PodProducer and PodLeveler do not use this speaker model.
 
 ---
 
@@ -106,7 +104,7 @@ Refunds are handled through Paddle’s process (and we can still help at hello@c
 
 The Mac apps do **not** require a CougarCalc login. There is no “sign in with Apple” inside PodStripper, PodProducer, or PodLeveler today.
 
-A purchase email and license key are not a public profile. Hugging Face is a separate account you already use for the speaker model.
+A purchase email and license key are not a public profile. The Mac apps do not ask you to create a Hugging Face account.
 
 ---
 
@@ -123,7 +121,7 @@ We do not sell your personal information.
 We share only what a tool requires:
 
 - **Paddle** — checkout and tax  
-- **Hugging Face** — your token and their model download, which you set up  
+- **Hugging Face** — only if you add the optional backup token, and only to download a missing speaker model. The usual app does not send your episode there.  
 - **Email** — if you write to us  
 - **Apple** — if we use their notary/update infrastructure for signed Mac apps (they see that a build was notarized, not your audio)
 
@@ -145,8 +143,8 @@ On your Mac, you control files and Keychain items.
 
 ## Your choices
 
-- Use PodProducer and PodLeveler with no Hugging Face token  
-- Remove the PodStripper token in Settings  
+- Use any of the apps with no Hugging Face account  
+- Remove an optional PodStripper backup token in Settings, if you added one  
 - Decline a purchase  
 - Ask us at hello@cougarcalc.com to correct or delete support mail we hold  
 

@@ -25,5 +25,9 @@ let package = Package(
             dependencies: ["PodStripperKit"],
             path: "Tests/PodStripperKitTests"
         ),
+        .testTarget(
+            name: "PodcastStripperTests",
+            path: "Tests/PodcastStripperTests"
+        ),
     ]
 )

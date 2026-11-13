@@ -77,12 +77,14 @@ fi
 echo
 echo "Setup of tools is done."
 echo
-echo "You still need a free Hugging Face token (one-time):"
-echo "  1. Create an account at https://huggingface.co/join"
-echo "  2. Create a Read token at https://huggingface.co/settings/tokens"
-echo "  3. Open https://huggingface.co/pyannote/speaker-diarization-community-1"
-echo "     and accept the terms."
-echo "  4. Save the token in the Mac app Settings, or run:"
-echo "     $ROOT/scripts/run_engine.sh --save-token YOUR_TOKEN"
+echo "Customers do not need a Hugging Face account. The speaker model is"
+echo "downloaded once when you build the app, then copied into the .app."
+echo "  ./scripts/fetch_speaker_model.py"
+echo "  ./app/scripts/build_app.sh"
+echo
+echo "That download reads a developer token from the macOS Keychain"
+echo "(service com.podcaststripper.huggingface) or from HF_TOKEN in that"
+echo "process only. The token is not printed and is not shipped in the app."
+echo "A token in Settings is only a backup if the bundled model is missing."
 echo
 "$UV" run --project "$ROOT/engine" podcast-stripper --check-setup || true

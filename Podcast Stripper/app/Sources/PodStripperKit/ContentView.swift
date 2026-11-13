@@ -21,6 +21,7 @@ public struct StripperRootView: View {
     @State private var exportSampleRate: ExportSampleRateChoice = .native
     @State private var exportAudioFormat: ExportAudioFormatChoice = .wav16
     @State private var showSettings = false
+    @State private var showAbout = false
     @State private var showMacNeeds = false
     @State private var isDropTargeted = false
 
@@ -99,6 +100,12 @@ public struct StripperRootView: View {
             SettingsView {
                 runner.refreshSetup()
             }
+        }
+        .sheet(isPresented: $showAbout) {
+            AboutStripperView()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showStripperAbout)) { _ in
+            showAbout = true
         }
         .sheet(isPresented: $showMacNeeds) {
             MacNeedsView(inputFile: inputFile)
@@ -778,14 +785,26 @@ struct SettingsView: View {
     var body: some View {
         ZStack {
             StripperTheme.windowBackground.ignoresSafeArea()
+            ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Text("HUGGING FACE TOKEN")
+                Text("SPEAKER MODEL")
                     .font(.system(size: 20, weight: .bold, design: .rounded))
                     .tracking(1.2)
                     .foregroundStyle(StripperTheme.cyan)
                     .shadow(color: StripperTheme.cyan.opacity(0.35), radius: 8)
-                Text("The speaker model is free, but Hugging Face asks you to log in and accept their terms once.")
+                Text(SpeakerModelCredit.full)
                     .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+                    .textSelection(.enabled)
+                Text("HUGGING FACE TOKEN")
+                    .font(.system(size: 16, weight: .bold, design: .rounded))
+                    .tracking(1.0)
+                    .foregroundStyle(StripperTheme.cyan)
+                Text("You do not need a Hugging Face account. This token is only a backup, if this copy of the app is missing the included speaker model.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+                Text("Only if you are using that backup:")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(StripperTheme.textSecondary)
                 Link("1. Create a read token", destination: URL(string: "https://huggingface.co/settings/tokens")!)
                     .foregroundStyle(StripperTheme.cyan)
@@ -854,8 +873,9 @@ struct SettingsView: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded))
             }
             .padding(24)
+            }
         }
-        .frame(width: 540, height: 430)
+        .frame(width: 560, height: 560)
         .preferredColorScheme(.dark)
         .onAppear {
             // Attributes-only check; usually avoids the password prompt that load() triggers.

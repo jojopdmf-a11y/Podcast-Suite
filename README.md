@@ -55,7 +55,7 @@ Ballpark on that same class of Mac, 2 voices:
 | 90 minutes | ~27 minutes |
 | 2 hours | ~35–40 minutes |
 
-The first time you open PodStripper, it installs the engine on this Mac (about 2 GB, once). Homebrew is not required. The first split can add extra time while the speaker model downloads. Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The PodStripper window shows a live clock and what step it is on, then keeps the total when it finishes.
+The first time you open PodStripper, it installs the engine on this Mac (about 2 GB, once). Homebrew is not required. The speaker model is included with the app, so a split does not ask for a Hugging Face login. Three to five speakers add a little on “who spoke when”; pulling music is most of the wait and does not really care how many voices you picked. An M1/M2 is often about **1.5–2×** these numbers. The PodStripper window shows a live clock and what step it is on, then keeps the total when it finishes.
 
 PodProducer and PodLeveler are light: mix and level in real time on any Apple Silicon Mac that meets the macOS 14 floor. PodProducer loads the whole episode into memory, so long shows with several speaker tracks are happier with 16 GB.
 
@@ -63,7 +63,7 @@ The **full public write-up** for cougarcalc.com is [`docs/cougarcalc-system-requ
 
 ## Saving your work
 
-- **PodStripper** — nothing to save. Output folder and the Hugging Face token are already remembered.
+- **PodStripper** — nothing to save. The output folder is remembered. A Hugging Face token is optional, and only a backup if the included speaker model is missing.
 - **PodProducer** — **SAVE MIX** writes `FixerMixer.mix.json` next to the tracks (same filename as before, so old folders still load). Drop that folder later and the mix comes back. **LOAD MIX…** opens a mix file. You can also drop any audio files (up to 8 speakers and 2 stereo beds), or **NEW SESSION** (empty mixer at your interface’s sample rate) then **ADD STRIP** / **RECORD**. **REMOVE STRIP** deletes an unused empty speaker. **EXPORT** can convert sample rate and pick WAV 16 / WAV 24 / AIFF 24. **ALL TRACKS** stacks every waveform in one view; click a lane to zoom in on that strip. Pinch or scroll the wave to zoom; swipe left/right to move when zoomed. Shift-drag the waveform to mute a cough (silence, same length — not a cut).
 - **PodLeveler** — **CUSTOM** → **SAVE PRESET** keeps your own LUFS / true-peak target in the PLATFORM list on this Mac.
 

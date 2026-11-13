@@ -14,7 +14,7 @@ The **short** version also lives in PodStripper: **YOUR MAC** (next to Settings)
 
 Stripper is the wait. On a Mac mini M4, a **31-minute** two-person episode took **9 minutes 23 seconds** to strip (about **18 seconds of wait per minute of show**). PodProducer and PodLeveler stay light.
 
-Everything runs **on this Mac**. Nothing is uploaded. You do **not** need Homebrew. The first time you open Stripper, it installs its engine on this Mac (about 2 GB, once, needs Wi-Fi). The Hugging Face token is still a one-time Settings paste.
+Everything runs **on this Mac**. Nothing is uploaded. You do **not** need Homebrew, and you do **not** need a Hugging Face account. The first time you open Stripper, it installs its engine on this Mac (about 2 GB, once, needs Wi-Fi). The speaker model is already in the app.
 
 ---
 
@@ -48,7 +48,7 @@ Apple calls the system **macOS** (not OS X). Check: Apple menu → About This Ma
 | Chip | **Apple Silicon** — M1, M2, M3, or M4 |
 | Memory | **16 GB RAM** or more |
 | A comfortable weekly machine | **Mac mini M4** (this is the machine we timed) |
-| Disk | A couple of GB free the first time you open Stripper (engine + speaker model, one-time) |
+| Disk | A couple of GB free the first time you open Stripper (the engine installs once). The speaker model is already in the app. |
 
 Apple Silicon matters most for **PodStripper**. PodProducer and PodLeveler are native audio and feel fine on any Apple Silicon Mac that meets the macOS 14 floor.
 
@@ -97,7 +97,7 @@ These are **estimates**, not a promise. Real time moves with:
 
 - **Episode length** (almost linear — twice the show is about twice the wait)
 - **Which Mac** (M1/M2 often 1.5–2× the table; Intel much more)
-- **First open on a new Mac** — extra time while Stripper installs its engine and, on the first split, the speaker model (a couple of GB, **once**). No Homebrew.
+- **First open on a new Mac** — extra time while Stripper installs its engine (a couple of GB, **once**). No Homebrew. The speaker model is already in the app, so the first split does not stop for a Hugging Face login.
 - **Other apps open**, heat, and power mode
 - **Speaker count** — 3–5 voices add a little on “who spoke when.” Pulling music is most of the wait and does not really care how many voices you picked
 
@@ -120,7 +120,7 @@ You should not need to “wait through” PodProducer or PodLeveler the way you 
 
 The full public policy is [`docs/privacy-policy.md`](privacy-policy.md) (site: [cougarcalc.com/privacy](https://cougarcalc.com/privacy)). Terms: [`docs/terms.md`](terms.md).
 
-Audio is processed **on this Mac**. Files are not uploaded to CougarCalc or to a render server. Speaker detection uses a model you agree to on Hugging Face; that is a one-time login/token, not your episode going to the cloud.
+Audio is processed **on this Mac**. Files are not uploaded to CougarCalc or to a render server. Speaker detection uses the pyannote community-1 model included with Stripper (CC-BY-4.0). You do not need a Hugging Face account. A developer may use a token only while building the app, to download that model. The token is not in the app you receive. Your episode does not go to the cloud.
 
 ---
 
