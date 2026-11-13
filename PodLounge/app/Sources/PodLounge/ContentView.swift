@@ -22,6 +22,7 @@ struct ContentView: View {
         let reserved: CGFloat? = switch session.activeWorkspace {
         case .limiter: LevelerPaneMetrics.limiterWorkspaceMinimum
         case .stripper: 780
+        case .fixer: 960
         default: nil
         }
         guard let reserved else { return DepotChrome.maxWidth }
@@ -53,6 +54,8 @@ struct ContentView: View {
                                 LimiterWorkspaceView()
                             } else if workspace == .stripper {
                                 StripperWorkspaceView()
+                            } else if workspace == .fixer {
+                                FixerWorkspaceView()
                             } else {
                                 WorkspaceScaffoldView(workspace: workspace)
                             }
@@ -101,7 +104,7 @@ struct ContentView: View {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Stripper splits the selected depot file into speaker tracks and music. Limiter levels the selected depot file and can save a new result. Fixer and Trimmer do not process audio in this build.")
+            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Stripper splits the selected depot file into speaker tracks and music. Fixer records and mixes with PodProducer. Limiter levels the selected depot file and can save a new result. Trimmer does not process audio in this build. The first time Fixer records, macOS asks Pod Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -119,7 +122,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest and Limiter settings. It does not rewrite depot audio.")
+            Text("Save Project writes the manifest, Limiter settings, and the Fixer session. It does not rewrite depot audio.")
         }
     }
 

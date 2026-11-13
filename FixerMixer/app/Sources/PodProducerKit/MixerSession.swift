@@ -278,6 +278,8 @@ struct ChannelStripState: Identifiable, Equatable {
     /// Original Stripper speaker index (1-based), for bounce filenames.
     var speakerNumber: Int? = nil
     var fileURL: URL?
+    /// Depot asset id when this strip was loaded from a Pod Lounge project.
+    var depotAssetID: String? = nil
     var mute: Bool = false
     var solo: Bool = false
     /// Bypass all DSP (EQ + voice FX); fader/pan/mute still apply.
@@ -324,6 +326,7 @@ struct ChannelStripState: Identifiable, Equatable {
             && lhs.isStereo == rhs.isStereo
             && lhs.speakerNumber == rhs.speakerNumber
             && lhs.fileURL == rhs.fileURL
+            && lhs.depotAssetID == rhs.depotAssetID
             && lhs.mute == rhs.mute
             && lhs.solo == rhs.solo
             && lhs.dspBypass == rhs.dspBypass
@@ -428,7 +431,13 @@ final class MixerSession: ObservableObject {
     @Published var rtaBins: [Float] = Array(repeating: 0, count: RTAAnalyzer.displayBins)
     @Published var status: String = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
     @Published var isPlaying = false
-    @Published var isRecording = false
+    @Published var isRecording = false {
+        didSet {
+            if isRecording != oldValue {
+                onRecordingFlagChanged?(isRecording)
+            }
+        }
+    }
     /// Discontinuities counted while recording (skips, ring overflows, render lock misses).
     @Published var recordDropouts: Int = 0
     /// Live input metering without writing takes (Record Standby).
@@ -442,6 +451,21 @@ final class MixerSession: ObservableObject {
     @Published var sourceFolder: URL?
     /// Last mix JSON the user saved or opened, used as the Save panel default.
     @Published private(set) var lastMixURL: URL?
+    /// Lounge points this at the project recovery folder. Standalone leaves it nil
+    /// and still creates a session folder on the Desktop.
+    var recordDirectoryOverride: URL?
+    /// Lounge sets this so adding audio or a new session cannot end a take.
+    var protectTakeUntilStop = false
+    /// Lounge imports the bounce itself and does not open Finder.
+    var suppressExportReveal = false
+    /// Name in the microphone-denied status. Standalone stays PodProducer.
+    var permissionAppName = "PodProducer"
+    var onRecordingFlagChanged: ((Bool) -> Void)?
+    var onStopRecord: (() -> Void)?
+    var onWorkingTakesWritten: (([URL]) -> Void)?
+    var onBounceFinished: ((URL) -> Void)?
+    var onParametersSynced: (() -> Void)?
+    private var assetIDsByPath: [String: String] = [:]
     @Published var sampleRate: Double = 44100
     @Published var frameCount: Int = 0
     /// Voice slot id, stereo bed id (`musicID + slot`), or master.
@@ -573,6 +597,7 @@ final class MixerSession: ObservableObject {
     }
 
     func newRecordSession() {
+        if refuseIfTakeIsProtected() { return }
         if isPlaying || isRecording || isRecordStandby {
             engine.stop()
             isPlaying = false
@@ -610,6 +635,11 @@ final class MixerSession: ObservableObject {
     }
 
     private func ensureSessionFolder() {
+        if let recordDirectoryOverride {
+            try? FileManager.default.createDirectory(at: recordDirectoryOverride, withIntermediateDirectories: true)
+            sourceFolder = recordDirectoryOverride
+            return
+        }
         guard sourceFolder == nil else { return }
         let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
             .replacingOccurrences(of: "/", with: "-")
@@ -624,6 +654,7 @@ final class MixerSession: ObservableObject {
     }
 
     func addBlankStrip() {
+        if refuseIfTakeIsProtected() { return }
         guard voices.count < StripperFolderLoader.maxSpeakers else {
             status = "Mixer already has \(StripperFolderLoader.maxSpeakers) speaker strips."
             return
@@ -838,7 +869,7 @@ final class MixerSession: ObservableObject {
 
     private func continueStandbyIfMicAllowed(_ granted: Bool) {
         guard granted else {
-            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → PodProducer."
+            status = microphoneDeniedStatus()
             return
         }
         if isPlaying {
@@ -883,6 +914,10 @@ final class MixerSession: ObservableObject {
                 : "Pick IN 1 / IN 2 on a speaker strip, then Record. Monitor through your interface."
             return
         }
+        if protectTakeUntilStop && recordDirectoryOverride == nil {
+            status = "Open a Pod Lounge project before recording."
+            return
+        }
         ensureSessionFolder()
         switch AVAudioApplication.shared.recordPermission {
         case .granted:
@@ -906,7 +941,7 @@ final class MixerSession: ObservableObject {
 
     private func continueRecordIfMicAllowed(_ granted: Bool) {
         guard granted else {
-            status = "Microphone access is off. System Settings → Privacy & Security → Microphone → PodProducer."
+            status = microphoneDeniedStatus()
             return
         }
         syncParamsToEngine()
@@ -935,6 +970,7 @@ final class MixerSession: ObservableObject {
     }
 
     func stopRecord() {
+        onStopRecord?()
         let keepStandby = isRecordStandby
         engine.stop()
         isPlaying = false
@@ -955,15 +991,19 @@ final class MixerSession: ObservableObject {
                 try MixerMixFile.write(MixerMixFile.make(from: self), to: mixURL)
                 lastMixURL = mixURL
                 engine.deleteRecordingFiles()
+                onWorkingTakesWritten?(written.values.map { $0 })
+                let place = recordDirectoryOverride == nil ? folder.lastPathComponent : "the project depot"
                 let dropouts = engine.recordDropoutCount
                 if !engine.recordKeptFiles.isEmpty {
-                    status = "Recorded to \(folder.lastPathComponent) · could not load \(engine.recordKeptFiles.joined(separator: ", ")) — kept in the folder; drag it in to use it."
+                    status = "Recorded to \(place) · could not load \(engine.recordKeptFiles.joined(separator: ", ")) — kept in the folder; drag it in to use it."
                 } else if engine.recordWriteFailures > 0 {
-                    status = "Recorded to \(folder.lastPathComponent) · disk write failed during the take (disk full?) — audio may be missing; see record-log.json and your interface backup."
+                    status = "Recorded to \(place) · disk write failed during the take (disk full?) — audio may be missing; see record-log.json and your interface backup."
                 } else if dropouts > 0 {
-                    status = "Recorded to \(folder.lastPathComponent) · \(dropouts) dropout(s) logged in record-log.json — check take vs interface backup. Tape is dry (no EQ on record)."
+                    status = "Recorded to \(place) · \(dropouts) dropout(s) logged in record-log.json — check take vs interface backup. Tape is dry (no EQ on record)."
+                } else if recordDirectoryOverride != nil {
+                    status = "Recorded to the project depot. The take is a new result. Original files were left as they are."
                 } else {
-                    status = "Recorded to \(folder.lastPathComponent). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
+                    status = "Recorded to \(place). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through PodProducer."
                 }
             } catch {
                 status = "Recorded in this window. Export to keep it. Could not write takes: \(error.localizedDescription) Kept the .recording.wav files."
@@ -1222,6 +1262,7 @@ final class MixerSession: ObservableObject {
     }
 
     func loadStripperFolder(_ folder: URL) {
+        if refuseIfTakeIsProtected() { return }
         do {
             if isPlaying || isRecording || isRecordStandby {
                 engine.stop()
@@ -1342,6 +1383,7 @@ final class MixerSession: ObservableObject {
     }
 
     func importAudioFiles(_ urls: [URL], append: Bool) {
+        if refuseIfTakeIsProtected() { return }
         let incoming = Self.dedupeURLs(urls).filter {
             MixerAudioIO.isSupportedAudioURL($0) && !$0.lastPathComponent.hasPrefix(".")
         }
@@ -1380,6 +1422,7 @@ final class MixerSession: ObservableObject {
                         name: MixerAudioIO.displayName(url: url)
                     )
                     bed.fileURL = url
+                    bed.depotAssetID = assetID(for: url)
                     nextStereos.append(bed)
                 } else {
                     hitStereoCap = true
@@ -1399,6 +1442,7 @@ final class MixerSession: ObservableObject {
                 name: MixerAudioIO.displayName(url: url)
             )
             ch.fileURL = url
+            ch.depotAssetID = assetID(for: url)
             nextVoices.append(ch)
         }
 
@@ -1431,6 +1475,7 @@ final class MixerSession: ObservableObject {
             let kept = nextVoices[i]
             var ch = ChannelStripState.voice(slot: i, speakerNumber: kept.speakerNumber ?? (i + 1), name: name)
             ch.fileURL = url
+            ch.depotAssetID = kept.depotAssetID
             ch.mute = kept.mute
             ch.solo = kept.solo
             ch.dspBypass = kept.dspBypass
@@ -1455,6 +1500,7 @@ final class MixerSession: ObservableObject {
             let kept = nextStereos[i]
             var bed = ChannelStripState.stereo(slot: i, name: kept.name)
             bed.fileURL = kept.fileURL
+            bed.depotAssetID = kept.depotAssetID
             bed.mute = kept.mute
             bed.solo = kept.solo
             bed.dspBypass = kept.dspBypass
@@ -1477,7 +1523,7 @@ final class MixerSession: ObservableObject {
                 replaceChannelOrderFromCurrentStrips()
             }
             pruneBrokenMonoLinks()
-            if !append || sourceFolder == nil {
+            if recordDirectoryOverride == nil, !append || sourceFolder == nil {
                 sourceFolder = incoming.first?.deletingLastPathComponent() ?? sourceFolder
             }
             busyProgress = 0
@@ -1552,6 +1598,7 @@ final class MixerSession: ObservableObject {
             autoDuckMaxAttenuationDb: autoDuckMaxAttenuationDb,
             masterComp: masterComp
         )
+        onParametersSynced?()
     }
 
     func togglePlay() {
@@ -1737,6 +1784,11 @@ final class MixerSession: ObservableObject {
     }
 
     func suggestedExportFolder() -> URL {
+        if let recordDirectoryOverride {
+            let folder = recordDirectoryOverride.appendingPathComponent("bounce", isDirectory: true)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            return folder
+        }
         if let sourceFolder {
             return sourceFolder.appendingPathComponent("FixerMixer_bounce")
         }
@@ -1745,6 +1797,7 @@ final class MixerSession: ObservableObject {
     }
 
     func bounce(items: [MixerExportItem], folder: URL, sampleRate destRate: MixerBounceRate, format: MixerBounceFormat) {
+        if refuseIfTakeIsProtected() { return }
         guard !isBouncing else { return }
         guard frameCount > 0 else {
             status = "Load tracks before exporting."
@@ -1799,8 +1852,13 @@ final class MixerSession: ObservableObject {
                     self.isBouncing = false
                     self.busyProgress = nil
                     self.busyProgressLabel = nil
-                    self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") → \(result.folder.lastPathComponent)"
-                    NSWorkspace.shared.activateFileViewerSelecting([result.folder])
+                    if self.suppressExportReveal {
+                        self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") into the project depot."
+                        self.onBounceFinished?(result.folder)
+                    } else {
+                        self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") → \(result.folder.lastPathComponent)"
+                        NSWorkspace.shared.activateFileViewerSelecting([result.folder])
+                    }
                 }
             } catch {
                 await MainActor.run {
@@ -1818,6 +1876,162 @@ final class MixerSession: ObservableObject {
         let sec = Double(frames) / rate
         return String(format: "%d:%02d", Int(sec) / 60, Int(sec) % 60)
     }
+
+    func closeMixer() {
+        if isRecording { return }
+        if isPlaying || isRecordStandby {
+            engine.stop()
+            isPlaying = false
+            isRecordStandby = false
+        }
+        voices = []
+        stereos = []
+        mixerOpen = false
+        if recordDirectoryOverride == nil {
+            sourceFolder = nil
+        }
+        lastMixURL = nil
+        frameCount = 0
+        playheadFrame = 0
+        waveformPeaks = []
+        channelOrder = []
+        selectedChannelID = ChannelStripState.masterID
+        status = "Drop audio, a Stripper folder, or NEW SESSION to record from your interface."
+    }
+
+    func producerDocument() -> ProducerSessionDocument {
+        var tracks: [ProducerDepotTrack] = []
+        for voice in voices {
+            tracks.append(
+                ProducerDepotTrack(
+                    assetID: voice.depotAssetID,
+                    role: "speaker",
+                    speakerNumber: voice.speakerNumber,
+                    name: voice.name
+                )
+            )
+        }
+        for bed in stereos {
+            tracks.append(
+                ProducerDepotTrack(
+                    assetID: bed.depotAssetID,
+                    role: "stereo",
+                    speakerNumber: nil,
+                    name: bed.name
+                )
+            )
+        }
+        let mix: String
+        if voices.isEmpty && stereos.isEmpty {
+            mix = ""
+        } else if let data = try? MixJSON.encoder.encode(MixerMixFile.make(from: self)) {
+            mix = String(decoding: data, as: UTF8.self)
+        } else {
+            mix = ""
+        }
+        return ProducerSessionDocument(tracks: tracks, mixJSON: mix)
+    }
+
+    func restoreProducerDocument(_ document: ProducerSessionDocument, urlForAssetID: (String) -> URL?) {
+        if isRecording { return }
+        let speakers = document.tracks.filter { $0.role == "speaker" }
+        let beds = document.tracks.filter { $0.role == "stereo" }
+        var labeled: [(url: URL, assetID: String)] = []
+        var blankSpeakers = 0
+        for track in speakers {
+            if let id = track.assetID, let url = urlForAssetID(id) {
+                labeled.append((url, id))
+            } else if track.assetID == nil {
+                blankSpeakers += 1
+            }
+        }
+        for track in beds {
+            if let id = track.assetID, let url = urlForAssetID(id) {
+                labeled.append((url, id))
+            }
+        }
+        if labeled.isEmpty && blankSpeakers == 0 && document.mixJSON.isEmpty {
+            closeMixer()
+            return
+        }
+        if labeled.isEmpty {
+            closeMixer()
+            newRecordSession()
+            for _ in 0..<blankSpeakers {
+                addBlankStrip()
+            }
+            applyMixJSON(document.mixJSON)
+            return
+        }
+        importDepotAudio(labeled, append: false)
+        for _ in 0..<blankSpeakers {
+            addBlankStrip()
+        }
+        applyMixJSON(document.mixJSON)
+    }
+
+    func importDepotAudio(_ items: [(url: URL, assetID: String)], append: Bool) {
+        var map: [String: String] = [:]
+        for item in items {
+            map[item.url.standardizedFileURL.resolvingSymlinksInPath().path] = item.assetID
+        }
+        assetIDsByPath = map
+        defer { assetIDsByPath = [:] }
+        importAudioFiles(items.map(\.url), append: append)
+    }
+
+    func retargetTake(from oldURL: URL, to newURL: URL, assetID: String) {
+        let old = oldURL.standardizedFileURL.resolvingSymlinksInPath().path
+        for index in voices.indices {
+            guard let current = voices[index].fileURL else { continue }
+            if current.standardizedFileURL.resolvingSymlinksInPath().path == old {
+                voices[index].fileURL = newURL
+                voices[index].depotAssetID = assetID
+            }
+        }
+        onParametersSynced?()
+    }
+
+    func applyMixSettings(from url: URL) {
+        if refuseIfTakeIsProtected() { return }
+        do {
+            let doc = try MixerMixFile.read(from: url)
+            MixerMixFile.apply(doc, to: self)
+            syncParamsToEngine()
+            status = "Mix loaded from \(url.lastPathComponent)"
+        } catch {
+            status = "Could not load mix: \(error.localizedDescription)"
+        }
+    }
+
+    func applyMixJSON(_ json: String) {
+        guard let data = json.data(using: .utf8), !json.isEmpty,
+              let doc = try? JSONDecoder().decode(MixerMixFile.Document.self, from: data) else { return }
+        MixerMixFile.apply(doc, to: self)
+        syncParamsToEngine()
+    }
+
+    private func assetID(for url: URL) -> String? {
+        assetIDsByPath[url.standardizedFileURL.resolvingSymlinksInPath().path]
+    }
+
+    private func refuseIfTakeIsProtected() -> Bool {
+        guard protectTakeUntilStop, isRecording else { return false }
+        status = "Stop the take before changing the session. Leaving Fixer will not stop it."
+        return true
+    }
+
+    private func microphoneDeniedStatus() -> String {
+        "Microphone access is off. System Settings → Privacy & Security → Microphone → \(permissionAppName)."
+    }
+}
+
+private enum MixJSON {
+    static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
 }
 
 /// One strip in the stacked ALL TRACKS waveform view.

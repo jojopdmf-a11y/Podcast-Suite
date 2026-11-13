@@ -3,7 +3,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var session = MixerSession()
+    @ObservedObject var session: MixerSession
+    var chrome: ProducerChrome = .application
+    var onAddSelectedDepot: (() -> Void)? = nil
+    var onImportURLs: (([URL]) -> Void)? = nil
     @State private var isDropTargeted = false
     @State private var spaceMonitor: Any?
     @State private var showAbout = false
@@ -89,53 +92,18 @@ struct ContentView: View {
         .onChange(of: session.selectedInputUID) { _, _ in
             session.adoptInterfaceSampleRateIfEmpty()
         }
-        .onDisappear {
-            session.engine.stop()
-            removeSpacebarMonitor()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
-            showAbout = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerUpdateMix)) { _ in
-            session.updateMix()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix)) { _ in
-            session.saveMix()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix)) { _ in
-            pickMixFile()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerAddStrip)) { _ in
-            guard session.hasSession else { return }
-            session.addBlankStrip()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerRemoveStrip)) { _ in
-            guard session.hasSession, session.canRemoveStrip(session.selectedChannelID) else { return }
-            confirmRemoveStrip = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerToggleReorder)) { _ in
-            guard session.hasSession, !session.isRecording else { return }
-            reorderStrips.toggle()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFolder)) { _ in
-            pickFolder()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles)) { _ in
-            pickFiles(append: session.hasSession)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport)) { _ in
-            guard session.hasSession, session.frameCount > 0, !session.isBouncing else { return }
-            exportItems = session.makeExportItems()
-            exportFolder = session.suggestedExportFolder()
-            exportSampleRate = .native
-            exportFormat = .wav16
-            showExport = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput)) { _ in
-            guard session.hasSession else { return }
-            session.refreshInputDevices()
-            showInputPicker = true
-        }
+        .onDisappear(perform: endAppearance)
+        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout), perform: showAboutFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerUpdateMix), perform: updateMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix), perform: saveMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix), perform: loadMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerAddStrip), perform: addStripFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerRemoveStrip), perform: removeStripFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerToggleReorder), perform: toggleReorderFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFolder), perform: importFolderFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles), perform: importFilesFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport), perform: exportFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput), perform: pickInputFromMenu)
         .popover(isPresented: $showInputPicker, arrowEdge: .top) {
             inputDeviceMenuContent
                 .padding(12)
@@ -181,6 +149,47 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func showAboutFromMenu(_: Notification) { showAbout = true }
+    private func updateMixFromMenu(_: Notification) { session.updateMix() }
+    private func saveMixFromMenu(_: Notification) { session.saveMix() }
+    private func loadMixFromMenu(_: Notification) { pickMixFile() }
+    private func addStripFromMenu(_: Notification) {
+        guard session.hasSession else { return }
+        session.addBlankStrip()
+    }
+    private func removeStripFromMenu(_: Notification) {
+        guard session.hasSession, session.canRemoveStrip(session.selectedChannelID) else { return }
+        confirmRemoveStrip = true
+    }
+    private func toggleReorderFromMenu(_: Notification) {
+        guard session.hasSession, !session.isRecording else { return }
+        reorderStrips.toggle()
+    }
+    private func importFolderFromMenu(_: Notification) { pickFolder() }
+    private func importFilesFromMenu(_: Notification) { pickFiles(append: session.hasSession) }
+    private func exportFromMenu(_: Notification) {
+        if chrome == .lounge, session.isRecording { return }
+        guard session.hasSession, session.frameCount > 0, !session.isBouncing else { return }
+        exportItems = session.makeExportItems()
+        exportFolder = session.suggestedExportFolder()
+        exportSampleRate = .native
+        exportFormat = .wav16
+        showExport = true
+    }
+    private func pickInputFromMenu(_: Notification) {
+        guard session.hasSession else { return }
+        session.refreshInputDevices()
+        showInputPicker = true
+    }
+
+    private func endAppearance() {
+        let recordingInLounge = chrome == .lounge && session.isRecording
+        if !recordingInLounge {
+            session.engine.stop()
+        }
+        removeSpacebarMonitor()
     }
 
     private func startSession() {
@@ -236,6 +245,13 @@ struct ContentView: View {
             Spacer(minLength: 8)
             if session.hasSession {
                 HStack(spacing: 8) {
+                    if onAddSelectedDepot != nil {
+                        Button("ADD SELECTED") { onAddSelectedDepot?() }
+                            .buttonStyle(MixerGhostButtonStyle())
+                            .disabled(session.isRecording)
+                            .accessibilityIdentifier("fixer.addSelected")
+                            .help("Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                    }
                     Button("BACK TO TOP") {
                         session.restartPlay()
                     }
@@ -265,7 +281,9 @@ struct ContentView: View {
                         Button("STOP REC") { session.toggleRecord() }
                             .buttonStyle(MixerRecordButtonStyle())
                             .disabled(session.isBouncing)
-                            .help("Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
+                            .help(chrome == .lounge
+                                ? "Stop recording. The take is renamed into the project depot. Leaving Fixer does not stop a take."
+                                : "Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
                     } else {
                         Button("RECORD") { session.toggleRecord() }
                             .buttonStyle(MixerGhostButtonStyle())
@@ -316,8 +334,16 @@ struct ContentView: View {
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
                     .help("Empty mixer, no channels. ADD STRIP or drop audio. Arm IN, then Record. Monitor through your interface.")
-                Button("CHOOSE FOLDER…") { pickFolder() }
-                    .buttonStyle(MixerGhostButtonStyle())
+                if let onAddSelectedDepot {
+                    Button("ADD SELECTED") { onAddSelectedDepot() }
+                        .buttonStyle(MixerPrimaryButtonStyle())
+                        .accessibilityIdentifier("fixer.addSelected")
+                        .help("Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                }
+                if chrome == .application {
+                    Button("CHOOSE FOLDER…") { pickFolder() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                }
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Pick one or more audio files. Mono → speaker (up to 8); stereo → bed (up to 2).")
@@ -887,7 +913,11 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            session.loadStripperFolder(url)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs([url])
+            } else {
+                session.loadStripperFolder(url)
+            }
         }
     }
 
@@ -902,7 +932,11 @@ struct ContentView: View {
             : "Choose audio files — each file becomes a channel"
         panel.begin { response in
             guard response == .OK else { return }
-            session.importAudioFiles(panel.urls, append: append)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs(panel.urls)
+            } else {
+                session.importAudioFiles(panel.urls, append: append)
+            }
         }
     }
 
@@ -915,7 +949,11 @@ struct ContentView: View {
         panel.message = "Choose a mix JSON file"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            session.openMixFile(url)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs([url])
+            } else {
+                session.openMixFile(url)
+            }
         }
     }
 
@@ -941,7 +979,11 @@ struct ContentView: View {
         }
         group.notify(queue: .main) {
             let urls = collected.compactMap { $0 as? URL }
-            session.importDroppedURLs(urls)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs(urls)
+            } else {
+                session.importDroppedURLs(urls)
+            }
         }
         return true
     }

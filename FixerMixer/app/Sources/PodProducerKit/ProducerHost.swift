@@ -1,0 +1,244 @@
+import SwiftUI
+
+public extension Notification.Name {
+    static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
+    static let fixerMixerSaveMix = Notification.Name("fixerMixerSaveMix")
+    static let fixerMixerUpdateMix = Notification.Name("fixerMixerUpdateMix")
+    static let fixerMixerLoadMix = Notification.Name("fixerMixerLoadMix")
+    static let fixerMixerAddStrip = Notification.Name("fixerMixerAddStrip")
+    static let fixerMixerRemoveStrip = Notification.Name("fixerMixerRemoveStrip")
+    static let fixerMixerToggleReorder = Notification.Name("fixerMixerToggleReorder")
+    static let fixerMixerImportFolder = Notification.Name("fixerMixerImportFolder")
+    static let fixerMixerImportFiles = Notification.Name("fixerMixerImportFiles")
+    static let fixerMixerExport = Notification.Name("fixerMixerExport")
+    static let fixerMixerPickInput = Notification.Name("fixerMixerPickInput")
+}
+
+enum ProducerChrome {
+    case application
+    case lounge
+}
+
+/// While a take is recording, leaving is refused. The stop closure is not called.
+public enum ProducerLeaveGate {
+    @discardableResult
+    public static func allowLeave(isRecording: Bool, stopRecord: () -> Void) -> Bool {
+        if isRecording {
+            return false
+        }
+        _ = stopRecord
+        return true
+    }
+}
+
+public struct ProducerDepotTrack: Codable, Equatable, Sendable {
+    public var assetID: String?
+    public var role: String
+    public var speakerNumber: Int?
+    public var name: String
+
+    public init(assetID: String?, role: String, speakerNumber: Int?, name: String) {
+        self.assetID = assetID
+        self.role = role
+        self.speakerNumber = speakerNumber
+        self.name = name
+    }
+}
+
+/// Fixer session stored in the project. Audio paths are depot asset ids, never absolute paths.
+public struct ProducerSessionDocument: Codable, Equatable, Sendable {
+    public static let currentFormatVersion = 1
+
+    public var formatVersion: Int
+    public var tracks: [ProducerDepotTrack]
+    /// Same settings as `FixerMixer.mix.json`. No file paths.
+    public var mixJSON: String
+
+    public init(
+        formatVersion: Int = ProducerSessionDocument.currentFormatVersion,
+        tracks: [ProducerDepotTrack],
+        mixJSON: String
+    ) {
+        self.formatVersion = formatVersion
+        self.tracks = tracks
+        self.mixJSON = mixJSON
+    }
+
+    public static func decode(_ data: Data) -> ProducerSessionDocument? {
+        let trimmed = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "{}" { return nil }
+        return try? JSONDecoder().decode(ProducerSessionDocument.self, from: data)
+    }
+
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var text = String(decoding: try encoder.encode(self), as: UTF8.self)
+        if !text.hasSuffix("\n") { text += "\n" }
+        return Data(text.utf8)
+    }
+}
+
+public struct ProducerDepotFile: Sendable {
+    public var url: URL
+    public var assetID: String
+    public var displayName: String
+
+    public init(url: URL, assetID: String, displayName: String) {
+        self.url = url
+        self.assetID = assetID
+        self.displayName = displayName
+    }
+}
+
+public enum ProducerFolderScan {
+    public struct Found: Sendable {
+        public var audio: [URL]
+        public var mix: URL?
+    }
+
+    public static func isMixFile(_ url: URL) -> Bool {
+        MixerMixFile.isMixFile(url)
+    }
+
+    /// Audio in the folder, plus a mix sidecar when one is sitting beside it.
+    /// Absolute paths inside the sidecar are not read; the sidecar is settings only.
+    public static func audioAndMix(in folder: URL) -> Found {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: folder,
+            includingPropertiesForKeys: nil
+        )) ?? []
+        let mix = files.first { $0.lastPathComponent == MixerMixFile.fileName }
+            ?? files.first { MixerMixFile.isMixFile($0) }
+        let audio = files.filter {
+            MixerAudioIO.isSupportedAudioURL($0)
+                && !$0.lastPathComponent.hasPrefix(".")
+                && !$0.lastPathComponent.hasSuffix(".recording.wav")
+        }.sorted {
+            $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending
+        }
+        return Found(audio: audio, mix: mix)
+    }
+}
+
+/// Lounge-owned mixer. Standalone PodProducer uses `ProducerAppRoot` instead.
+@MainActor
+public final class ProducerLoungeModel: ObservableObject {
+    let session: MixerSession
+
+    @Published public private(set) var isRecording = false
+    /// How many times Stop ran. Leaving the workspace does not increment this.
+    public private(set) var stopRecordCalls = 0
+
+    public var onRecordingChange: ((Bool) -> Void)?
+    public var onTakesReady: (([URL]) -> Void)?
+    public var onExportReady: ((URL) -> Void)?
+    public var onParametersSynced: (() -> Void)?
+    public var onAddSelected: (() -> Void)?
+    public var onImportURLs: (([URL]) -> Void)?
+
+    public init() {
+        let session = MixerSession()
+        self.session = session
+        session.permissionAppName = "Pod Lounge"
+        session.protectTakeUntilStop = true
+        session.suppressExportReveal = true
+        session.onRecordingFlagChanged = { [weak self] recording in
+            self?.isRecording = recording
+            self?.onRecordingChange?(recording)
+        }
+        session.onStopRecord = { [weak self] in
+            self?.stopRecordCalls += 1
+        }
+        session.onWorkingTakesWritten = { [weak self] urls in
+            self?.onTakesReady?(urls)
+        }
+        session.onBounceFinished = { [weak self] folder in
+            self?.onExportReady?(folder)
+        }
+        session.onParametersSynced = { [weak self] in
+            self?.onParametersSynced?()
+        }
+    }
+
+    /// False while a take is recording. Does not call Stop.
+    public func requestLeave() -> Bool {
+        ProducerLeaveGate.allowLeave(isRecording: session.isRecording) {
+            self.session.stopRecord()
+        }
+    }
+
+    /// Test seam. Sets the flag without opening the microphone or the engine.
+    public func setRecordingForTest(_ recording: Bool) {
+        session.isRecording = recording
+    }
+
+    public func setRecordDirectory(_ url: URL?) {
+        session.recordDirectoryOverride = url
+    }
+
+    public var hasSession: Bool { session.hasSession }
+
+    public func captureDocument() -> ProducerSessionDocument {
+        session.producerDocument()
+    }
+
+    public func encodedDocument() -> Data {
+        (try? captureDocument().encoded()) ?? Data("{\"formatVersion\":1,\"mixJSON\":\"\",\"tracks\":[]}\n".utf8)
+    }
+
+    public func restore(data: Data?, urlForAssetID: (String) -> URL?) {
+        guard let data, let document = ProducerSessionDocument.decode(data) else {
+            session.closeMixer()
+            return
+        }
+        restore(document: document, urlForAssetID: urlForAssetID)
+    }
+
+    public func restore(document: ProducerSessionDocument, urlForAssetID: (String) -> URL?) {
+        session.restoreProducerDocument(document, urlForAssetID: urlForAssetID)
+    }
+
+    public func importDepotFiles(_ files: [ProducerDepotFile], append: Bool) {
+        session.importDepotAudio(
+            files.map { (url: $0.url, assetID: $0.assetID) },
+            append: append
+        )
+    }
+
+    public func applyMixFile(_ url: URL) {
+        session.applyMixSettings(from: url)
+    }
+
+    public func retargetTake(from oldURL: URL, to newURL: URL, assetID: String) {
+        session.retargetTake(from: oldURL, to: newURL, assetID: assetID)
+    }
+}
+
+public struct ProducerDeskView: View {
+    @ObservedObject private var model: ProducerLoungeModel
+
+    public init(model: ProducerLoungeModel) {
+        self.model = model
+    }
+
+    public var body: some View {
+        ContentView(
+            session: model.session,
+            chrome: .lounge,
+            onAddSelectedDepot: { model.onAddSelected?() },
+            onImportURLs: { urls in model.onImportURLs?(urls) }
+        )
+    }
+}
+
+/// Standalone PodProducer window.
+public struct ProducerAppRoot: View {
+    @StateObject private var session = MixerSession()
+
+    public init() {}
+
+    public var body: some View {
+        ContentView(session: session, chrome: .application)
+    }
+}

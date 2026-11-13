@@ -44,7 +44,7 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .stripper:
             "Stripper splits the selected depot file into speaker tracks and a music track."
         case .fixer:
-            "Fixer will record and mix the show. This workspace is not connected to PodProducer, and it does not record."
+            "Fixer records and mixes with PodProducer. While a take is recording, stay here until Stop."
         case .trimmer:
             "Trimmer is a new tool for cuts, intros, and commercials. There is no Trimmer app and no engine in this build."
         case .limiter:

@@ -730,3 +730,44 @@ private func expect<T: Error & Equatable>(
     #expect(try Data(contentsOf: opened.limiterSettingsURL) == settingsBefore)
     #expect(opened.manifest.projectName == "Show saved")
 }
+
+@Test func recoveredTakeRenamesIntoDepotWithoutSelectingOrOverwriting() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let package = try ProjectPackage.create(
+        at: scratch.root.appendingPathComponent("Show.podlounge"),
+        name: "Show"
+    )
+    let original = try scratch.file("episode.wav", "original-bytes")
+    let originalBytes = try Data(contentsOf: original)
+    let kept = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    #expect(package.manifest.selectedAssetID == kept.id)
+
+    let recovery = package.producerRecoveryURL
+    try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
+    let take = recovery.appendingPathComponent("Speaker_1.wav")
+    try Data("take-one".utf8).write(to: take)
+    let adopted = try package.adoptRecoveredResult(from: take, displayName: "Speaker_1", producedBy: "fixer")
+    #expect(package.manifest.selectedAssetID == kept.id)
+    #expect(!FileManager.default.fileExists(atPath: take.path))
+    let adoptedURL = try package.resolvedURL(for: adopted)
+    #expect(adoptedURL.path.contains("/depot/results/"))
+    #expect(try Data(contentsOf: adoptedURL) == Data("take-one".utf8))
+    #expect(try Data(contentsOf: original) == originalBytes)
+    #expect(adopted.producedBy == "fixer")
+    #expect(adopted.kind == .result)
+
+    let second = recovery.appendingPathComponent("Speaker_1.wav")
+    try Data("take-two".utf8).write(to: second)
+    let again = try package.adoptRecoveredResult(from: second, displayName: "Speaker_1", producedBy: "fixer")
+    #expect(again.id != adopted.id)
+    #expect(again.relativePath != adopted.relativePath)
+    #expect(try Data(contentsOf: adoptedURL) == Data("take-one".utf8))
+    #expect(package.manifest.selectedAssetID == kept.id)
+
+    let session = Data("{\"formatVersion\":1,\"mixJSON\":\"\",\"tracks\":[]}\n".utf8)
+    try package.writeProducerSession(session)
+    #expect(package.readProducerSession() == session)
+    let originalInDepot = try package.resolvedURL(for: kept)
+    #expect(try Data(contentsOf: originalInDepot) == originalBytes)
+}

@@ -30,7 +30,7 @@ struct WorkspaceScaffoldView: View {
                     // FUTURE Fixer integration: while a take is recording, the user
                     // stays in Fixer until Stop. Back to Lounge must not stop a take.
                     // This scaffold does not record; there is nothing to stop.
-                    Text("When recording exists, stay in Fixer until Stop. Leaving this screen must not stop a take. This build does not record.")
+                    Text("While a take is recording, stay in Fixer until Stop. Leaving this screen does not stop a take.")
                         .font(.system(size: 13))
                         .foregroundStyle(LoungeTheme.amber)
                         .padding(12)

@@ -24,6 +24,8 @@
 	<string>14.0</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Pod Lounge records in Fixer from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. The first recording asks for the microphone. Monitor through your interface — Pod Lounge does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>
