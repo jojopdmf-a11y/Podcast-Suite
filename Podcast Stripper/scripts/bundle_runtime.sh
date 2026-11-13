@@ -1,9 +1,14 @@
 #!/bin/zsh
 set -euo pipefail
 
-# Copies the Python engine and a macOS uv binary into PodStripper.app.
+# Copies the Python engine, the speaker model, and a macOS uv binary into the app.
 # Called from app/scripts/build_app.sh. Needs network once to fetch uv.
 # Customers still download torch/demucs on first launch into Application Support.
+#
+# The speaker model is downloaded once into Application Support, then copied
+# into Contents/Resources/models. A developer Hugging Face token (Keychain
+# service com.podcaststripper.huggingface, or HF_TOKEN for this command only)
+# is used only for that download. It is not written into the app.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="${1:-}"
@@ -64,3 +69,45 @@ fi
 chmod +x "$RES/tools/uv"
 echo "Bundled uv: $RES/tools/uv"
 echo "Bundled engine: $RES/engine"
+
+# Speaker model. Weights stay out of git. The fetch script reads a developer
+# token into memory only when the cache is missing, and never prints it.
+MODEL_DEST="${PODSTRIPPER_MODEL_CACHE:-$HOME/Library/Application Support/CougarCalc/Podcast Stripper/models/speaker-diarization-community-1}"
+FETCH="$ROOT/scripts/fetch_speaker_model.py"
+UV_BIN=""
+if [[ -x "$ROOT/tools/uv" ]]; then
+  UV_BIN="$ROOT/tools/uv"
+elif command -v uv >/dev/null 2>&1; then
+  UV_BIN="$(command -v uv)"
+fi
+
+echo "==> Preparing the speaker model…"
+set +e
+if [[ -n "$UV_BIN" ]]; then
+  "$UV_BIN" run --project "$ROOT/engine" python "$FETCH" --dest "$MODEL_DEST"
+  FETCH_STATUS=$?
+else
+  /usr/bin/python3 "$FETCH" --dest "$MODEL_DEST"
+  FETCH_STATUS=$?
+fi
+set -e
+if [[ "$FETCH_STATUS" -eq 2 ]]; then
+  echo "Stopping: the speaker model is over about 2 GB, so it was not copied into the app."
+  exit 1
+fi
+if [[ "$FETCH_STATUS" -ne 0 ]]; then
+  echo "Stopping: the speaker model could not be prepared."
+  exit "$FETCH_STATUS"
+fi
+
+echo "==> Copying speaker model into the app…"
+mkdir -p "$RES/models/speaker-diarization-community-1"
+rsync -a --delete \
+  --exclude '.cache/' \
+  --exclude 'diarization.gif' \
+  "$MODEL_DEST/" "$RES/models/speaker-diarization-community-1/"
+if [[ -f "$ROOT/NOTICE" ]]; then
+  cp "$ROOT/NOTICE" "$RES/NOTICE"
+fi
+MODEL_BYTES="$(/usr/bin/python3 -c 'import sys; from pathlib import Path; root = Path(sys.argv[1]); print(sum(p.stat().st_size for p in root.rglob("*") if p.is_file()))' "$RES/models/speaker-diarization-community-1")"
+echo "Bundled speaker model: $RES/models/speaker-diarization-community-1 ($MODEL_BYTES bytes)"

@@ -14,5 +14,9 @@ let package = Package(
             name: "PodcastStripper",
             path: "Sources/PodcastStripper"
         ),
+        .testTarget(
+            name: "PodcastStripperTests",
+            path: "Tests/PodcastStripperTests"
+        ),
     ]
 )

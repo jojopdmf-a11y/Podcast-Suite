@@ -5,10 +5,9 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from podcast_stripper.model_bundle import MODEL_ID, find_local_model
 from podcast_stripper.progress import heartbeat
 from podcast_stripper.token_store import resolve_token
-
-MODEL_ID = "pyannote/speaker-diarization-community-1"
 Segment = tuple[float, float, str]
 ProgressFn = Callable[[str, float, str], None]
 
@@ -58,12 +57,39 @@ def pick_device():
     return torch.device("cpu")
 
 
-def load_pipeline(token: str):
+def _from_pretrained_local(pipeline_cls, model_path: Path):
+    """Load a folder that already contains config.yaml and the weights.
+
+    Offline mode is only set for this call, then restored, so a later music-
+    separation download is unchanged.
+    """
+    previous = os.environ.get("HF_HUB_OFFLINE")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    try:
+        return pipeline_cls.from_pretrained(model_path)
+    finally:
+        if previous is None:
+            os.environ.pop("HF_HUB_OFFLINE", None)
+        else:
+            os.environ["HF_HUB_OFFLINE"] = previous
+
+
+def load_pipeline(token: str | None = None, *, model_path: Path | None = None):
     import torch
     from pyannote.audio import Pipeline
 
     os.environ.setdefault("PYANNOTE_METRICS_ENABLED", "0")
-    pipeline = Pipeline.from_pretrained(MODEL_ID, token=token)
+    if model_path is not None:
+        pipeline = _from_pretrained_local(Pipeline, model_path)
+        if pipeline is None:
+            raise DiarizationError(
+                "The included speaker model could not be loaded. Re-download PodStripper.",
+                "model_unreadable",
+            )
+    else:
+        if not token:
+            token = resolve_token()
+        pipeline = Pipeline.from_pretrained(MODEL_ID, token=token)
     _apply_diarize_settings(pipeline)
     device = pick_device()
     try:
@@ -251,9 +277,15 @@ def run_diarization(
     max_speakers: int | None = None,
     on_progress: ProgressFn | None = None,
 ) -> list[Segment]:
-    resolved = resolve_token(token)
+    local = find_local_model()
+    resolved = token
+    if local is None:
+        resolved = resolve_token(token)
     if on_progress:
-        on_progress("diarize", 18, "Loading speaker model…")
+        if local is not None:
+            on_progress("diarize", 18, "Loading the included speaker model…")
+        else:
+            on_progress("diarize", 18, "Loading speaker model…")
     try:
         with heartbeat(
             on_progress,
@@ -262,14 +294,25 @@ def run_diarization(
             cap_percent=28,
             message="Still loading the speaker model…",
         ):
-            pipeline, _device = load_pipeline(resolved)
+            pipeline, _device = load_pipeline(
+                None if local is not None else resolved,
+                model_path=local,
+            )
+    except DiarizationError:
+        raise
     except Exception as exc:
         message = str(exc)
+        if local is not None:
+            compact = message if len(message) <= 280 else message[:280].rstrip() + "…"
+            raise DiarizationError(
+                "Could not load the included speaker model. Re-download PodStripper. "
+                f"({compact or exc.__class__.__name__})",
+                "model_unreadable",
+            ) from exc
         if "401" in message or "gated" in message.lower() or "restricted" in message.lower():
             raise DiarizationError(
-                "Could not download the speaker model. Accept the terms at "
-                "https://huggingface.co/pyannote/speaker-diarization-community-1 "
-                "and check that your Hugging Face token is a read token.",
+                "Could not download the backup speaker model. Check the Hugging Face "
+                "token in Settings, or re-download PodStripper so the included model is used.",
                 "model_access",
             ) from exc
         raise DiarizationError(f"Could not load the speaker model: {exc}") from exc
