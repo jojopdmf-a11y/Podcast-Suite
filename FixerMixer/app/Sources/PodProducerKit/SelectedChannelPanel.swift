@@ -12,7 +12,8 @@ struct SelectedChannelPanel: View {
     @State private var isRenaming = false
     @FocusState private var nameFieldFocused: Bool
 
-    /// RTA and EQ 2520 split whatever is left above the fixed rows, equally.
+    /// RTA keeps the height it had before the header was tightened.
+    /// The points that header gave back go to EQ 2520.
     /// Para EQ / De-ess and the bottom row keep these heights at every window size.
     /// The window minimum is the strip bay from job 6; this column’s own floor stays 600.
     enum Layout {
@@ -26,22 +27,42 @@ struct SelectedChannelPanel: View {
         static let deVerbShare: CGFloat = 82
         static let ambienceShare: CGFloat = 96
         static let levelerShare: CGFloat = 110
+        /// Name stack (~32), the 5 pt gap, and the stacked input-gain knob (71).
+        static let legacyHeaderBlock: CGFloat = 108
+        /// Name, DSP ALL, clip, and input gain on one short row. The knob face sets this.
+        static let headerBlock: CGFloat = 48
+        /// Points the tighter header returns to the card column. EQ 2520 receives them.
+        static var headerSavings: CGFloat { legacyHeaderBlock - headerBlock }
 
-        /// Height each of RTA and EQ 2520 gets inside the card column.
-        /// They are always equal. A short column shares what is left; it does not
-        /// push the window up.
-        static func equalShare(columnHeight: CGFloat, voice: Bool) -> CGFloat {
+        /// Room left for RTA and EQ 2520 after the fixed module rows.
+        static func shareBudget(columnHeight: CGFloat, voice: Bool) -> CGFloat {
             let fixed = voice ? midRowH + bottomRowH : 0
             let gaps = gap * CGFloat(voice ? 3 : 1)
-            let available = max(0, columnHeight - fixed - gaps)
-            return available / 2
+            return max(0, columnHeight - fixed - gaps)
+        }
+
+        /// Half of `shareBudget`. Used to remember the RTA's height before the header shrink.
+        static func equalShare(columnHeight: CGFloat, voice: Bool) -> CGFloat {
+            shareBudget(columnHeight: columnHeight, voice: voice) / 2
+        }
+
+        /// RTA height from before the header was tightened, so this change does not shorten the graph.
+        static func rtaHeight(columnHeight: CGFloat, voice: Bool) -> CGFloat {
+            let preserved = equalShare(columnHeight: max(0, columnHeight - headerSavings), voice: voice)
+            return min(preserved, shareBudget(columnHeight: columnHeight, voice: voice))
+        }
+
+        /// EQ 2520 gets its old share plus the height the header gave back.
+        static func eqHeight(columnHeight: CGFloat, voice: Bool) -> CGFloat {
+            max(0, shareBudget(columnHeight: columnHeight, voice: voice) - rtaHeight(columnHeight: columnHeight, voice: voice))
         }
     }
 
     /// Does not set the window minimum. The strip bay does (job 6).
     static let minimumHeight: CGFloat = 600
 
-    private var canRename: Bool { !channel.isStereo }
+    /// Speaker and stereo strips. Double-click the name. The session stores it.
+    private var canRename: Bool { true }
 
     /// One face size for every rotary, including the header INPUT GAIN knob.
     private let cardKnob: CGFloat = 34
@@ -49,7 +70,6 @@ struct SelectedChannelPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Layout.gap) {
             header
-            dspAllRow
             cardColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
@@ -67,73 +87,90 @@ struct SelectedChannelPanel: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("SELECTED CHANNEL")
-                    .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .tracking(0.8)
-                    .foregroundStyle(APILook.accentBlue)
-                if canRename && isRenaming {
-                    TextField("Channel name", text: $channel.name)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(APILook.label)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(APILook.panelRaised)
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .stroke(APILook.accentBlue.opacity(0.7), lineWidth: 1)
-                        )
-                        .focused($nameFieldFocused)
-                        .onSubmit { commitRename() }
-                        .onChange(of: nameFieldFocused) { _, focused in
-                            if !focused { commitRename() }
-                        }
-                } else {
-                    Text(channel.name)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(APILook.label)
+                HStack(alignment: .center, spacing: 6) {
+                    nameControl
+                        .layoutPriority(1)
+                    if !channel.isStereo {
+                        dspAllInline
+                    }
+                }
+                HStack(spacing: 6) {
+                    Text("SELECTED CHANNEL")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .tracking(0.6)
+                        .foregroundStyle(APILook.accentBlue)
                         .lineLimit(1)
-                        .help(canRename ? "Double-click to rename" : channel.name)
-                        .onTapGesture(count: 2) {
-                            guard canRename else { return }
-                            isRenaming = true
-                            DispatchQueue.main.async { nameFieldFocused = true }
-                        }
+                        .fixedSize()
+                    Text("Export name → \(channel.bounceStemBaseName)_fixed.wav")
+                        .font(.system(size: 7, weight: .medium, design: .monospaced))
+                        .foregroundStyle(APILook.labelDim)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text(channel.fileURL?.lastPathComponent ?? "—")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(APILook.labelDim)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                 }
             }
-            if canRename {
-                Text("Export name → \(channel.bounceStemBaseName)_fixed.wav")
-                    .font(.system(size: 7, weight: .medium, design: .monospaced))
-                    .foregroundStyle(APILook.labelDim)
-                    .lineLimit(1)
-            }
             Spacer(minLength: 4)
-            Text(channel.fileURL?.lastPathComponent ?? "—")
-                .font(.system(size: 8, weight: .medium, design: .monospaced))
-                .foregroundStyle(APILook.labelDim)
+            inputGainCluster
+        }
+        .frame(height: Layout.headerBlock, alignment: .center)
+    }
+
+    @ViewBuilder
+    private var nameControl: some View {
+        if canRename && isRenaming {
+            TextField("Channel name", text: $channel.name)
+                .textFieldStyle(.plain)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.label)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(APILook.panelRaised)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(APILook.accentBlue.opacity(0.7), lineWidth: 1)
+                )
+                .focused($nameFieldFocused)
+                .onSubmit { commitRename() }
+                .onChange(of: nameFieldFocused) { _, focused in
+                    if !focused { commitRename() }
+                }
+        } else {
+            Text(channel.name)
+                .font(.system(size: 15, weight: .bold, design: .rounded))
+                .foregroundStyle(APILook.label)
                 .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .help(canRename ? "Double-click to rename" : channel.name)
+                .onTapGesture(count: 2) {
+                    guard canRename else { return }
+                    isRenaming = true
+                    DispatchQueue.main.async { nameFieldFocused = true }
+                }
         }
     }
 
-    private var dspAllRow: some View {
-        HStack(alignment: .center, spacing: 6) {
-            if !channel.isStereo {
-                BypassToggle(bypass: $channel.dspBypass)
-                Text("DSP ALL")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
-                Text(channel.dspBypass ? "Bypassed" : "Processing")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(APILook.labelDim)
-            }
-            Spacer(minLength: 8)
-            inputGainCluster
+    private var dspAllInline: some View {
+        HStack(spacing: 4) {
+            BypassToggle(bypass: $channel.dspBypass)
+            Text("DSP ALL")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(channel.dspBypass ? APILook.labelDim : APILook.ledGreen)
+                .lineLimit(1)
+            Text(channel.dspBypass ? "Bypassed" : "Processing")
+                .font(.system(size: 9, weight: .medium, design: .rounded))
+                .foregroundStyle(APILook.labelDim)
+                .lineLimit(1)
         }
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     /// Input trim sits in the header. The clip lamp is the signal right after this gain.
@@ -155,19 +192,14 @@ struct SelectedChannelPanel: View {
                 defaultValue: 0,
                 dragSensitivity: 0.55,
                 step: 0.5,
-                columnWidth: 84
+                inline: true
             )
             .help("Trim before DSP (−18…+36 dB). The strip IN meter reads after this gain. Double-click to reset. Drag snaps to 0.5 dB.")
         }
     }
 
     private func commitRename() {
-        let cleaned = channel.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty, let n = channel.speakerNumber {
-            channel.name = "SPK \(n)"
-        } else {
-            channel.name = cleaned
-        }
+        channel.commitDisplayName()
         isRenaming = false
         nameFieldFocused = false
         DispatchQueue.main.async {
@@ -179,22 +211,23 @@ struct SelectedChannelPanel: View {
         (channel.dspOrder.firstIndex(of: slot) ?? 0) + 1
     }
 
-    /// RTA and EQ 2520 are the same height and share everything above the fixed rows.
+    /// RTA stays at its previous height. EQ 2520 receives the space the header gave back.
     private var cardColumn: some View {
         GeometryReader { geo in
             let gap = Layout.gap
             let voice = !channel.isStereo
             let inner = geo.size.width
-            let share = Layout.equalShare(columnHeight: geo.size.height, voice: voice)
+            let rta = Layout.rtaHeight(columnHeight: geo.size.height, voice: voice)
+            let eq = Layout.eqHeight(columnHeight: geo.size.height, voice: voice)
             let shares = Layout.deVerbShare + Layout.ambienceShare + Layout.levelerShare
             let deVerbW = (inner - gap * 2) * Layout.deVerbShare / shares
             let ambienceW = (inner - gap * 2) * Layout.ambienceShare / shares
             VStack(alignment: .leading, spacing: gap) {
                 RTAView(bins: rtaBins, apiStyle: true)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .frame(height: share)
+                    .frame(height: rta)
                 eqCard
-                    .frame(height: share, alignment: .top)
+                    .frame(height: eq, alignment: .top)
                 if voice {
                     HStack(alignment: .top, spacing: gap) {
                         paraCard

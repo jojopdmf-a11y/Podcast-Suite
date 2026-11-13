@@ -27,11 +27,16 @@ enum DeckWordmark {
     static let suite = "ClubPod"
 }
 
-/// New Track, Remove Track, and Reorder. The File menu posts the same actions.
+/// New Track, Remove Track, Reorder, and Input Device. The File menu posts the same actions.
 enum ProducerTrackControls {
     static let newTrackTitle = "New Track"
     static let removeTrackTitle = "Remove Track"
     static let reorderTitle = "Reorder"
+    static let inputDeviceTitle = "Input Device"
+    /// Short header label so Play, Standby, and Record stay on screen.
+    static let inputDeviceButtonTitle = "INPUT"
+    /// Same notification standalone's File → Input Device… posts.
+    static let inputDeviceNotification = Notification.Name.fixerMixerPickInput
 
     /// Recording and a closed mixer leave the toggle where it is.
     static func toggledReorder(_ isOn: Bool, hasSession: Bool, isRecording: Bool) -> Bool {

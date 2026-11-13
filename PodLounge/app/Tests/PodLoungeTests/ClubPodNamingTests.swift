@@ -19,5 +19,10 @@ import Testing
         #expect(workspace.title == label.joined)
         #expect(workspace.title != ClubPodNaming.product)
         #expect(workspace.title != ClubPodNaming.hubScreenTitle)
+        #expect(workspace.depotSide == .trailing)
     }
+
+    #expect(WorkspaceID.stripper.depotSide == .trailing)
+    #expect(WorkspaceID.fixer.depotSide == .trailing)
+    #expect(WorkspaceID.limiter.depotSide == .trailing)
 }

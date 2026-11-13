@@ -903,7 +903,8 @@ struct ChannelStripView: View {
 
     private var fxDimmed: Bool { channel.dspBypass }
     private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 && !stripReorderable }
-    private var canRename: Bool { !channel.isStereo }
+    /// Speaker and stereo strips. Double-click the name. The session stores it.
+    private var canRename: Bool { true }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1305,12 +1306,7 @@ struct ChannelStripView: View {
     }
 
     private func commitRename() {
-        let cleaned = channel.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty, let n = channel.speakerNumber {
-            channel.name = "SPK \(n)"
-        } else {
-            channel.name = cleaned
-        }
+        channel.commitDisplayName()
         isRenaming = false
         nameFieldFocused = false
         DispatchQueue.main.async {

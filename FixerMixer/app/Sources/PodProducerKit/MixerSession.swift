@@ -390,6 +390,22 @@ struct ChannelStripState: Identifiable, Equatable {
         return cleaned
     }
 
+    /// Blank names fall back to the strip's original label. Speakers keep `SPK n`.
+    mutating func commitDisplayName() {
+        let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleaned.isEmpty {
+            name = cleaned
+            return
+        }
+        if let speakerNumber {
+            name = "SPK \(speakerNumber)"
+        } else if isStereo {
+            name = id == Self.musicID ? "MUSIC" : "SFX"
+        } else {
+            name = cleaned
+        }
+    }
+
     static func sanitizeFilenameComponent(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: " -_.'()[]"))
@@ -651,6 +667,19 @@ final class MixerSession: ObservableObject {
         let folder = desktop.appendingPathComponent("TheDecks-\(stamp)", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         sourceFolder = folder
+    }
+
+    /// Lets the header INPUT button and File → Input Device… choose an interface.
+    /// A closed mixer becomes an empty session and does not gain a strip. Recording refuses.
+    @discardableResult
+    func prepareForInputSelection() -> Bool {
+        if isRecording { return false }
+        if !hasSession {
+            newRecordSession()
+        } else {
+            refreshInputDevices()
+        }
+        return hasSession && !isRecording
     }
 
     /// New Track. Opens an empty mixer when there is no session, then adds one empty speaker strip.

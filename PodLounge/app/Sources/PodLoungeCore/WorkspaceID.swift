@@ -76,6 +76,17 @@ public enum ClubPodNaming {
     }
 }
 
+/// Which edge of a room the project depot uses.
+public enum DepotSide: String, Equatable, Sendable {
+    case leading
+    case trailing
+}
+
+extension WorkspaceID {
+    /// The depot sits on the right in every room, including TheStrip.
+    public var depotSide: DepotSide { .trailing }
+}
+
 public enum AssetKind: String, Codable, Sendable {
     case original
     case result

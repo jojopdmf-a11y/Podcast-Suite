@@ -26,6 +26,8 @@ struct DSPPanelKnob: View {
     var bipolar: Bool = false
     /// Wider than the face when the label needs it. Nil keeps the card column (`diameter + 8`).
     var columnWidth: CGFloat? = nil
+    /// Value and label beside the face. The header input-gain knob uses this so the row stays short.
+    var inline: Bool = false
 
     @State private var dragStartValue: Float = 0
 
@@ -52,8 +54,19 @@ struct DSPPanelKnob: View {
     private var arcStart: Double { bipolar ? sweepStart + sweep / 2 : sweepStart }
 
     var body: some View {
+        Group {
+            if inline {
+                inlineBody
+            } else {
+                stackedBody
+            }
+        }
+        .help("Double-click to reset · Option-drag for fine")
+    }
+
+    private var stackedBody: some View {
         let column = columnWidth ?? (diameter + 8)
-        VStack(spacing: 2) {
+        return VStack(spacing: 2) {
             Text(valueText(displayValue))
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                 .foregroundStyle(DSPPanelStyle.cyan)
@@ -73,7 +86,28 @@ struct DSPPanelKnob: View {
                 .minimumScaleFactor(0.6)
                 .frame(width: column, height: 12)
         }
-        .help("Double-click to reset · Option-drag for fine")
+    }
+
+    private var inlineBody: some View {
+        HStack(alignment: .center, spacing: 4) {
+            face
+                .frame(width: diameter + 8, height: diameter + 8)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(valueText(displayValue))
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(DSPPanelStyle.cyan)
+                    .lineLimit(1)
+                    .frame(height: 12)
+                Text(label)
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(DSPPanelStyle.label)
+                    .lineLimit(1)
+                    .frame(height: 11)
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private var face: some View {

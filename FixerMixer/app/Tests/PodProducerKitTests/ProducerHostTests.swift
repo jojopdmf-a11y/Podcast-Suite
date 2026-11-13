@@ -191,4 +191,103 @@ import Testing
     #expect(ProducerTrackControls.newTrackTitle == "New Track")
     #expect(ProducerTrackControls.removeTrackTitle == "Remove Track")
     #expect(ProducerTrackControls.reorderTitle == "Reorder")
+    #expect(ProducerTrackControls.inputDeviceTitle == "Input Device")
+    #expect(ProducerTrackControls.inputDeviceButtonTitle == "INPUT")
+    #expect(ProducerTrackControls.inputDeviceNotification == .fixerMixerPickInput)
+}
+
+@Test @MainActor func inputDeviceCanBeChosenWithoutTheFileMenu() {
+    let session = MixerSession()
+    #expect(session.hasSession == false)
+    #expect(session.prepareForInputSelection())
+    #expect(session.hasSession)
+    #expect(session.voices.isEmpty)
+    #expect(session.stereos.isEmpty)
+
+    session.isRecording = true
+    #expect(session.prepareForInputSelection() == false)
+    #expect(session.isRecording)
+    #expect(session.voices.isEmpty)
+    session.isRecording = false
+    session.closeMixer()
+}
+
+@Test @MainActor func stereoStripRenamePersistsThroughSaveAndLoad() throws {
+    var music = ChannelStripState.stereo(slot: 0, name: "  ")
+    music.commitDisplayName()
+    #expect(music.name == "MUSIC")
+    var sfx = ChannelStripState.stereo(slot: 1, name: "")
+    sfx.commitDisplayName()
+    #expect(sfx.name == "SFX")
+    var speaker = ChannelStripState.voice(slot: 0, speakerNumber: 2, name: " ")
+    speaker.commitDisplayName()
+    #expect(speaker.name == "SPK 2")
+
+    let scratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("producer-stereo-name-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let stereo = scratch.appendingPathComponent("bed.wav")
+    try WAVIO.write(
+        url: stereo,
+        buffer: WAVIO.Buffer(sampleRate: 48_000, channelCount: 2, samples: Array(repeating: 0.05, count: 9_600))
+    )
+
+    let session = MixerSession()
+    session.importAudioFiles([stereo], append: false)
+    let bed = try #require(session.stereos.first)
+    #expect(bed.isStereo)
+    #expect(bed.dspOrder == ChannelDSPSlot.musicDefault)
+    session.stereos[0].name = "Bumper"
+    session.stereos[0].eq.gains[0] = 3.5
+
+    let mixURL = scratch.appendingPathComponent(MixerMixFile.fileName)
+    try MixerMixFile.write(MixerMixFile.make(from: session), to: mixURL)
+    let read = try MixerMixFile.read(from: mixURL)
+    let other = MixerSession()
+    other.importAudioFiles([stereo], append: false)
+    MixerMixFile.apply(read, to: other)
+    #expect(other.stereos[0].name == "Bumper")
+    #expect(other.stereos[0].isStereo)
+    #expect(other.stereos[0].dspOrder == ChannelDSPSlot.musicDefault)
+    #expect(other.stereos[0].eq.gains[0] == 3.5)
+
+    let model = ProducerLoungeModel()
+    model.importDepotFiles([
+        ProducerDepotFile(url: stereo, assetID: "bed-1", displayName: "Bed"),
+    ], append: false)
+    model.session.stereos[0].name = "Bumper"
+    model.session.stereos[0].eq.gains[0] = 3.5
+    let document = model.captureDocument()
+    #expect(document.tracks.first { $0.role == "stereo" }?.name == "Bumper")
+
+    let restored = ProducerLoungeModel()
+    restored.restore(document: document) { id in
+        id == "bed-1" ? stereo : nil
+    }
+    #expect(restored.session.stereos[0].name == "Bumper")
+    #expect(restored.session.stereos[0].isStereo)
+    #expect(restored.session.stereos[0].dspOrder == ChannelDSPSlot.musicDefault)
+    #expect(restored.session.stereos[0].eq.gains[0] == 3.5)
+}
+
+@Test @MainActor func tighterChannelHeaderGivesTheHeightToEQ2520() {
+    let column: CGFloat = 480
+    let savings = SelectedChannelPanel.Layout.headerSavings
+    #expect(savings == 60)
+    #expect(SelectedChannelPanel.Layout.midRowH == 136)
+    #expect(SelectedChannelPanel.Layout.bottomRowH == 150)
+
+    let rta = SelectedChannelPanel.Layout.rtaHeight(columnHeight: column, voice: true)
+    let eq = SelectedChannelPanel.Layout.eqHeight(columnHeight: column, voice: true)
+    let previous = SelectedChannelPanel.Layout.equalShare(columnHeight: column - savings, voice: true)
+    #expect(abs(rta - previous) < 0.01)
+    #expect(abs((eq - rta) - savings) < 0.01)
+
+    let stereoRTA = SelectedChannelPanel.Layout.rtaHeight(columnHeight: column, voice: false)
+    let stereoEQ = SelectedChannelPanel.Layout.eqHeight(columnHeight: column, voice: false)
+    let stereoPrevious = SelectedChannelPanel.Layout.equalShare(columnHeight: column - savings, voice: false)
+    #expect(abs(stereoRTA - stereoPrevious) < 0.01)
+    #expect(abs((stereoEQ - stereoRTA) - savings) < 0.01)
 }

@@ -43,7 +43,7 @@ struct ContentView: View {
             GeometryReader { geo in
                 let maxDepot = depotMax(in: geo.size.width)
                 let width = min(maxDepot, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
-                let depotOnLeft = session.activeWorkspace == .stripper
+                let depotOnLeft = session.activeWorkspace?.depotSide == .leading
                 HStack(spacing: 0) {
                     if !depotHidden, depotOnLeft {
                         depotSidebar(width: width, maximum: maxDepot, onLeft: true)

@@ -104,6 +104,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles), perform: importFilesFromMenu)
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport), perform: exportFromMenu)
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput), perform: pickInputFromMenu)
+        .background {
+            // One shortcut for the whole desk. The header may draw Play twice while measuring a tight window.
+            Button("Play or pause") { session.togglePlay() }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(session.isRecording || !session.hasSession)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .popover(isPresented: $showInputPicker, arrowEdge: .top) {
             inputDeviceMenuContent
                 .padding(12)
@@ -183,8 +192,10 @@ struct ContentView: View {
         showExport = true
     }
     private func pickInputFromMenu(_: Notification) {
-        guard session.hasSession else { return }
-        session.refreshInputDevices()
+        guard session.prepareForInputSelection() else {
+            showInputPicker = false
+            return
+        }
         showInputPicker = true
     }
 
@@ -256,71 +267,84 @@ struct ContentView: View {
             }
             .fixedSize()
             Spacer(minLength: 8)
-            HStack(spacing: 6) {
-                trackControls
-                if session.hasSession {
-                    if onAddSelectedDepot != nil {
-                        deskButton(
-                            "ADD SELECTED",
-                            identifier: "fixer.addSelected",
-                            enabled: !session.isRecording,
-                            help: "Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
-                        ) { onAddSelectedDepot?() }
-                    }
-                    deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
-                        session.restartPlay()
-                    }
-                    Button {
-                        session.togglePlay()
-                    } label: {
-                        Text(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .lineLimit(1)
-                    }
-                    .buttonStyle(MixerPrimaryButtonStyle(compact: true))
+            // One row when it fits. A tight window stacks the track buttons above Play / Standby / Record
+            // so those three stay on screen.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    trackControls
+                    sessionControls
+                }
+                VStack(alignment: .trailing, spacing: 4) {
+                    trackControls
+                    sessionControls
+                }
+            }
+        }
+    }
+
+    private var sessionControls: some View {
+        HStack(spacing: 6) {
+            if session.hasSession {
+                if onAddSelectedDepot != nil {
+                    deskButton(
+                        "ADD SELECTED",
+                        identifier: "fixer.addSelected",
+                        enabled: !session.isRecording,
+                        help: "Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
+                    ) { onAddSelectedDepot?() }
+                }
+                deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
+                    session.restartPlay()
+                }
+                Button {
+                    session.togglePlay()
+                } label: {
+                    Text(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .buttonStyle(MixerPrimaryButtonStyle(compact: true))
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(session.isRecording)
+                .help(
+                    session.isRecording
+                        ? "Spacebar stops Record"
+                        : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
+                )
+                Button("STANDBY") { session.toggleRecordStandby() }
+                    .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(session.isRecording)
-                    .help(
-                        session.isRecording
-                            ? "Spacebar stops Record"
-                            : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
-                    )
-                    Button("STANDBY") { session.toggleRecordStandby() }
-                        .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
+                    .disabled(session.isBouncing || session.isRecording)
+                    .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
+                if session.isRecording {
+                    Button("STOP REC") { session.toggleRecord() }
+                        .buttonStyle(MixerRecordButtonStyle())
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                        .disabled(session.isBouncing || session.isRecording)
-                        .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
-                    if session.isRecording {
-                        Button("STOP REC") { session.toggleRecord() }
-                            .buttonStyle(MixerRecordButtonStyle())
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .disabled(session.isBouncing)
-                            .help(chrome == .lounge
-                                ? "Stop recording. The take is renamed into the project depot. Back to Lounge does not stop a take."
-                                : "Stop recording. TheDecks writes WAV takes into the session folder on the Desktop.")
-                    } else {
-                        deskButton(
-                            "RECORD",
-                            enabled: !session.isBouncing,
-                            help: "Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — TheDecks does not play the mic back. Standby is optional."
-                        ) { session.toggleRecord() }
-                    }
-                    if session.isRecording {
-                        Text("Dropouts: \(session.recordDropouts)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
-                            .lineLimit(1)
-                            .fixedSize()
-                    }
+                        .disabled(session.isBouncing)
+                        .help(chrome == .lounge
+                            ? "Stop recording. The take is renamed into the project depot. Back to Lounge does not stop a take."
+                            : "Stop recording. TheDecks writes WAV takes into the session folder on the Desktop.")
                 } else {
-                    deskButton("ABOUT", help: "About TheDecks") { showAbout = true }
-                    deskButton("LOAD MIX…", help: "Load a saved mix") { pickMixFile() }
+                    deskButton(
+                        "RECORD",
+                        enabled: !session.isBouncing,
+                        help: "Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — TheDecks does not play the mic back. Standby is optional."
+                    ) { session.toggleRecord() }
                 }
+                if session.isRecording {
+                    Text("Dropouts: \(session.recordDropouts)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            } else {
+                deskButton("ABOUT", help: "About TheDecks") { showAbout = true }
+                deskButton("LOAD MIX…", help: "Load a saved mix") { pickMixFile() }
             }
         }
     }
@@ -352,6 +376,15 @@ struct ContentView: View {
             .accessibilityIdentifier("decks.reorder")
             .accessibilityLabel(ProducerTrackControls.reorderTitle)
             .help(reorderStrips ? "Reorder is on. Drag strips, then click Reorder again." : "Turn on drag-to-reorder for the strips.")
+            deskButton(
+                ProducerTrackControls.inputDeviceButtonTitle,
+                identifier: "decks.inputDevice",
+                label: ProducerTrackControls.inputDeviceTitle,
+                enabled: !session.isRecording,
+                help: "Choose the audio interface TheDecks records from. With no session yet, this opens an empty mixer and then the list."
+            ) {
+                NotificationCenter.default.post(name: ProducerTrackControls.inputDeviceNotification, object: nil)
+            }
         }
     }
 
@@ -700,9 +733,10 @@ struct ContentView: View {
             .frame(maxWidth: 320)
             .disabled(session.isRecording || session.isRecordStandby)
             .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
-            Text("Also available from File → Input Device…")
+            Text("Choose the interface for the next recording. INPUT in the header opens this list. PodProducer’s File menu does too.")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(MixerTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
