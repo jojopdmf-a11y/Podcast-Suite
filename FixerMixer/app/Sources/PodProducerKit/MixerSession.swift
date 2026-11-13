@@ -476,6 +476,9 @@ final class MixerSession: ObservableObject {
     var suppressExportReveal = false
     /// Name in the microphone-denied status. Standalone is TheDecks. Lounge sets its own.
     var permissionAppName = "TheDecks"
+    var microphoneAccess = MicrophoneAccess.live
+    /// True while the denied-mic status should offer the Settings button.
+    @Published var microphoneSettingsVisible = false
     var onRecordingFlagChanged: ((Bool) -> Void)?
     var onStopRecord: (() -> Void)?
     var onWorkingTakesWritten: (([URL]) -> Void)?
@@ -707,8 +710,8 @@ final class MixerSession: ObservableObject {
         }
         let n = voices.count + 1
         var ch = ChannelStripState.voice(slot: voices.count, speakerNumber: n, name: "SPK \(n)")
-        if selectedInputChannelCount >= n {
-            ch.inputChannel = n - 1
+        if let hw = MixerHardwareInput.hardwareChannel(inputNumber: n, channelCount: selectedInputChannelCount) {
+            ch.inputChannel = hw
         }
         engine.appendSilentVoice(speakerNumber: n)
         voices.append(ch)
@@ -886,31 +889,16 @@ final class MixerSession: ObservableObject {
                 : "Pick IN 1 / IN 2 on a speaker strip, then Standby for live meters."
             return
         }
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            continueStandbyIfMicAllowed(true)
-        case .denied:
-            continueStandbyIfMicAllowed(false)
-        case .undetermined:
-            AVAudioApplication.requestRecordPermission { granted in
-                Task { @MainActor [weak self] in
-                    self?.continueStandbyIfMicAllowed(granted)
-                }
-            }
-        @unknown default:
-            AVAudioApplication.requestRecordPermission { granted in
-                Task { @MainActor [weak self] in
-                    self?.continueStandbyIfMicAllowed(granted)
-                }
-            }
-        }
+        authorizeMicrophone(continueStandbyIfMicAllowed)
     }
 
     private func continueStandbyIfMicAllowed(_ granted: Bool) {
         guard granted else {
+            microphoneSettingsVisible = true
             status = microphoneDeniedStatus()
             return
         }
+        microphoneSettingsVisible = false
         if isPlaying {
             engine.stop()
             isPlaying = false
@@ -957,32 +945,16 @@ final class MixerSession: ObservableObject {
             status = "Open a Lounge project before recording."
             return
         }
-        ensureSessionFolder()
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            continueRecordIfMicAllowed(true)
-        case .denied:
-            continueRecordIfMicAllowed(false)
-        case .undetermined:
-            AVAudioApplication.requestRecordPermission { granted in
-                Task { @MainActor [weak self] in
-                    self?.continueRecordIfMicAllowed(granted)
-                }
-            }
-        @unknown default:
-            AVAudioApplication.requestRecordPermission { granted in
-                Task { @MainActor [weak self] in
-                    self?.continueRecordIfMicAllowed(granted)
-                }
-            }
-        }
+        authorizeMicrophone(continueRecordIfMicAllowed)
     }
 
     private func continueRecordIfMicAllowed(_ granted: Bool) {
         guard granted else {
+            microphoneSettingsVisible = true
             status = microphoneDeniedStatus()
             return
         }
+        microphoneSettingsVisible = false
         syncParamsToEngine()
         ensureSessionFolder()
         guard let folder = sourceFolder else {
@@ -2060,8 +2032,87 @@ final class MixerSession: ObservableObject {
         return true
     }
 
+    func openMicrophoneSettings() {
+        microphoneAccess.openSettings()
+    }
+
+    private func authorizeMicrophone(_ proceed: @escaping (Bool) -> Void) {
+        switch MicrophoneGate.decide(status: microphoneAccess.status(), appName: permissionAppName) {
+        case .proceed:
+            microphoneSettingsVisible = false
+            proceed(true)
+        case .denied(let message):
+            microphoneSettingsVisible = true
+            status = message
+        case .request:
+            microphoneAccess.requestAccess { [weak self] granted in
+                Task { @MainActor in
+                    guard let self else { return }
+                    if granted {
+                        self.microphoneSettingsVisible = false
+                        proceed(true)
+                    } else {
+                        self.microphoneSettingsVisible = true
+                        self.status = DeckStatusCopy.microphoneDenied(appName: self.permissionAppName)
+                    }
+                }
+            }
+        }
+    }
+
     private func microphoneDeniedStatus() -> String {
-        "Microphone access is off. System Settings → Privacy & Security → Microphone → \(permissionAppName)."
+        DeckStatusCopy.microphoneDenied(appName: permissionAppName)
+    }
+}
+
+struct MicrophoneAccess {
+    var status: () -> AVAuthorizationStatus
+    var requestAccess: (@escaping (Bool) -> Void) -> Void
+    var openSettings: () -> Void
+
+    @MainActor
+    static let live = MicrophoneAccess(
+        status: { AVCaptureDevice.authorizationStatus(for: .audio) },
+        requestAccess: { handler in
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                handler(granted)
+            }
+        },
+        openSettings: { _ = MicrophoneSettings.open() }
+    )
+}
+
+enum MicrophoneSettings {
+    static let paneURLs: [URL] = [
+        URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Microphone"),
+        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"),
+    ].compactMap { $0 }
+
+    @discardableResult
+    static func open(using opener: (URL) -> Bool = { NSWorkspace.shared.open($0) }) -> Bool {
+        for url in paneURLs {
+            if opener(url) { return true }
+        }
+        return false
+    }
+}
+
+enum MicrophoneGate: Equatable {
+    case proceed
+    case request
+    case denied(String)
+
+    static func decide(status: AVAuthorizationStatus, appName: String) -> MicrophoneGate {
+        switch status {
+        case .authorized:
+            return .proceed
+        case .notDetermined:
+            return .request
+        case .denied, .restricted:
+            return .denied(DeckStatusCopy.microphoneDenied(appName: appName))
+        @unknown default:
+            return .request
+        }
     }
 }
 

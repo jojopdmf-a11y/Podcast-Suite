@@ -1218,7 +1218,7 @@ struct ChannelStripView: View {
             if hardwareInputChannels > 0 {
                 ForEach(1...hardwareInputChannels, id: \.self) { n in
                     Button {
-                        channel.inputChannel = n - 1
+                        channel.inputChannel = MixerHardwareInput.channelIndex(forInputNumber: n)
                     } label: {
                         if current == n - 1 {
                             Label("\(n)", systemImage: "checkmark")

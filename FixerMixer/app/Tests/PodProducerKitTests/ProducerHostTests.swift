@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import PodProducerKit
@@ -290,4 +291,112 @@ import Testing
     let stereoPrevious = SelectedChannelPanel.Layout.equalShare(columnHeight: column - savings, voice: false)
     #expect(abs(stereoRTA - stereoPrevious) < 0.01)
     #expect(abs((stereoEQ - stereoRTA) - savings) < 0.01)
+}
+
+@Test func monoInputMapsToChannelOne() {
+    #expect(MixerHardwareInput.hardwareChannel(inputNumber: 1, channelCount: 1) == 0)
+    #expect(MixerHardwareInput.channelIndex(forInputNumber: 1) == 0)
+    #expect(MixerHardwareInput.hardwareChannel(inputNumber: 2, channelCount: 1) == nil)
+    #expect(MixerHardwareInput.isPresent(hwChannel: 0, channelCount: 1))
+    #expect(!MixerHardwareInput.isPresent(hwChannel: 1, channelCount: 1))
+}
+
+@Test func inputOnlyMicUsesPrivateAggregate() {
+    #expect(
+        MixerInputAttachPlan.plan(
+            inputOutputChannels: 0,
+            inputUID: "BuiltInMicrophoneDevice",
+            outputUID: "BuiltInSpeakerDevice"
+        ) == .privateAggregate(clockUID: "BuiltInMicrophoneDevice", outputUID: "BuiltInSpeakerDevice")
+    )
+    #expect(
+        MixerInputAttachPlan.plan(
+            inputOutputChannels: 8,
+            inputUID: "AUDINATE-DVS-UID",
+            outputUID: "BuiltInSpeakerDevice"
+        ) == .useInputDevice
+    )
+    #expect(DeckStatusCopy.noInput(deviceName: "MacBook Pro Microphone") == "No input from MacBook Pro Microphone. Pick another INPUT.")
+    #expect(DeckStatusCopy.noInput(deviceName: "  ") == "No input from that interface. Pick another INPUT.")
+}
+
+@Test func statusLineFitsTheTitleRow() {
+    #expect(DeckStatusCopy.progressText(label: "Importing", fraction: 1) == "Importing · 100%")
+    #expect(DeckStatusCopy.progressText(label: nil, fraction: 0.5) == "50%")
+    #expect(!DeckStatusCopy.hint(lounge: true).contains("File menu"))
+    #expect(DeckStatusCopy.hint(lounge: false).contains("INPUT"))
+    #expect(DeckStatusCopy.openSettingsTitle == "Open Settings")
+    #expect(DeckStatusCopy.microphoneDenied(appName: "Lounge").contains("Turn on Lounge"))
+    #expect(DeckStatusCopy.microphoneDenied(appName: "TheDecks").contains("Turn on TheDecks"))
+}
+
+@Test func deniedMicrophoneGateNamesTheApp() {
+    let lounge = MicrophoneGate.decide(status: .denied, appName: "Lounge")
+    #expect(lounge == .denied(DeckStatusCopy.microphoneDenied(appName: "Lounge")))
+    #expect(MicrophoneGate.decide(status: .restricted, appName: "TheDecks") == .denied(DeckStatusCopy.microphoneDenied(appName: "TheDecks")))
+    #expect(MicrophoneGate.decide(status: .notDetermined, appName: "Lounge") == .request)
+    #expect(MicrophoneGate.decide(status: .authorized, appName: "Lounge") == .proceed)
+}
+
+@Test func microphoneSettingsOpensThePrivacyPane() {
+    var opened: [URL] = []
+    let ok = MicrophoneSettings.open { url in
+        opened.append(url)
+        return true
+    }
+    #expect(ok)
+    #expect(opened.count == 1)
+    #expect(opened[0].absoluteString.contains("Privacy_Microphone"))
+}
+
+@Test @MainActor func deniedMicrophoneDoesNotStartRecording() async {
+    let session = MixerSession()
+    session.permissionAppName = "TheDecks"
+    session.microphoneAccess = MicrophoneAccess(
+        status: { .denied },
+        requestAccess: { _ in },
+        openSettings: {}
+    )
+    session.newRecordSession()
+    session.addBlankStrip()
+    session.voices[0].inputChannel = 0
+    session.toggleRecord()
+    #expect(session.status == DeckStatusCopy.microphoneDenied(appName: "TheDecks"))
+    #expect(session.microphoneSettingsVisible)
+    #expect(!session.isRecording)
+
+    var opened = false
+    session.microphoneAccess.openSettings = { opened = true }
+    session.openMicrophoneSettings()
+    #expect(opened)
+}
+
+@Test @MainActor func undeterminedMicrophoneDenialStaysOffTheEngine() async {
+    let session = MixerSession()
+    session.permissionAppName = "Lounge"
+    session.microphoneAccess = MicrophoneAccess(
+        status: { .notDetermined },
+        requestAccess: { handler in handler(false) },
+        openSettings: {}
+    )
+    session.newRecordSession()
+    session.addBlankStrip()
+    session.voices[0].inputChannel = 0
+    session.toggleRecord()
+    await Task.yield()
+    #expect(session.status == DeckStatusCopy.microphoneDenied(appName: "Lounge"))
+    #expect(session.microphoneSettingsVisible)
+    #expect(!session.isRecording)
+}
+
+@Test @MainActor func loungeModelMirrorsStatusIntoTheTitleRow() {
+    let model = ProducerLoungeModel()
+    model.session.status = "Paused · 3:34"
+    model.session.busyProgress = 1
+    model.session.busyProgressLabel = "Importing"
+    model.session.microphoneSettingsVisible = true
+    #expect(model.statusLine == "Paused · 3:34")
+    #expect(model.busyProgress == 1)
+    #expect(model.busyProgressLabel == "Importing")
+    #expect(model.microphoneSettingsVisible)
 }

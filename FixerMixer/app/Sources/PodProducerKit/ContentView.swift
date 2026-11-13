@@ -65,8 +65,6 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                statusBar
-                    .padding(.top, 6)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -266,7 +264,19 @@ struct ContentView: View {
                     .foregroundStyle(MixerTheme.lime)
             }
             .fixedSize()
-            Spacer(minLength: 8)
+            if chrome == .application {
+                ProducerStatusCluster(
+                    status: session.status,
+                    progress: session.busyProgress,
+                    progressLabel: session.busyProgressLabel,
+                    showMicrophoneSettings: session.microphoneSettingsVisible,
+                    hint: DeckStatusCopy.hint(lounge: false),
+                    onOpenMicrophoneSettings: { session.openMicrophoneSettings() }
+                )
+                .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Spacer(minLength: 8)
+            }
             // One row when it fits. A tight window stacks the track buttons above Play / Standby / Record
             // so those three stay on screen.
             ViewThatFits(in: .horizontal) {
@@ -279,6 +289,7 @@ struct ContentView: View {
                     sessionControls
                 }
             }
+            .layoutPriority(1)
         }
     }
 
@@ -733,7 +744,7 @@ struct ContentView: View {
             .frame(maxWidth: 320)
             .disabled(session.isRecording || session.isRecordStandby)
             .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
-            Text("Choose the interface for the next recording. INPUT in the header opens this list. PodProducer’s File menu does too.")
+            Text("Choose the interface for the next recording. INPUT in the header opens this list.")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(MixerTheme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -968,38 +979,6 @@ struct ContentView: View {
         if masterOutDb >= 0 { return MixerTheme.meterRed }
         if masterOutDb > -12 { return MixerTheme.meterYellow }
         return MixerTheme.lime
-    }
-
-    private var statusBar: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            if let progress = session.busyProgress {
-                HStack(spacing: 6) {
-                    Capsule()
-                        .fill(MixerTheme.cyan.opacity(0.18))
-                        .frame(width: 160, height: 3)
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(MixerTheme.cyan)
-                                .frame(width: max(3, 160 * CGFloat(min(1, max(0, progress)))))
-                        }
-                    Text(session.busyProgressLabel.map { "\($0) · \(Int(progress * 100))%" } ?? String(format: "%.0f%%", progress * 100))
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(MixerTheme.lime)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
-            }
-            Text(session.status)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(MixerTheme.textPrimary)
-            if session.hasSession {
-                Text("File menu · Load/Save/Import/Export/Input · SEL opens DSP · Shift-drag waveform to silence · Option-drag clears")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func formatTime(_ frames: Int) -> String {

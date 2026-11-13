@@ -1,3 +1,4 @@
+import Combine
 import SwiftUI
 
 public extension Notification.Name {
@@ -42,6 +43,103 @@ enum ProducerTrackControls {
     static func toggledReorder(_ isOn: Bool, hasSession: Bool, isRecording: Bool) -> Bool {
         guard hasSession, !isRecording else { return isOn }
         return !isOn
+    }
+}
+
+/// Status, progress, and the mic-denied sentence shown in the title row.
+public enum DeckStatusCopy {
+    public static func microphoneDenied(appName: String) -> String {
+        "ClubPod can't use the microphone. Turn on \(appName) in System Settings › Privacy & Security › Microphone."
+    }
+
+    public static func noInput(deviceName: String?) -> String {
+        let trimmed = deviceName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            return "No input from that interface. Pick another INPUT."
+        }
+        return "No input from \(trimmed). Pick another INPUT."
+    }
+
+    public static func progressText(label: String?, fraction: Double) -> String {
+        let pct = Int((min(1, max(0, fraction)) * 100).rounded())
+        if let label, !label.isEmpty {
+            return "\(label) · \(pct)%"
+        }
+        return "\(pct)%"
+    }
+
+    public static let openSettingsTitle = "Open Settings"
+
+    public static func hint(lounge: Bool) -> String {
+        if lounge {
+            return "SEL opens DSP. Shift-drag a waveform to silence. Option-drag clears."
+        }
+        return "File menu loads, saves, imports, and exports. INPUT picks the interface. SEL opens DSP. Shift-drag a waveform to silence. Option-drag clears."
+    }
+}
+
+/// Compact status in the title row. The bottom bar is gone so the strips can use that height.
+public struct ProducerStatusCluster: View {
+    public var status: String
+    public var progress: Double?
+    public var progressLabel: String?
+    public var showMicrophoneSettings: Bool
+    public var hint: String
+    public var onOpenMicrophoneSettings: () -> Void
+
+    public init(
+        status: String,
+        progress: Double?,
+        progressLabel: String?,
+        showMicrophoneSettings: Bool,
+        hint: String,
+        onOpenMicrophoneSettings: @escaping () -> Void
+    ) {
+        self.status = status
+        self.progress = progress
+        self.progressLabel = progressLabel
+        self.showMicrophoneSettings = showMicrophoneSettings
+        self.hint = hint
+        self.onOpenMicrophoneSettings = onOpenMicrophoneSettings
+    }
+
+    public var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if let progress {
+                HStack(spacing: 6) {
+                    Capsule()
+                        .fill(MixerTheme.cyan.opacity(0.18))
+                        .frame(width: 72, height: 3)
+                        .overlay(alignment: .leading) {
+                            Capsule()
+                                .fill(MixerTheme.cyan)
+                                .frame(width: max(3, 72 * CGFloat(min(1, max(0, progress)))))
+                        }
+                    Text(DeckStatusCopy.progressText(label: progressLabel, fraction: progress))
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.lime)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+            Text(status)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(showMicrophoneSettings ? MixerTheme.danger : MixerTheme.textPrimary)
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+                .help(hint)
+                .accessibilityIdentifier("decks.status")
+            if showMicrophoneSettings {
+                Button(action: onOpenMicrophoneSettings) {
+                    Text(verbatim: DeckStatusCopy.openSettingsTitle)
+                }
+                .buttonStyle(MixerGhostButtonStyle())
+                .accessibilityIdentifier("decks.micSettings")
+                .help("Opens System Settings › Privacy & Security › Microphone")
+            }
+        }
+        .frame(maxWidth: 340, alignment: .trailing)
     }
 }
 
@@ -163,6 +261,12 @@ public final class ProducerLoungeModel: ObservableObject {
     public var onAddSelected: (() -> Void)?
     public var onImportURLs: (([URL]) -> Void)?
 
+    @Published public private(set) var statusLine = ""
+    @Published public private(set) var busyProgress: Double?
+    @Published public private(set) var busyProgressLabel: String?
+    @Published public private(set) var microphoneSettingsVisible = false
+    private var statusWatch: AnyCancellable?
+
     public init() {
         let session = MixerSession()
         self.session = session
@@ -185,6 +289,29 @@ public final class ProducerLoungeModel: ObservableObject {
         session.onParametersSynced = { [weak self] in
             self?.onParametersSynced?()
         }
+        watchStatus()
+    }
+
+    private func watchStatus() {
+        statusLine = session.status
+        busyProgress = session.busyProgress
+        busyProgressLabel = session.busyProgressLabel
+        microphoneSettingsVisible = session.microphoneSettingsVisible
+        statusWatch = Publishers.CombineLatest4(
+            session.$status,
+            session.$busyProgress,
+            session.$busyProgressLabel,
+            session.$microphoneSettingsVisible
+        ).sink { [weak self] status, progress, label, mic in
+            self?.statusLine = status
+            self?.busyProgress = progress
+            self?.busyProgressLabel = label
+            self?.microphoneSettingsVisible = mic
+        }
+    }
+
+    public func openMicrophoneSettings() {
+        session.openMicrophoneSettings()
     }
 
     /// False while a take is recording. Does not call Stop.

@@ -23,6 +23,7 @@ struct FixerWorkspaceView: View {
                         .minimumScaleFactor(0.7)
                 }
                 Spacer(minLength: 8)
+                FixerStatusSlot(model: session.fixer)
                 Button("Project Notes") { showNotes = true }
                     .buttonStyle(LoungeButtonStyle())
                     .accessibilityIdentifier("fixer.notes")
@@ -38,6 +39,21 @@ struct FixerWorkspaceView: View {
         .sheet(isPresented: $showNotes) {
             FixerNotesSheet()
         }
+    }
+}
+
+private struct FixerStatusSlot: View {
+    @ObservedObject var model: ProducerLoungeModel
+
+    var body: some View {
+        ProducerStatusCluster(
+            status: model.statusLine,
+            progress: model.busyProgress,
+            progressLabel: model.busyProgressLabel,
+            showMicrophoneSettings: model.microphoneSettingsVisible,
+            hint: DeckStatusCopy.hint(lounge: true),
+            onOpenMicrophoneSettings: { model.openMicrophoneSettings() }
+        )
     }
 }
 
