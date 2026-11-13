@@ -7,12 +7,23 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "PodStripperKit", targets: ["PodStripperKit"]),
         .executable(name: "PodcastStripper", targets: ["PodcastStripper"]),
     ],
     targets: [
+        .target(
+            name: "PodStripperKit",
+            path: "Sources/PodStripperKit"
+        ),
         .executableTarget(
             name: "PodcastStripper",
+            dependencies: ["PodStripperKit"],
             path: "Sources/PodcastStripper"
+        ),
+        .testTarget(
+            name: "PodStripperKitTests",
+            dependencies: ["PodStripperKit"],
+            path: "Tests/PodStripperKitTests"
         ),
         .testTarget(
             name: "PodcastStripperTests",

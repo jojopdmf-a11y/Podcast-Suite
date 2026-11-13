@@ -1,6 +1,6 @@
 import SwiftUI
 
-extension Notification.Name {
+public extension Notification.Name {
     static let showStripperAbout = Notification.Name("cougarCalcShowStripperAbout")
 }
 

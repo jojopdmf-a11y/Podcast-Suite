@@ -11,6 +11,8 @@ struct WorkspaceScaffoldView: View {
                 HStack(alignment: .center, spacing: 14) {
                     Button("← Lounge") { session.leaveWorkspace() }
                         .buttonStyle(LoungeButtonStyle())
+                        .disabled(session.navigationLocked)
+                        .accessibilityIdentifier("lounge.back")
                     VStack(alignment: .leading, spacing: 2) {
                         Text(workspace.title)
                             .font(.system(size: 28, weight: .semibold))

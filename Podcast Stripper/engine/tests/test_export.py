@@ -11,6 +11,7 @@ import pytest
 from podcast_stripper.export import (
     build_nonvoice_track,
     build_speaker_track,
+    downmix_to_mono,
     export_speaker_tracks,
     load_wav,
     save_wav,
@@ -103,7 +104,9 @@ def test_export_writes_aligned_wavs_and_manifest(tmp_path: Path):
     second, second_sr = load_wav(paths[1])
     original, _ = load_wav(source)
     assert first_sr == sample_rate == second_sr
-    assert first.shape == original.shape == second.shape
+    assert original.shape[1] == 1
+    assert first.shape == (original.shape[0], 1)
+    assert second.shape == (original.shape[0], 1)
     # Soft gates leave a short hold; the middle of the gap should stay quiet.
     mid = sample_rate + sample_rate // 2
     assert np.max(np.abs(first[mid : mid + 1000])) < 500
@@ -113,6 +116,7 @@ def test_export_writes_aligned_wavs_and_manifest(tmp_path: Path):
     music, music_sr = load_wav(music_path)
     assert music_sr == sample_rate
     assert music.shape == original.shape
+    assert music.shape[1] == 1
     assert np.max(np.abs(music[sample_rate // 4 : sample_rate // 2])) < 500
     assert manifest["music"]["method"] in {"gaps", "music_aware"}
 
@@ -358,6 +362,123 @@ def test_parse_export_sample_rate_native_and_known_rates():
         raise AssertionError("expected ValueError")
     except ValueError:
         pass
+
+
+def _constant_stereo(frames: int, left: int, right: int) -> np.ndarray:
+    return np.column_stack(
+        [
+            np.full(frames, left, dtype=np.int16),
+            np.full(frames, right, dtype=np.int16),
+        ]
+    )
+
+
+def _aiff_channels(path: Path) -> int:
+    data = path.read_bytes()
+    index = data.find(b"COMM")
+    assert index >= 0, "AIFF file has no COMM chunk"
+    return int.from_bytes(data[index + 8 : index + 10], "big")
+
+
+def test_downmix_to_mono_averages_channels_and_leaves_mono_alone():
+    stereo = np.array([[1000, 3000], [1, 2], [-8, 2]], dtype=np.int16)
+    mono = downmix_to_mono(stereo)
+    assert mono.shape == (3, 1)
+    assert int(mono[0, 0]) == 2000
+    assert int(mono[1, 0]) == 2
+    assert int(mono[2, 0]) == -3
+    wider = np.array([[3, 6, 9]], dtype=np.int16)
+    assert int(downmix_to_mono(wider)[0, 0]) == 6
+    already = np.array([[1000], [-3000], [0]], dtype=np.int16)
+    assert np.array_equal(downmix_to_mono(already), already)
+    assert np.array_equal(downmix_to_mono(already.reshape(-1)), already)
+
+
+def test_export_stereo_source_writes_mono_speakers_and_stereo_music(tmp_path: Path):
+    sample_rate = 8000
+    frames = sample_rate
+    source = tmp_path / "stereo.wav"
+    # Intro is unassigned so the music file can keep a distinct left and right.
+    intro = _constant_stereo(sample_rate // 2, 12000, 4000)
+    speech = _constant_stereo(sample_rate // 2, 8000, 2000)
+    save_wav(source, np.concatenate([intro, speech], axis=0), sample_rate)
+    output_dir = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output_dir,
+        [(0.5, 1.0, "SPEAKER_00")],
+        work_wav=source,
+    )
+
+    speaker, speaker_sr = load_wav(output_dir / "Speaker_1.wav")
+    music, music_sr = load_wav(output_dir / "Music_and_SFX.wav")
+    assert speaker_sr == music_sr == sample_rate
+    assert speaker.shape == (frames, 1)
+    # Middle of the spoken half is a full gate, so the sample is (L + R) / 2.
+    spoken = int(speaker[int(0.75 * sample_rate), 0])
+    assert spoken == 5000
+    assert music.shape == (frames, 2)
+    intro_at = sample_rate // 8
+    assert int(music[intro_at, 0]) == 12000
+    assert int(music[intro_at, 1]) == 4000
+
+
+def test_export_mono_source_keeps_music_mono(tmp_path: Path):
+    sample_rate = 8000
+    frames = sample_rate
+    source = tmp_path / "mono.wav"
+    audio = np.full((frames, 1), 6000, dtype=np.int16)
+    save_wav(source, audio, sample_rate)
+    output_dir = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output_dir,
+        [(0.0, 1.0, "SPEAKER_00")],
+        work_wav=source,
+    )
+    speaker, _ = load_wav(output_dir / "Speaker_1.wav")
+    music, _ = load_wav(output_dir / "Music_and_SFX.wav")
+    assert speaker.shape == (frames, 1)
+    assert music.shape == (frames, 1)
+    assert int(speaker[frames // 2, 0]) == 6000
+
+
+def test_export_aiff_and_wav24_keep_the_channel_rule(tmp_path: Path):
+    sample_rate = 8000
+    source = tmp_path / "stereo.wav"
+    save_wav(source, _constant_stereo(sample_rate, 9000, 3000), sample_rate)
+    segments = [(0.0, 0.5, "SPEAKER_00"), (0.5, 1.0, "SPEAKER_01")]
+
+    wav_dir = tmp_path / "wav24"
+    export_speaker_tracks(
+        source,
+        wav_dir,
+        segments,
+        work_wav=source,
+        export_sample_rate=48000,
+        audio_format="wav24",
+    )
+    with wave.open(str(wav_dir / "Speaker_1.wav"), "rb") as handle:
+        assert handle.getnchannels() == 1
+        assert handle.getframerate() == 48000
+        assert handle.getsampwidth() == 3
+    with wave.open(str(wav_dir / "Speaker_2.wav"), "rb") as handle:
+        assert handle.getnchannels() == 1
+    with wave.open(str(wav_dir / "Music_and_SFX.wav"), "rb") as handle:
+        assert handle.getnchannels() == 2
+        assert handle.getframerate() == 48000
+
+    aiff_dir = tmp_path / "aiff"
+    export_speaker_tracks(
+        source,
+        aiff_dir,
+        segments,
+        work_wav=source,
+        audio_format="aiff24",
+    )
+    assert _aiff_channels(aiff_dir / "Speaker_1.aiff") == 1
+    assert _aiff_channels(aiff_dir / "Speaker_2.aiff") == 1
+    assert _aiff_channels(aiff_dir / "Music_and_SFX.aiff") == 2
 
 
 def test_encode_export_file_passes_rate_and_codec(tmp_path: Path, monkeypatch):

@@ -199,6 +199,8 @@ final class QuickCheckUITests: XCTestCase {
             "-UITestProject", config.project.path,
             "-UITestImport", "\(config.audioA.path),\(config.audioB.path)",
             "-UITestPresets", config.presetsLounge.path,
+            "-UITestStripperStub",
+            "-UITestStripperPause",
         ]
         app.launch()
         defer { stop(app) }
@@ -316,6 +318,8 @@ final class QuickCheckUITests: XCTestCase {
         }
 
         checkWindow(app, standalone: false, name: "Pod Lounge minimum window fits a 1512 by 982 screen")
+        checkStripper(app, config: config)
+        checkWindow(app, standalone: false, name: "Pod Lounge Stripper workspace fits a 1512 by 982 screen")
         record(
             "Pod Lounge stayed open through the check",
             app.state == .runningForeground,
@@ -385,6 +389,181 @@ final class QuickCheckUITests: XCTestCase {
         }
         record(title, true, "Added \(added[0].lastPathComponent). The depot stayed on QuickCheck-B.wav and did not scan again.")
         return true
+    }
+
+    // MARK: - Stripper
+
+    private func checkStripper(_ app: XCUIApplication, config: QuickConfig) {
+        guard click("lounge.back", in: app, timeout: 20) else {
+            record("Pod Lounge Stripper used the imported depot file", false, "Could not return to the Lounge.")
+            shoot("stripper-no-back", app)
+            return
+        }
+        guard click("lounge.card.stripper", in: app, timeout: 20) else {
+            record("Pod Lounge Stripper used the imported depot file", false, "The Stripper card was not on screen.")
+            shoot("stripper-no-card", app)
+            return
+        }
+        let ready = poll(20) { stringValue("stripper.input", in: app).localizedCaseInsensitiveContains("quickcheck-b") }
+        record(
+            "Pod Lounge Stripper used the imported depot file",
+            ready,
+            ready ? "Stripper is aimed at the selected depot file." : "The selected file was not shown. \(stringValue("stripper.input", in: app))"
+        )
+        guard ready else {
+            shoot("stripper-no-input", app)
+            return
+        }
+
+        let resultsDir = config.project.appendingPathComponent("depot/results")
+        let beforeCancel = Set(files(in: resultsDir).map(\.path))
+        guard waitEnabled("stripper.split", in: app, timeout: 20), click("stripper.split", in: app) else {
+            record("Pod Lounge Stripper cancel leaves nothing behind", false, "Split Into Tracks was not available.")
+            shoot("stripper-no-split", app)
+            return
+        }
+        guard click("stripper.cancel", in: app, timeout: 20) else {
+            record("Pod Lounge Stripper cancel leaves nothing behind", false, "Cancel did not appear.")
+            shoot("stripper-no-cancel", app)
+            return
+        }
+        let cancelled = poll(20) { element("stripper.cancel", in: app).exists == false && element("stripper.naming", in: app).exists == false }
+        let afterCancel = Set(files(in: resultsDir).map(\.path))
+        let stagingLeft = stagingFiles(config)
+        let cancelOK = cancelled && afterCancel == beforeCancel && stagingLeft.isEmpty
+        record(
+            "Pod Lounge Stripper cancel leaves nothing behind",
+            cancelOK,
+            cancelOK ? "Cancel added no depot tracks and removed the temporary files." : "Cancelled \(cancelled). New files \(afterCancel.subtracting(beforeCancel)). Staging \(stagingLeft)."
+        )
+        guard cancelOK else {
+            shoot("stripper-cancel", app)
+            return
+        }
+
+        guard waitEnabled("stripper.split", in: app, timeout: 20), click("stripper.split", in: app) else {
+            record("Pod Lounge Stripper naming step uses the prefilled names", false, "The second split did not start.")
+            return
+        }
+        let named = poll(30) { element("stripper.naming", in: app).exists && stringValue("stripper.name.0", in: app).contains("Speaker 1") }
+        let first = stringValue("stripper.name.0", in: app)
+        let second = stringValue("stripper.name.1", in: app)
+        let music = stringValue("stripper.name.2", in: app)
+        let prefilled = named && first.contains("Split") == false && second.contains("Speaker 2") && music.contains("Music")
+        record(
+            "Pod Lounge Stripper naming step uses the prefilled names",
+            prefilled,
+            prefilled ? "Prefills were \(first), \(second), and \(music)." : "Names were \(first) | \(second) | \(music)."
+        )
+        guard prefilled else {
+            shoot("stripper-no-names", app)
+            return
+        }
+
+        let field = element("stripper.name.0", in: app)
+        field.click()
+        field.typeKey("a", modifierFlags: [.command])
+        field.typeText("Renamed Speaker")
+        let beforeAdd = Set(files(in: resultsDir).map(\.path))
+        guard click("stripper.addToDepot", in: app, timeout: 15) else {
+            record("Pod Lounge Stripper adds renamed tracks without selecting them", false, "Add to Depot was not available.")
+            shoot("stripper-no-add", app)
+            return
+        }
+        let listed = poll(20) { element("depot.file.Renamed Speaker", in: app).exists }
+        let selected = stringValue("depot.selectedName", in: app)
+        let added = files(in: resultsDir).filter { beforeAdd.contains($0.path) == false }
+        let durationsOK = added.allSatisfy { durationProblem($0) == nil }
+        let noJSON = added.allSatisfy { $0.lastPathComponent != "speakers.json" }
+        let addedOK = listed && selected == "QuickCheck-B.wav" && added.count == 3 && durationsOK && noJSON && stagingFiles(config).isEmpty
+        if addedOK == false {
+            let problems = added.compactMap { durationProblem($0) }
+            record(
+                "Pod Lounge Stripper adds renamed tracks without selecting them",
+                false,
+                "Listed \(listed), selected \(selected), files \(added.map(\.lastPathComponent)), durations \(problems), staging \(stagingFiles(config))."
+            )
+            shoot("stripper-add", app)
+            return
+        }
+        record(
+            "Pod Lounge Stripper adds renamed tracks without selecting them",
+            true,
+            "Added \(added.map(\.lastPathComponent).joined(separator: ", ")). The depot stayed on QuickCheck-B.wav."
+        )
+
+        guard click("depot.play.Renamed Speaker", in: app, timeout: 15) else {
+            record("Pod Lounge Stripper tracks can be played", false, "The play button was not available.")
+            shoot("stripper-no-play", app)
+            return
+        }
+        let playing = poll(10) { element("depot.play.Renamed Speaker", in: app).label.contains("Stop") }
+        record(
+            "Pod Lounge Stripper tracks can be played",
+            playing,
+            playing ? "The renamed track started playing." : "Play did not start."
+        )
+        if playing {
+            _ = click("depot.play.Renamed Speaker", in: app, timeout: 5)
+        }
+
+        guard waitEnabled("stripper.split", in: app, timeout: 20), click("stripper.split", in: app) else {
+            record("Pod Lounge Stripper repeat split adds a suffix and discard keeps the depot", false, "The repeat split did not start.")
+            return
+        }
+        let repeatReady = poll(30) { stringValue("stripper.name.0", in: app).contains("(Split 2)") }
+        guard repeatReady else {
+            record(
+                "Pod Lounge Stripper repeat split adds a suffix and discard keeps the depot",
+                false,
+                "The repeat prefill was \(stringValue("stripper.name.0", in: app))."
+            )
+            shoot("stripper-no-repeat", app)
+            return
+        }
+        let beforeDiscard = Set(files(in: resultsDir).map(\.path))
+        guard click("stripper.closeNaming", in: app), click("stripper.confirmDiscard", in: app, timeout: 10) else {
+            record("Pod Lounge Stripper repeat split adds a suffix and discard keeps the depot", false, "Could not discard the repeat split.")
+            shoot("stripper-no-discard", app)
+            return
+        }
+        let discarded = poll(15) { element("stripper.naming", in: app).exists == false }
+        let afterDiscard = Set(files(in: resultsDir).map(\.path))
+        let discardOK = discarded && afterDiscard == beforeDiscard && stagingFiles(config).isEmpty
+        record(
+            "Pod Lounge Stripper repeat split adds a suffix and discard keeps the depot",
+            discardOK,
+            discardOK ? "The repeat prefill included (Split 2), and discarding added nothing." : "Discarded \(discarded). Files changed \(afterDiscard != beforeDiscard). Staging \(stagingFiles(config))."
+        )
+    }
+
+    private func stagingFiles(_ config: QuickConfig) -> [String] {
+        let root = config.project.appendingPathComponent("recovery/stripper-jobs")
+        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [] }
+        var names: [String] = []
+        for case let url as URL in enumerator {
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue == false {
+                names.append(url.lastPathComponent)
+            }
+        }
+        return names
+    }
+
+    private func durationProblem(_ url: URL) -> String? {
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let rate = file.fileFormat.sampleRate
+            let seconds = rate > 0 ? Double(file.length) / rate : 0
+            if abs(rate - 48_000) > 1 { return "\(url.lastPathComponent) was \(rate) Hz" }
+            if file.fileFormat.channelCount != 2 { return "\(url.lastPathComponent) was not stereo" }
+            if abs(seconds - sourceSeconds) > 0.05 {
+                return String(format: "%@ was %.3f s", url.lastPathComponent, seconds)
+            }
+            return nil
+        } catch {
+            return "Could not decode \(url.lastPathComponent)"
+        }
     }
 
     // MARK: - Window

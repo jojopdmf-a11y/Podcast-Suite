@@ -15,6 +15,7 @@ let package = Package(
         // would name it "app", which collides with this package. The symlink
         // gives it its own name.
         .package(path: "../../LilLeveler/LilLevelerKit"),
+        .package(path: "../../Podcast Stripper/PodStripperKit"),
     ],
     targets: [
         .target(
@@ -26,6 +27,7 @@ let package = Package(
             dependencies: [
                 "PodLoungeCore",
                 .product(name: "LilLevelerKit", package: "LilLevelerKit"),
+                .product(name: "PodStripperKit", package: "PodStripperKit"),
             ],
             path: "Sources/PodLounge",
             resources: [

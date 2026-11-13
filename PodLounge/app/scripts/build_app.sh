@@ -32,6 +32,12 @@ cp "$ROOT/app/Info.plist" "$APP/Contents/Info.plist"
 chmod +x "$APP/Contents/MacOS/PodLounge"
 install_lame "$APP"
 
+# Same engine source, lockfile, and uv the standalone app bundles. The installed
+# environment stays in ~/Library/Application Support/CougarCalc/Podcast Stripper.
+STRIPPER_ROOT="$(cd "$ROOT/../Podcast Stripper" && pwd)"
+chmod +x "$STRIPPER_ROOT/scripts/bundle_runtime.sh"
+"$STRIPPER_ROOT/scripts/bundle_runtime.sh" "$APP"
+
 # Card screenshots. Bundle.main looks in Contents/Resources. The SwiftPM
 # resource bundle sits next to the executable during `swift run`; copy it
 # too so either lookup finds the same PNGs.

@@ -12,6 +12,8 @@ public final class ProjectPackage {
 
     /// Test seam. When set, the next `save()` throws before touching disk.
     var failNextSaveForTesting = false
+    /// Test seam. The next Stripper group import fails after its copies, then deletes them.
+    var failStripperImportAfterStagingForTesting = false
 
     init(
         rootURL: URL,
@@ -655,14 +657,14 @@ public final class ProjectPackage {
         return number?.int64Value ?? 0
     }
 
-    private func rejectNestedWrite() throws {
+    func rejectNestedWrite() throws {
         if Self.isInsideAnotherProject(rootURL) {
             throw PackageError.operationFailed(Self.nestedProjectMessage)
         }
     }
 
     /// Picks `stem.ext`, then `stem 2.ext`, `stem 3.ext`, … until the name is free.
-    private func allocateDepotFileName(displayName: String, ext: String, kind: AssetKind) throws -> String {
+    func allocateDepotFileName(displayName: String, ext: String, kind: AssetKind) throws -> String {
         let stem = Self.cappedStem(Self.storageStem(displayName: displayName, extension: ext), extension: ext)
         var suffix: Int?
         for _ in 0..<9_000 {

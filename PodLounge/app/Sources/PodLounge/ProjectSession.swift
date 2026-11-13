@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import LilLevelerKit
 import PodLoungeCore
+import PodStripperKit
 
 enum PendingNavigation: Equatable {
     case newProject
@@ -29,6 +30,10 @@ final class ProjectSession: ObservableObject {
     @Published var limiterSettings = LimiterWorkspaceSettings.defaults
     /// True while the Limiter is rendering or copying a result. Depot clicks wait.
     @Published var limiterExporting = false
+    /// True while Stripper is splitting. Leaving, New, Open, and depot edits wait.
+    @Published var stripperRunning = false
+
+    var navigationLocked: Bool { limiterExporting || stripperRunning }
 
     /// Set by the Limiter workspace so leaving the card stops playback.
     var endLimiterPlayback: (() -> Void)?
@@ -60,13 +65,13 @@ final class ProjectSession: ObservableObject {
     }
 
     func select(_ asset: DepotAsset) {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         selectedAssetID = asset.id
     }
 
     /// Plays the depot file as stored. A second file, or the same file again, stops the first.
     func toggleDepotPlayback(_ asset: DepotAsset) {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         if depotPlayer.playingAssetID == asset.id {
             stopDepotPlayback()
             return
@@ -94,12 +99,12 @@ final class ProjectSession: ObservableObject {
 
     /// Opens a card. Ignored while a Limiter export is still writing.
     func openWorkspace(_ workspace: WorkspaceID) {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         activeWorkspace = workspace
     }
 
     func newProject() {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard !isDirty else {
             pending = .newProject
             confirmDiscard = true
@@ -109,7 +114,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func openProject() {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard !isDirty else {
             pending = .openProject
             confirmDiscard = true
@@ -178,7 +183,7 @@ final class ProjectSession: ObservableObject {
             alertMessage = "UI test does not use Save As."
             return
         }
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard package != nil else {
             presentNewPanel()
             return
@@ -215,7 +220,7 @@ final class ProjectSession: ObservableObject {
     }
 
     func importAudio() {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard package != nil else {
             alertMessage = "Create or open a project before importing audio."
             return
@@ -243,7 +248,7 @@ final class ProjectSession: ObservableObject {
     /// Asks first, then removes the file from the depot and saves the project.
     func deleteAsset(_ asset: DepotAsset) {
         if UITestMode.enabled { return }
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard let package else { return }
         let alert = NSAlert()
         alert.messageText = "Delete \u{201C}\(asset.displayName)\u{201D} from this project?"
@@ -269,7 +274,7 @@ final class ProjectSession: ObservableObject {
     /// Navigation only. Stops Limiter playback. Does not delete depot audio.
     /// Does not stop a Fixer take — there is no recorder in this build.
     func leaveWorkspace() {
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         stopDepotPlayback()
         if activeWorkspace == .limiter {
             endLimiterPlayback?()
@@ -295,13 +300,153 @@ final class ProjectSession: ObservableObject {
         adopt(package, keepWorkspace: true)
     }
 
+    /// Drop or choose on the Stripper screen. An outside file is copied in as an
+    /// original and selected. A file already in the depot is only selected.
+    /// Neither path starts a split.
+    func importStripperSource(_ url: URL) {
+        guard !navigationLocked else { return }
+        guard package != nil else {
+            alertMessage = "Create or open a project before importing audio."
+            return
+        }
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+        if let asset = assets.first(where: { asset in
+            guard let stored = try? package?.resolvedURL(for: asset) else { return false }
+            return stored.standardizedFileURL.resolvingSymlinksInPath() == resolved
+        }) {
+            selectedAssetID = asset.id
+            return
+        }
+        importFiles([url])
+    }
+
+    func chooseStripperOutsideFolder(_ model: StripperLoungeModel) {
+        guard !navigationLocked else { return }
+        if UITestMode.enabled {
+            if let raw = UITestMode.argument("-UITestStripperOutside") {
+                model.outsideFolder = URL(fileURLWithPath: raw, isDirectory: true)
+            }
+            return
+        }
+        let panel = NSOpenPanel()
+        panel.title = "Extra Copy Folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.message = "Tracks are always added to the project depot. This folder also gets a copy."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.outsideFolder = url
+    }
+
+    func presentStripperNaming(_ job: StripperFinishedJob, model: StripperLoungeModel) {
+        guard let sourceID = selectedAssetID,
+              let source = assets.first(where: { $0.id == sourceID })
+        else { return }
+        let index = StripperNaming.nextSplitIndex(
+            sourceAssetID: sourceID,
+            groups: package?.readStripperGroups() ?? []
+        )
+        let drafts = StripperNaming.drafts(
+            sourceDisplayName: source.displayName,
+            splitIndex: index,
+            tracks: job.tracks
+        )
+        model.pendingSplitIndex = index
+        model.pendingSourceAssetID = sourceID
+        model.pendingSpeakersJSON = job.speakersJSON
+        model.namingRows = drafts.map {
+            StripperEditableTrack(
+                id: $0.id,
+                sourceURL: $0.sourceURL,
+                roleLabel: $0.roleLabel,
+                displayName: $0.displayName
+            )
+        }
+        model.namingMessage = nil
+        model.namingVisible = true
+        model.revealURLs = job.tracks
+    }
+
+    func addStripperTracks(_ model: StripperLoungeModel) {
+        guard let package else {
+            model.namingMessage = "Create or open a project before adding tracks."
+            return
+        }
+        let sourceID = model.pendingSourceAssetID
+        guard sourceID.isEmpty == false, let speakersJSON = model.pendingSpeakersJSON else {
+            model.namingMessage = "This split is missing its tracks."
+            return
+        }
+        do {
+            applyMetadata(to: package)
+            try package.writeLimiterSettings(limiterSettings)
+            let tracks = model.namingRows.map {
+                StripperTrackImport(sourceURL: $0.sourceURL, displayName: $0.displayName)
+            }
+            let outcome = try package.importStripperGroup(
+                tracks: tracks,
+                speakersJSON: speakersJSON,
+                sourceAssetID: sourceID,
+                splitIndex: model.pendingSplitIndex,
+                outsideDirectory: model.outsideFolder
+            )
+            if let staging = model.activeStagingURL {
+                package.removeOwnedStripperStaging(staging)
+            }
+            model.activeStagingURL = nil
+            model.namingVisible = false
+            model.namingRows = []
+            model.namingMessage = nil
+            model.revealURLs = outcome.assets.compactMap { try? package.resolvedURL(for: $0) }
+            adopt(package, keepWorkspace: true)
+            if let warning = outcome.outsideCopyWarning {
+                alertMessage = warning
+            }
+        } catch {
+            model.namingMessage = error.localizedDescription
+        }
+    }
+
+    func discardStripperNaming(_ model: StripperLoungeModel) {
+        if let package, let staging = model.activeStagingURL {
+            package.removeOwnedStripperStaging(staging)
+        }
+        model.activeStagingURL = nil
+        model.namingVisible = false
+        model.namingRows = []
+        model.namingMessage = nil
+        model.revealURLs = []
+        model.askDiscardNaming = false
+    }
+
+    func revealStripperFinder(_ model: StripperLoungeModel) {
+        if UITestMode.enabled { return }
+        let urls = model.revealURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard urls.isEmpty == false else { return }
+        NSWorkspace.shared.activateFileViewerSelecting(urls)
+    }
+
+    func sweepAbandonedStripperStaging(keeping: URL?) {
+        guard let package else { return }
+        let root = package.rootURL.appendingPathComponent("recovery/stripper-jobs", isDirectory: true)
+        guard let items = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else {
+            return
+        }
+        let keep = keeping?.standardizedFileURL.resolvingSymlinksInPath().path
+        for item in items {
+            if item.standardizedFileURL.resolvingSymlinksInPath().path == keep { continue }
+            package.removeOwnedStripperStaging(item)
+        }
+    }
+
     /// Copies the stored depot file out. The project and its audio are not changed.
     func exportCopy(of asset: DepotAsset) {
         if UITestMode.enabled {
             alertMessage = "UI test does not use Export Copy."
             return
         }
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard health(of: asset) != .missing, let package else { return }
         let panel = NSSavePanel()
         panel.title = "Export Copy"
@@ -323,7 +468,7 @@ final class ProjectSession: ObservableObject {
     /// Reveals the stored depot file. This is a user action, so Finder may open.
     func showInFinder(_ asset: DepotAsset) {
         if UITestMode.enabled { return }
-        guard !limiterExporting else { return }
+        guard !navigationLocked else { return }
         guard health(of: asset) != .missing, let package else { return }
         guard let url = try? package.resolvedURL(for: asset) else { return }
         var isDirectory: ObjCBool = false
