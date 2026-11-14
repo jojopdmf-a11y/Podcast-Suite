@@ -53,15 +53,23 @@ struct MixerPrimaryButtonStyle: ButtonStyle {
 }
 
 struct MixerGhostButtonStyle: ButtonStyle {
+    var engaged: Bool = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .foregroundStyle(configuration.isPressed ? MixerTheme.lime : MixerTheme.cyan)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(MixerTheme.panelRaised))
+            .foregroundStyle((engaged || configuration.isPressed) ? MixerTheme.lime : MixerTheme.cyan)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(engaged ? MixerTheme.cyan.opacity(0.22) : MixerTheme.panelRaised)
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(MixerTheme.cyan.opacity(0.45), lineWidth: 1)
+                    .stroke(
+                        engaged ? MixerTheme.lime.opacity(0.9) : MixerTheme.cyan.opacity(0.45),
+                        lineWidth: engaged ? 1.4 : 1
+                    )
             )
     }
 }

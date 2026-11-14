@@ -16,8 +16,7 @@ struct LimiterWorkspaceView: View {
                     .disabled(session.navigationLocked)
                     .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Limiter")
-                        .font(.system(size: 18, weight: .semibold))
+                    RoomTitleText(workspace: .limiter, size: 18)
                     Text("The selected depot file is the source. Pick another in the list without leaving. Back to Lounge stops playback.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)

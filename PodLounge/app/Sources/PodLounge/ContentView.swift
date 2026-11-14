@@ -22,6 +22,7 @@ struct ContentView: View {
         let reserved: CGFloat? = switch session.activeWorkspace {
         case .limiter: LevelerPaneMetrics.limiterWorkspaceMinimum
         case .stripper: 780
+        case .fixer: 960
         default: nil
         }
         guard let reserved else { return DepotChrome.maxWidth }
@@ -42,7 +43,7 @@ struct ContentView: View {
             GeometryReader { geo in
                 let maxDepot = depotMax(in: geo.size.width)
                 let width = min(maxDepot, max(DepotChrome.minWidth, CGFloat(depotWidthStorage)))
-                let depotOnLeft = session.activeWorkspace == .stripper
+                let depotOnLeft = session.activeWorkspace?.depotSide == .leading
                 HStack(spacing: 0) {
                     if !depotHidden, depotOnLeft {
                         depotSidebar(width: width, maximum: maxDepot, onLeft: true)
@@ -53,6 +54,8 @@ struct ContentView: View {
                                 LimiterWorkspaceView()
                             } else if workspace == .stripper {
                                 StripperWorkspaceView()
+                            } else if workspace == .fixer {
+                                FixerWorkspaceView()
                             } else {
                                 WorkspaceScaffoldView(workspace: workspace)
                             }
@@ -92,16 +95,16 @@ struct ContentView: View {
                 session.openWorkspace(.stripper)
             }
         }
-        .alert("Pod Lounge", isPresented: alertIsPresented) {
+        .alert(ClubPodNaming.hubScreenTitle, isPresented: alertIsPresented) {
             Button("OK", role: .cancel) { session.alertMessage = nil }
         } message: {
             Text(session.alertMessage ?? "")
         }
-        .alert("About Pod Lounge", isPresented: aboutIsPresented) {
+        .alert("About \(ClubPodNaming.product)", isPresented: aboutIsPresented) {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Project home for Stripper, Fixer, Trimmer, and Limiter. Stripper splits the selected depot file into speaker tracks and music. Limiter levels the selected depot file and can save a new result. Fixer and Trimmer do not process audio in this build.")
+            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected depot file into speaker tracks and music. TheDecks records and mixes. TheRoof levels the selected depot file and can save a new result. TheCut does not process audio in this build. The first time TheDecks records, macOS asks Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -119,7 +122,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest and Limiter settings. It does not rewrite depot audio.")
+            Text("Save Project writes the manifest, TheRoof settings, and the TheDecks session. It does not rewrite depot audio.")
         }
     }
 
@@ -161,15 +164,17 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 16) {
             HStack(spacing: 10) {
-                Text("P")
+                Text("C")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(Color(red: 0.03, green: 0.08, blue: 0.10))
                     .frame(width: 32, height: 32)
                     .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(LoungeTheme.cyan))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Pod Lounge")
+                    Text(ClubPodNaming.product)
                         .font(.system(size: 18, weight: .semibold))
-                    Text("Project home")
+                        .accessibilityAddTraits(.isHeader)
+                    Text(ClubPodNaming.hubScreenTitle)
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                 }
@@ -223,7 +228,7 @@ struct ContentView: View {
             .help(depotHidden ? "Show the project depot" : "Hide the project depot")
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
         .background(LoungeTheme.backgroundRaised)
     }
 
@@ -257,34 +262,61 @@ struct ContentView: View {
 struct LoungeHomeView: View {
     @EnvironmentObject private var session: ProjectSession
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 16),
-        GridItem(.flexible(), spacing: 16),
-    ]
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("WORKSPACES")
-                        .font(.system(size: 11, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(LoungeTheme.textDim)
-                    Text("Click a card to fill this window. Return to the Lounge to switch. Any order.")
-                        .font(.system(size: 13))
-                        .foregroundStyle(LoungeTheme.textDim)
+        GeometryReader { geo in
+            let layout = LoungeHomeLayout.fitting(geo.size)
+            let canvas = layout.needsScroll
+                ? CGSize(width: max(geo.size.width, layout.contentWidth), height: layout.contentHeight)
+                : geo.size
+            let board = homeBoard(layout, canvas: canvas)
+            if layout.needsScroll {
+                ScrollView([.horizontal, .vertical]) {
+                    board
                 }
-                LazyVGrid(columns: columns, spacing: 16) {
-                    ForEach(WorkspaceID.allCases) { workspace in
-                        WorkspaceCard(workspace: workspace) {
-                            session.openWorkspace(workspace)
-                        }
-                        .disabled(session.navigationLocked)
-                    }
-                }
-                .frame(minHeight: 560)
+            } else {
+                board
             }
-            .padding(18)
+        }
+    }
+
+    private func homeBoard(_ layout: LoungeHomeLayout, canvas: CGSize) -> some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear
+                .frame(width: canvas.width, height: canvas.height)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("WORKSPACES")
+                    .font(.system(size: 11, weight: .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(LoungeTheme.textDim)
+                Text("Click a card to fill this window. Return to the Lounge to switch. Any order.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(LoungeTheme.textDim)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, LoungeHomeLayout.contentPadding)
+            .padding(.top, LoungeHomeLayout.contentPadding)
+            .accessibilityIdentifier("lounge.workspacesHeading")
+
+            homeCard(layout, index: 0)
+            homeCard(layout, index: 1)
+            homeCard(layout, index: 2)
+            homeCard(layout, index: 3)
+        }
+        .frame(width: canvas.width, height: canvas.height, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func homeCard(_ layout: LoungeHomeLayout, index: Int) -> some View {
+        let rooms = Array(WorkspaceID.allCases)
+        if rooms.indices.contains(index), layout.cells.indices.contains(index) {
+            let cell = layout.cells[index]
+            WorkspaceCard(workspace: rooms[index]) {
+                session.openWorkspace(rooms[index])
+            }
+            .disabled(session.navigationLocked)
+            .frame(width: cell.width, height: cell.height)
+            .position(x: cell.x + cell.width / 2, y: cell.y + cell.height / 2)
         }
     }
 }
@@ -295,21 +327,24 @@ struct WorkspaceCard: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(workspace.title)
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(LoungeTheme.text)
+                        RoomTitleText(workspace: workspace, size: 22)
                         Text(workspace.subtitle)
                             .font(.system(size: 12))
                             .foregroundStyle(LoungeTheme.textDim)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
                     }
+                    .layoutPriority(1)
                     Spacer(minLength: 8)
                     if workspace.conceptOnly {
                         Text("Concept — new tool")
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(LoungeTheme.amber)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 4)
                             .overlay(
@@ -319,14 +354,17 @@ struct WorkspaceCard: View {
                     }
                 }
                 cardBody
+                    .layoutPriority(-1)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 Text("Open workspace  →")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(LoungeTheme.cyan)
+                    .lineLimit(1)
+                    .layoutPriority(1)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 280, maxHeight: .infinity, alignment: .topLeading)
+            .padding(12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .loungePanel(
                 stroke: workspace.conceptOnly ? LoungeTheme.amber.opacity(0.85) : LoungeTheme.cyan.opacity(0.7)
             )
@@ -380,7 +418,8 @@ struct ConceptCardBody: View {
                     .foregroundStyle(LoungeTheme.textDim)
                     .multilineTextAlignment(.center)
             }
-            .padding(16)
+            .minimumScaleFactor(0.6)
+            .padding(12)
             .frame(maxWidth: 300)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -401,9 +440,8 @@ struct ScreenshotCardBody: View {
         if let image = CardArt.image(named: name) {
             Image(nsImage: image)
                 .resizable()
-                .scaledToFill()
+                .scaledToFit()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .clipped()
         } else {
             ZStack {
                 Color.black.opacity(0.35)

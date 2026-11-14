@@ -7,6 +7,7 @@ let package = Package(
         .macOS(.v14),
     ],
     products: [
+        .library(name: "PodProducerKit", targets: ["PodProducerKit"]),
         .executable(name: "FixerMixer", targets: ["FixerMixer"]),
         .executable(name: "RecordStress", targets: ["RecordStress"]),
     ],
@@ -21,15 +22,25 @@ let package = Package(
             dependencies: ["PPAtomics"],
             path: "Sources/RecordCore"
         ),
+        .target(
+            name: "PodProducerKit",
+            dependencies: ["RecordCore"],
+            path: "Sources/PodProducerKit"
+        ),
         .executableTarget(
             name: "FixerMixer",
-            dependencies: ["RecordCore"],
+            dependencies: ["PodProducerKit"],
             path: "Sources/FixerMixer"
         ),
         .executableTarget(
             name: "RecordStress",
             dependencies: ["RecordCore"],
             path: "Sources/RecordStress"
+        ),
+        .testTarget(
+            name: "PodProducerKitTests",
+            dependencies: ["PodProducerKit"],
+            path: "Tests/PodProducerKitTests"
         ),
     ]
 )

@@ -37,10 +37,10 @@ struct AboutStripperView: View {
         ZStack {
             StripperTheme.windowBackground.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 14) {
-                Text("PODSTRIPPER")
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
-                    .tracking(1.2)
-                    .foregroundStyle(StripperTheme.cyan)
+                QuietTheTitle(name: "Strip", size: 22, color: StripperTheme.cyan)
+                Text("Part of ClubPod")
+                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
                 Text("Version \(appVersion)")
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .foregroundStyle(StripperTheme.lime)

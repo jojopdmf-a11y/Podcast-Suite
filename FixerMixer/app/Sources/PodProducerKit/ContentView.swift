@@ -3,7 +3,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @StateObject private var session = MixerSession()
+    @ObservedObject var session: MixerSession
+    var chrome: ProducerChrome = .application
+    var onAddSelectedDepot: (() -> Void)? = nil
+    var onImportURLs: (([URL]) -> Void)? = nil
     @State private var isDropTargeted = false
     @State private var spaceMonitor: Any?
     @State private var showAbout = false
@@ -62,8 +65,6 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                statusBar
-                    .padding(.top, 6)
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -89,52 +90,26 @@ struct ContentView: View {
         .onChange(of: session.selectedInputUID) { _, _ in
             session.adoptInterfaceSampleRateIfEmpty()
         }
-        .onDisappear {
-            session.engine.stop()
-            removeSpacebarMonitor()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout)) { _ in
-            showAbout = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerUpdateMix)) { _ in
-            session.updateMix()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix)) { _ in
-            session.saveMix()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix)) { _ in
-            pickMixFile()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerAddStrip)) { _ in
-            guard session.hasSession else { return }
-            session.addBlankStrip()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerRemoveStrip)) { _ in
-            guard session.hasSession, session.canRemoveStrip(session.selectedChannelID) else { return }
-            confirmRemoveStrip = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerToggleReorder)) { _ in
-            guard session.hasSession, !session.isRecording else { return }
-            reorderStrips.toggle()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFolder)) { _ in
-            pickFolder()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles)) { _ in
-            pickFiles(append: session.hasSession)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport)) { _ in
-            guard session.hasSession, session.frameCount > 0, !session.isBouncing else { return }
-            exportItems = session.makeExportItems()
-            exportFolder = session.suggestedExportFolder()
-            exportSampleRate = .native
-            exportFormat = .wav16
-            showExport = true
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput)) { _ in
-            guard session.hasSession else { return }
-            session.refreshInputDevices()
-            showInputPicker = true
+        .onDisappear(perform: endAppearance)
+        .onReceive(NotificationCenter.default.publisher(for: .cougarCalcShowAbout), perform: showAboutFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerUpdateMix), perform: updateMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerSaveMix), perform: saveMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerLoadMix), perform: loadMixFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerAddStrip), perform: addStripFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerRemoveStrip), perform: removeStripFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerToggleReorder), perform: toggleReorderFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFolder), perform: importFolderFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles), perform: importFilesFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport), perform: exportFromMenu)
+        .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput), perform: pickInputFromMenu)
+        .background {
+            // One shortcut for the whole desk. The header may draw Play twice while measuring a tight window.
+            Button("Play or pause") { session.togglePlay() }
+                .keyboardShortcut(.space, modifiers: [])
+                .disabled(session.isRecording || !session.hasSession)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
         }
         .popover(isPresented: $showInputPicker, arrowEdge: .top) {
             inputDeviceMenuContent
@@ -146,7 +121,7 @@ struct ContentView: View {
             isPresented: $confirmRemoveStrip,
             titleVisibility: .visible
         ) {
-            Button("Remove Strip", role: .destructive) {
+            Button("Remove Track", role: .destructive) {
                 session.removeEmptyStrip(session.selectedChannelID)
             }
             Button("Cancel", role: .cancel) {}
@@ -155,7 +130,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
-                appName: "PodProducer",
+                appName: DeckWordmark.joined,
                 tagline: "Record a strip, punch a cough, mix — still not an editor",
                 accent: MixerTheme.cyan
             )
@@ -181,6 +156,53 @@ struct ContentView: View {
                 }
             )
         }
+    }
+
+    private func showAboutFromMenu(_: Notification) { showAbout = true }
+    private func updateMixFromMenu(_: Notification) { session.updateMix() }
+    private func saveMixFromMenu(_: Notification) { session.saveMix() }
+    private func loadMixFromMenu(_: Notification) { pickMixFile() }
+    private func addStripFromMenu(_: Notification) { newTrack() }
+    private func newTrack() {
+        guard !session.isRecording else { return }
+        session.newTrack()
+    }
+    private func removeStripFromMenu(_: Notification) {
+        guard session.hasSession, !session.isRecording, session.canRemoveStrip(session.selectedChannelID) else { return }
+        confirmRemoveStrip = true
+    }
+    private func toggleReorderFromMenu(_: Notification) {
+        reorderStrips = ProducerTrackControls.toggledReorder(
+            reorderStrips,
+            hasSession: session.hasSession,
+            isRecording: session.isRecording
+        )
+    }
+    private func importFolderFromMenu(_: Notification) { pickFolder() }
+    private func importFilesFromMenu(_: Notification) { pickFiles(append: session.hasSession) }
+    private func exportFromMenu(_: Notification) {
+        if chrome == .lounge, session.isRecording { return }
+        guard session.hasSession, session.frameCount > 0, !session.isBouncing else { return }
+        exportItems = session.makeExportItems()
+        exportFolder = session.suggestedExportFolder()
+        exportSampleRate = .native
+        exportFormat = .wav16
+        showExport = true
+    }
+    private func pickInputFromMenu(_: Notification) {
+        guard session.prepareForInputSelection() else {
+            showInputPicker = false
+            return
+        }
+        showInputPicker = true
+    }
+
+    private func endAppearance() {
+        let recordingInLounge = chrome == .lounge && session.isRecording
+        if !recordingInLounge {
+            session.engine.stop()
+        }
+        removeSpacebarMonitor()
     }
 
     private func startSession() {
@@ -225,68 +247,176 @@ struct ContentView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 1) {
-                Text("PODPRODUCER")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
-                    .tracking(1.0)
-                    .foregroundStyle(MixerTheme.cyan)
+                HStack(spacing: 0) {
+                    Text(DeckWordmark.quiet)
+                        .font(.system(size: 18, weight: .medium, design: .rounded))
+                        .foregroundStyle(MixerTheme.cyan.opacity(0.55))
+                    Text(DeckWordmark.name)
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundStyle(MixerTheme.cyan)
+                }
+                .lineLimit(1)
+                .fixedSize()
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(DeckWordmark.joined)
                 Text(CougarCalcBrand.versionLabel)
                     .font(.system(size: 9, weight: .bold, design: .rounded))
                     .foregroundStyle(MixerTheme.lime)
             }
-            Spacer(minLength: 8)
-            if session.hasSession {
-                HStack(spacing: 8) {
-                    Button("BACK TO TOP") {
-                        session.restartPlay()
-                    }
-                    .buttonStyle(MixerGhostButtonStyle())
-                    .help("Jump to the start of the timeline")
-
-                    Button(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY") {
-                        session.togglePlay()
-                    }
-                    .buttonStyle(MixerPrimaryButtonStyle(compact: true))
-                    .keyboardShortcut(.space, modifiers: [])
-                    .disabled(session.isRecording)
-                    .help(
-                        session.isRecording
-                            ? "Spacebar stops Record"
-                            : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
-                    )
-
-                    Button("STANDBY") {
-                        session.toggleRecordStandby()
-                    }
-                    .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
-                    .disabled(session.isBouncing || session.isRecording)
-                    .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
-
-                    if session.isRecording {
-                        Button("STOP REC") { session.toggleRecord() }
-                            .buttonStyle(MixerRecordButtonStyle())
-                            .disabled(session.isBouncing)
-                            .help("Stop recording. PodProducer writes WAV takes into the session folder on the Desktop.")
-                    } else {
-                        Button("RECORD") { session.toggleRecord() }
-                            .buttonStyle(MixerGhostButtonStyle())
-                            .disabled(session.isBouncing)
-                            .help("Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — PodProducer does not play the mic back. Standby is optional.")
-                    }
-                    if session.isRecording {
-                        Text("Dropouts: \(session.recordDropouts)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
-                            .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
-                    }
-                }
+            .fixedSize()
+            if chrome == .application {
+                ProducerStatusCluster(
+                    status: session.status,
+                    progress: session.busyProgress,
+                    progressLabel: session.busyProgressLabel,
+                    showMicrophoneSettings: session.microphoneSettingsVisible,
+                    hint: DeckStatusCopy.hint(lounge: false),
+                    onOpenMicrophoneSettings: { session.openMicrophoneSettings() }
+                )
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
-                HStack(spacing: 8) {
-                    Button("ABOUT") { showAbout = true }
-                        .buttonStyle(MixerGhostButtonStyle())
-                    Button("LOAD MIX…") { pickMixFile() }
-                        .buttonStyle(MixerGhostButtonStyle())
+                Spacer(minLength: 8)
+            }
+            // One row when it fits. A tight window stacks the track buttons above Play / Standby / Record
+            // so those three stay on screen.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    trackControls
+                    sessionControls
+                }
+                VStack(alignment: .trailing, spacing: 4) {
+                    trackControls
+                    sessionControls
                 }
             }
+            .layoutPriority(1)
         }
+    }
+
+    private var sessionControls: some View {
+        HStack(spacing: 6) {
+            if session.hasSession {
+                if onAddSelectedDepot != nil {
+                    deskButton(
+                        "ADD SELECTED",
+                        identifier: "fixer.addSelected",
+                        enabled: !session.isRecording,
+                        help: "Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
+                    ) { onAddSelectedDepot?() }
+                }
+                deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
+                    session.restartPlay()
+                }
+                Button {
+                    session.togglePlay()
+                } label: {
+                    Text(session.isPlaying && !session.isRecording && !session.isRecordStandby ? "PAUSE" : "PLAY")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                }
+                .buttonStyle(MixerPrimaryButtonStyle(compact: true))
+                .fixedSize(horizontal: true, vertical: false)
+                .disabled(session.isRecording)
+                .help(
+                    session.isRecording
+                        ? "Spacebar stops Record"
+                        : (session.isRecordStandby ? "Spacebar leaves Standby" : "Spacebar toggles play/pause")
+                )
+                Button("STANDBY") { session.toggleRecordStandby() }
+                    .buttonStyle(MixerStandbyButtonStyle(engaged: session.isRecordStandby))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .disabled(session.isBouncing || session.isRecording)
+                    .help("Live input meters on armed strips — does not write takes. Record starts tape. Monitor mics on your interface.")
+                if session.isRecording {
+                    Button("STOP REC") { session.toggleRecord() }
+                        .buttonStyle(MixerRecordButtonStyle())
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .disabled(session.isBouncing)
+                        .help(chrome == .lounge
+                            ? "Stop recording. The take is renamed into the project depot. Back to Lounge does not stop a take."
+                            : "Stop recording. TheDecks writes WAV takes into the session folder on the Desktop.")
+                } else {
+                    deskButton(
+                        "RECORD",
+                        enabled: !session.isBouncing,
+                        help: "Records every speaker strip that has an IN. Overwrites from the playhead. Monitor mics on your interface — TheDecks does not play the mic back. Standby is optional."
+                    ) { session.toggleRecord() }
+                }
+                if session.isRecording {
+                    Text("Dropouts: \(session.recordDropouts)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(session.recordDropouts > 0 ? Color.red : MixerTheme.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+            } else {
+                deskButton("ABOUT", help: "About TheDecks") { showAbout = true }
+                deskButton("LOAD MIX…", help: "Load a saved mix") { pickMixFile() }
+            }
+        }
+    }
+
+    private var trackControls: some View {
+        HStack(spacing: 6) {
+            deskButton(
+                "NEW TRACK",
+                identifier: "decks.newTrack",
+                label: ProducerTrackControls.newTrackTitle,
+                enabled: !session.isRecording,
+                help: "Adds an empty speaker strip. If the mixer is not open yet, this starts it and adds the strip. Arm IN, then Record."
+            ) { newTrack() }
+            deskButton(
+                "REMOVE TRACK",
+                identifier: "decks.removeTrack",
+                label: ProducerTrackControls.removeTrackTitle,
+                enabled: !session.isRecording && session.canRemoveStrip(session.selectedChannelID),
+                help: "Removes the selected empty speaker strip. Strips that already have audio stay."
+            ) { removeStripFromMenu(Notification(name: .fixerMixerRemoveStrip)) }
+            Button { toggleReorderFromMenu(Notification(name: .fixerMixerToggleReorder)) } label: {
+                Text("REORDER")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+            }
+            .buttonStyle(MixerGhostButtonStyle(engaged: reorderStrips))
+            .fixedSize(horizontal: true, vertical: false)
+            .disabled(!session.hasSession || session.isRecording)
+            .accessibilityIdentifier("decks.reorder")
+            .accessibilityLabel(ProducerTrackControls.reorderTitle)
+            .help(reorderStrips ? "Reorder is on. Drag strips, then click Reorder again." : "Turn on drag-to-reorder for the strips.")
+            deskButton(
+                ProducerTrackControls.inputDeviceButtonTitle,
+                identifier: "decks.inputDevice",
+                label: ProducerTrackControls.inputDeviceTitle,
+                enabled: !session.isRecording,
+                help: "Choose the audio interface TheDecks records from. With no session yet, this opens an empty mixer and then the list."
+            ) {
+                NotificationCenter.default.post(name: ProducerTrackControls.inputDeviceNotification, object: nil)
+            }
+        }
+    }
+
+    private func deskButton(
+        _ title: String,
+        identifier: String? = nil,
+        label: String? = nil,
+        enabled: Bool = true,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .lineLimit(1)
+        }
+        .buttonStyle(MixerGhostButtonStyle())
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(!enabled)
+        .help(help)
+        .modifier(DeckButtonIdentity(identifier: identifier, label: label))
     }
 
     private var dropZone: some View {
@@ -303,11 +433,11 @@ struct ContentView: View {
                 Image(systemName: "rectangle.stack.badge.play")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(MixerTheme.cyan)
-                Text("DROP AUDIO OR A STRIPPER FOLDER")
+                Text("DROP AUDIO OR A TheStrip FOLDER")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(MixerTheme.textPrimary)
-                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — mono files are speakers (up to 8), stereo files are beds (up to 2). A _speakers folder still builds the Stripper layout. Or NEW SESSION for an empty mixer.")
+                Text("Any WAV, AIFF, MP3, M4A… becomes a channel — mono files are speakers (up to 8), stereo files are beds (up to 2). A _speakers folder still builds the TheStrip layout. New Track adds one empty speaker strip.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(MixerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -315,9 +445,17 @@ struct ContentView: View {
                 Button("NEW SESSION") { session.newRecordSession() }
                     .buttonStyle(MixerPrimaryButtonStyle())
                     .padding(.top, 6)
-                    .help("Empty mixer, no channels. ADD STRIP or drop audio. Arm IN, then Record. Monitor through your interface.")
-                Button("CHOOSE FOLDER…") { pickFolder() }
-                    .buttonStyle(MixerGhostButtonStyle())
+                    .help("Empty mixer, no tracks. New Track adds one empty speaker strip. Arm IN, then Record. Monitor through your interface.")
+                if let onAddSelectedDepot {
+                    Button("ADD SELECTED") { onAddSelectedDepot() }
+                        .buttonStyle(MixerPrimaryButtonStyle())
+                        .accessibilityIdentifier("fixer.addSelected")
+                        .help("Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                }
+                if chrome == .application {
+                    Button("CHOOSE FOLDER…") { pickFolder() }
+                        .buttonStyle(MixerGhostButtonStyle())
+                }
                 Button("CHOOSE FILES…") { pickFiles(append: false) }
                     .buttonStyle(MixerGhostButtonStyle())
                     .help("Pick one or more audio files. Mono → speaker (up to 8); stereo → bed (up to 2).")
@@ -606,9 +744,10 @@ struct ContentView: View {
             .frame(maxWidth: 320)
             .disabled(session.isRecording || session.isRecordStandby)
             .help("The interface Mixer records from. New recordings use this box’s sample rate. Assign IN 1 / IN 2 on each speaker strip. Standby meters live input on armed strips.")
-            Text("Also available from File → Input Device…")
+            Text("Choose the interface for the next recording. INPUT in the header opens this list.")
                 .font(.system(size: 9, weight: .medium, design: .rounded))
                 .foregroundStyle(MixerTheme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -842,38 +981,6 @@ struct ContentView: View {
         return MixerTheme.lime
     }
 
-    private var statusBar: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            if let progress = session.busyProgress {
-                HStack(spacing: 6) {
-                    Capsule()
-                        .fill(MixerTheme.cyan.opacity(0.18))
-                        .frame(width: 160, height: 3)
-                        .overlay(alignment: .leading) {
-                            Capsule()
-                                .fill(MixerTheme.cyan)
-                                .frame(width: max(3, 160 * CGFloat(min(1, max(0, progress)))))
-                        }
-                    Text(session.busyProgressLabel.map { "\($0) · \(Int(progress * 100))%" } ?? String(format: "%.0f%%", progress * 100))
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(MixerTheme.lime)
-                        .monospacedDigit()
-                        .lineLimit(1)
-                }
-            }
-            Text(session.status)
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(MixerTheme.textPrimary)
-            if session.hasSession {
-                Text("File menu · Load/Save/Import/Export/Input · SEL opens DSP · Shift-drag waveform to silence · Option-drag clears")
-                    .font(.system(size: 9, weight: .medium, design: .rounded))
-                    .foregroundStyle(MixerTheme.textSecondary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func formatTime(_ frames: Int) -> String {
         guard session.sampleRate > 0 else { return "0:00" }
         let sec = Double(frames) / session.sampleRate
@@ -887,7 +994,11 @@ struct ContentView: View {
         panel.allowsMultipleSelection = false
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            session.loadStripperFolder(url)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs([url])
+            } else {
+                session.loadStripperFolder(url)
+            }
         }
     }
 
@@ -902,7 +1013,11 @@ struct ContentView: View {
             : "Choose audio files — each file becomes a channel"
         panel.begin { response in
             guard response == .OK else { return }
-            session.importAudioFiles(panel.urls, append: append)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs(panel.urls)
+            } else {
+                session.importAudioFiles(panel.urls, append: append)
+            }
         }
     }
 
@@ -915,7 +1030,11 @@ struct ContentView: View {
         panel.message = "Choose a mix JSON file"
         panel.begin { response in
             guard response == .OK, let url = panel.url else { return }
-            session.openMixFile(url)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs([url])
+            } else {
+                session.openMixFile(url)
+            }
         }
     }
 
@@ -941,8 +1060,47 @@ struct ContentView: View {
         }
         group.notify(queue: .main) {
             let urls = collected.compactMap { $0 as? URL }
-            session.importDroppedURLs(urls)
+            if let onImportURLs, chrome == .lounge {
+                onImportURLs(urls)
+            } else {
+                session.importDroppedURLs(urls)
+            }
         }
         return true
+    }
+}
+
+private struct DeckButtonIdentity: ViewModifier {
+    var identifier: String?
+    var label: String?
+
+    func body(content: Content) -> some View {
+        content
+            .modifier(OptionalAccessibilityID(identifier: identifier))
+            .modifier(OptionalAccessibilityLabel(label: label))
+    }
+}
+
+private struct OptionalAccessibilityID: ViewModifier {
+    var identifier: String?
+
+    func body(content: Content) -> some View {
+        if let identifier {
+            content.accessibilityIdentifier(identifier)
+        } else {
+            content
+        }
+    }
+}
+
+private struct OptionalAccessibilityLabel: ViewModifier {
+    var label: String?
+
+    func body(content: Content) -> some View {
+        if let label {
+            content.accessibilityLabel(label)
+        } else {
+            content
+        }
     }
 }

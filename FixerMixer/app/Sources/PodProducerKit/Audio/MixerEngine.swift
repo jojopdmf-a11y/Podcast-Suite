@@ -65,6 +65,10 @@ final class MixerEngine: @unchecked Sendable {
     /// Voice index → hardware input channel (0-based). Empty = not recording that strip.
     private var recordMap: [Int: Int] = [:]
     private var inputDeviceUID: String?
+    /// Private aggregate used when the chosen input has no outputs (built-in mic).
+    /// Destroyed after the engine stops. 0 means none.
+    private var privateAggregateID: AudioDeviceID = 0
+    private static let inputLog = Logger(subsystem: "com.cougarcalc.podproducer", category: "input")
     /// Armed at record/standby start. Render reads this; the tap reads `tapArmed`.
     private var armedFlags: [Bool] = []
     private var tapArmed: [(voice: Int, hw: Int)] = []
@@ -695,7 +699,7 @@ final class MixerEngine: @unchecked Sendable {
         let wantsInput = recording || inputMetering
         if !wantsInput, frameCount <= 0 {
             lock.unlock()
-            throw MixerError.engine("Load tracks first, or ADD STRIP and Record.")
+            throw MixerError.engine("Load tracks first, or use New Track and Record.")
         }
         if wantsInput, recordMap.isEmpty {
             lock.unlock()
@@ -1057,6 +1061,13 @@ final class MixerEngine: @unchecked Sendable {
         engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.mainMixerNode.outputVolume = 1
         var startedSession: RecordSession?
+        var retainAggregate = false
+        defer {
+            if !retainAggregate, privateAggregateID != 0 {
+                engine.stop()
+                destroyPrivateAggregate()
+            }
+        }
         if wantsInput {
             let hooked = try connectSilentInput(engine)
             if recording, let folder = recordFolder {
@@ -1087,6 +1098,7 @@ final class MixerEngine: @unchecked Sendable {
             abandonStart(engine, session: startedSession)
             throw error
         }
+        retainAggregate = wantsInput
         audioEngine = engine
         sourceNode = node
         playing = true
@@ -1125,6 +1137,7 @@ final class MixerEngine: @unchecked Sendable {
         sourceNode = nil
         recSilentMixer = nil
         audioEngine = nil
+        destroyPrivateAggregate()
         freeTapScratch()
 
         lock.lock()
@@ -1521,7 +1534,8 @@ final class MixerEngine: @unchecked Sendable {
         let input = engine.inputNode
         let hwFormat = input.inputFormat(forBus: 0)
         guard hwFormat.sampleRate > 0, hwFormat.channelCount > 0 else {
-            throw MixerError.engine("No input from that interface. Pick another INPUT.")
+            let name = MixerInputDevices.list().first { $0.uid == (inputDeviceUID ?? "") }?.name
+            throw MixerError.engine(DeckStatusCopy.noInput(deviceName: name))
         }
         let silent = AVAudioMixerNode()
         engine.attach(silent)
@@ -1810,7 +1824,7 @@ final class MixerEngine: @unchecked Sendable {
 
     private func noteInputPeaks(_ src: UnsafePointer<Float>, frames: Int, channels: Int) {
         for arm in tapArmed {
-            if arm.hw < 0 || arm.hw >= channels || arm.voice < 0 { continue }
+            if !MixerHardwareInput.isPresent(hwChannel: arm.hw, channelCount: channels) || arm.voice < 0 { continue }
             var peak: Float = 0
             let hw = arm.hw
             for f in 0..<frames {
@@ -1971,19 +1985,54 @@ final class MixerEngine: @unchecked Sendable {
     private func applyInputDevice(_ engine: AVAudioEngine, uid: String?) -> AudioDeviceID {
         guard let uid,
               let device = MixerInputDevices.list().first(where: { $0.uid == uid })
-        else { return 0 }
-        var id = device.id
-        let size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        else {
+            destroyPrivateAggregate()
+            return 0
+        }
+        let output = MixerInputDevices.defaultOutputDevice()
+        let plan = MixerInputAttachPlan.plan(
+            inputOutputChannels: MixerInputDevices.outputChannelCount(device.id),
+            inputUID: device.uid,
+            outputUID: output?.uid
+        )
+        destroyPrivateAggregate()
+        let target: AudioDeviceID
+        switch plan {
+        case .useInputDevice:
+            target = device.id
+        case .privateAggregate(let clockUID, let outputUID):
+            if let aggregate = MixerInputDevices.makePrivateAggregate(
+                inputUID: device.uid,
+                outputUID: outputUID,
+                clockUID: clockUID
+            ) {
+                privateAggregateID = aggregate
+                target = aggregate
+            } else {
+                Self.inputLog.error("Could not pair input-only device with the speakers")
+                target = device.id
+            }
+        }
         guard let audioUnit = engine.inputNode.audioUnit else { return device.id }
-        _ = AudioUnitSetProperty(
+        var id = target
+        let status = AudioUnitSetProperty(
             audioUnit,
             kAudioOutputUnitProperty_CurrentDevice,
             kAudioUnitScope_Global,
             0,
             &id,
-            size
+            UInt32(MemoryLayout<AudioDeviceID>.size)
         )
+        if status != noErr {
+            Self.inputLog.error("Input device set failed: \(status)")
+        }
         return device.id
+    }
+
+    private func destroyPrivateAggregate() {
+        let id = privateAggregateID
+        privateAggregateID = 0
+        MixerInputDevices.destroyPrivateAggregate(id)
     }
 }
 

@@ -115,10 +115,7 @@ public struct StripperRootView: View {
     private var header: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("PODSTRIPPER")
-                    .font(.system(size: lounge ? 18 : 28, weight: .bold, design: .rounded))
-                    .tracking(lounge ? 1.0 : 1.5)
-                    .foregroundStyle(StripperTheme.cyan)
+                QuietTheTitle(name: "Strip", size: lounge ? 18 : 28, color: StripperTheme.cyan)
                     .shadow(color: StripperTheme.cyan.opacity(0.45), radius: 10)
                 Text("Stereo Mix → Separate Speaker Tracks + Music / SFX")
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
@@ -481,10 +478,7 @@ public struct StripperRootView: View {
 
     private var footerBrand: some View {
         HStack {
-            Text("PODSTRIPPER")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .tracking(2)
-                .foregroundStyle(StripperTheme.cyanDim)
+            QuietTheTitle(name: "Strip", size: 10, color: StripperTheme.cyanDim)
             Text("·")
                 .foregroundStyle(StripperTheme.textSecondary)
             Text("LOCAL PROCESSING · NOTHING UPLOADED")

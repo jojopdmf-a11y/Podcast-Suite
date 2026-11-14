@@ -1,24 +1,11 @@
+import PodProducerKit
 import SwiftUI
-
-extension Notification.Name {
-    static let cougarCalcShowAbout = Notification.Name("cougarCalcShowAbout")
-    static let fixerMixerSaveMix = Notification.Name("fixerMixerSaveMix")
-    static let fixerMixerUpdateMix = Notification.Name("fixerMixerUpdateMix")
-    static let fixerMixerLoadMix = Notification.Name("fixerMixerLoadMix")
-    static let fixerMixerAddStrip = Notification.Name("fixerMixerAddStrip")
-    static let fixerMixerRemoveStrip = Notification.Name("fixerMixerRemoveStrip")
-    static let fixerMixerToggleReorder = Notification.Name("fixerMixerToggleReorder")
-    static let fixerMixerImportFolder = Notification.Name("fixerMixerImportFolder")
-    static let fixerMixerImportFiles = Notification.Name("fixerMixerImportFiles")
-    static let fixerMixerExport = Notification.Name("fixerMixerExport")
-    static let fixerMixerPickInput = Notification.Name("fixerMixerPickInput")
-}
 
 @main
 struct FixerMixerApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ProducerAppRoot()
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 980, height: 820)
@@ -38,13 +25,13 @@ struct FixerMixerApp: App {
                 }
                 .keyboardShortcut("o", modifiers: .command)
                 Divider()
-                Button("Add Strip") {
+                Button("New Track") {
                     NotificationCenter.default.post(name: .fixerMixerAddStrip, object: nil)
                 }
-                Button("Remove Strip") {
+                Button("Remove Track") {
                     NotificationCenter.default.post(name: .fixerMixerRemoveStrip, object: nil)
                 }
-                Button("Reorder Strips") {
+                Button("Reorder") {
                     NotificationCenter.default.post(name: .fixerMixerToggleReorder, object: nil)
                 }
                 Divider()
@@ -64,7 +51,7 @@ struct FixerMixerApp: App {
                 }
             }
             CommandGroup(replacing: .appInfo) {
-                Button("About PodProducer") {
+                Button("About TheDecks") {
                     NotificationCenter.default.post(name: .cougarCalcShowAbout, object: nil)
                 }
             }

@@ -325,6 +325,110 @@ public final class ProjectPackage {
         return (try? JSONDecoder().decode(LimiterWorkspaceSettings.self, from: data)) ?? .defaults
     }
 
+    public var producerSessionURL: URL {
+        Self.appending("workspaces/producer.json", to: rootURL)
+    }
+
+    public var producerRecoveryURL: URL {
+        rootURL.appendingPathComponent("recovery/producer", isDirectory: true)
+    }
+
+    /// `{}` and a missing file mean there is no Fixer session yet.
+    public func readProducerSession() -> Data? {
+        guard let data = try? Data(contentsOf: producerSessionURL), !data.isEmpty else { return nil }
+        let trimmed = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed == "{}" { return nil }
+        return data
+    }
+
+    public func writeProducerSession(_ data: Data) throws {
+        try rejectNestedWrite()
+        var payload = data
+        if payload.isEmpty {
+            payload = Data("{}\n".utf8)
+        } else if payload.last != UInt8(ascii: "\n") {
+            payload.append(UInt8(ascii: "\n"))
+        }
+        do {
+            try AtomicFile.write(payload, to: producerSessionURL)
+        } catch let error as PackageError {
+            throw error
+        } catch {
+            throw PackageError.atomicWriteFailed(error.localizedDescription)
+        }
+    }
+
+    /// Moves a file from this project's `recovery/` folder into `depot/results`
+    /// under a new name. Does not overwrite an existing result or change the
+    /// selected depot file. The source is only renamed, not loaded into RAM.
+    @discardableResult
+    public func adoptRecoveredResult(
+        from source: URL,
+        displayName: String,
+        producedBy: String
+    ) throws -> DepotAsset {
+        try rejectNestedWrite()
+        if producedBy.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) == nil {
+            throw PackageError.operationFailed("That result has an unsafe producing tool name.")
+        }
+        let fm = FileManager.default
+        let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+        let resolved = source.standardizedFileURL.resolvingSymlinksInPath()
+        let recovery = Self.appending("recovery", to: root).standardizedFileURL
+        guard Self.isInsideOrEqual(resolved, root: recovery), resolved.path != recovery.path else {
+            throw PackageError.operationFailed("A take can only be moved out of this project's recovery folder.")
+        }
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: resolved.path, isDirectory: &isDirectory), !isDirectory.boolValue else {
+            throw PackageError.operationFailed("The recovered take is missing.")
+        }
+        if (try? fm.destinationOfSymbolicLink(atPath: resolved.path)) != nil {
+            throw PackageError.operationFailed("The recovered take is a symlink.")
+        }
+        let ext = Self.storageExtension(for: resolved)
+        let display = Self.sanitizedDisplayName(displayName)
+        let fileName = try allocateDepotFileName(displayName: display, ext: ext, kind: .result)
+        let relativePath = "\(AssetKind.result.depotDirectory)/\(fileName)"
+        let destination = try Self.locate(relativePath: relativePath, kind: .result, in: rootURL)
+        if fm.fileExists(atPath: destination.path) {
+            throw PackageError.operationFailed("A depot file already uses that name.")
+        }
+        let selected = manifest.selectedAssetID
+        do {
+            try fm.moveItem(at: resolved, to: destination)
+        } catch {
+            throw PackageError.operationFailed("Could not move the take into the depot.")
+        }
+        if (try? fm.destinationOfSymbolicLink(atPath: destination.path)) != nil {
+            try? fm.removeItem(at: destination)
+            throw PackageError.operationFailed("The depot refused to store a symlink.")
+        }
+        let asset = DepotAsset(
+            id: UUID().uuidString.lowercased(),
+            displayName: display,
+            kind: .result,
+            relativePath: relativePath,
+            byteCount: Self.byteCount(at: destination),
+            importedAt: Date(),
+            producedBy: producedBy
+        )
+        let snapshot = manifest
+        manifest.assets.append(asset)
+        manifest.selectedAssetID = selected
+        do {
+            try save()
+        } catch {
+            manifest = snapshot
+            if !fm.fileExists(atPath: resolved.path) {
+                try? fm.moveItem(at: destination, to: resolved)
+            }
+            throw error
+        }
+        missingAssetIDs.remove(asset.id)
+        mismatchedAssetIDs.remove(asset.id)
+        return asset
+    }
+
     public func writeLimiterSettings(_ settings: LimiterWorkspaceSettings) throws {
         try rejectNestedWrite()
         let encoder = JSONEncoder()

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import LilLevelerKit
 import PodLoungeCore
+import PodProducerKit
 import PodStripperKit
 
 enum PendingNavigation: Equatable {
@@ -11,9 +12,8 @@ enum PendingNavigation: Equatable {
 
 /// Owns the open `.podlounge` package and Lounge navigation.
 ///
-/// FUTURE Fixer integration: while a take is recording, the user stays in Fixer
-/// until they press Stop. `leaveWorkspace()`, New, Open, and Save must never
-/// stop or discard a take. This build has no recorder and no audio engine.
+/// While a Fixer take is recording, the user stays in Fixer until they press Stop.
+/// Leaving, New, and Open are refused. None of those call Stop.
 @MainActor
 final class ProjectSession: ObservableObject {
     @Published var package: ProjectPackage?
@@ -32,8 +32,13 @@ final class ProjectSession: ObservableObject {
     @Published var limiterExporting = false
     /// True while Stripper is splitting. Leaving, New, Open, and depot edits wait.
     @Published var stripperRunning = false
+    /// True while Fixer is recording. Leaving does not stop the take.
+    @Published var fixerRecording = false
+    /// Bumps when the mixer settings change so Save can light up.
+    @Published private(set) var fixerRevision = 0
+    let fixer = ProducerLoungeModel()
 
-    var navigationLocked: Bool { limiterExporting || stripperRunning }
+    var navigationLocked: Bool { limiterExporting || stripperRunning || fixerRecording }
 
     /// Set by the Limiter workspace so leaving the card stops playback.
     var endLimiterPlayback: (() -> Void)?
@@ -46,12 +51,42 @@ final class ProjectSession: ObservableObject {
     private var savedNotes: [WorkspaceID: String] = [:]
     private var savedSelection: String?
     private var savedLimiterSettings = LimiterWorkspaceSettings.defaults
+    private var savedFixerJSON = Data()
+    /// Display names last written (or loaded). A rename marks the project unsaved.
+    private var savedAssetNames: [String: String] = [:]
+
+    init() {
+        fixer.onRecordingChange = { [weak self] recording in
+            self?.fixerRecording = recording
+        }
+        fixer.onParametersSynced = { [weak self] in
+            self?.fixerRevision += 1
+        }
+        fixer.onTakesReady = { [weak self] urls in
+            self?.absorbFixerTakes(urls)
+        }
+        fixer.onExportReady = { [weak self] folder in
+            self?.absorbFixerExport(folder: folder)
+        }
+        fixer.onAddSelected = { [weak self] in
+            self?.addSelectedDepotToFixer()
+        }
+        fixer.onImportURLs = { [weak self] urls in
+            self?.importFixerURLs(urls)
+        }
+    }
 
     var isDirty: Bool {
         projectName != savedName
             || notes != savedNotes
             || selectedAssetID != savedSelection
             || limiterSettings != savedLimiterSettings
+            || assetDisplayNames != savedAssetNames
+            || (package != nil && fixer.encodedDocument() != savedFixerJSON)
+    }
+
+    private var assetDisplayNames: [String: String] {
+        Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0.displayName) })
     }
 
     var assets: [DepotAsset] {
@@ -171,7 +206,7 @@ final class ProjectSession: ObservableObject {
             throw PackageError.operationFailed("Create or open a project before saving.")
         }
         applyMetadata(to: package)
-        try package.writeLimiterSettings(limiterSettings)
+        try writeSideFiles(to: package)
         try package.save()
         markClean()
         missingAssetIDs = package.missingAssetIDs
@@ -189,7 +224,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.title = "Save Pod Lounge Project As"
+        panel.title = "Save Lounge Project As"
         panel.prompt = "Save As"
         panel.nameFieldStringValue = package?.rootURL.deletingPathExtension().lastPathComponent ?? "Project"
         panel.canCreateDirectories = true
@@ -200,7 +235,7 @@ final class ProjectSession: ObservableObject {
             applyMetadata(to: package)
             let copy = try package.saveAs(to: folder)
             do {
-                try copy.writeLimiterSettings(limiterSettings)
+                try writeSideFiles(to: copy)
             } catch {
                 try? FileManager.default.removeItem(at: folder)
                 throw error
@@ -245,6 +280,54 @@ final class ProjectSession: ObservableObject {
         importFiles(panel.urls)
     }
 
+    /// Asks for a new display name. The audio file on disk is not renamed or rewritten.
+    /// Disabled while TheDecks is recording (and while a split or export holds the depot).
+    func promptRename(_ asset: DepotAsset) {
+        if UITestMode.enabled { return }
+        guard !navigationLocked else { return }
+        guard package != nil else { return }
+        selectedAssetID = asset.id
+        let alert = NSAlert()
+        alert.messageText = "Rename \u{201C}\(asset.displayName)\u{201D}"
+        alert.informativeText = "This changes the name in the project list. The audio file stays where it is. Save Project keeps the new name."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = asset.displayName
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        applyRename(id: asset.id, to: field.stringValue)
+    }
+
+    /// Writes the trimmed name onto the manifest. Empty names and `/` or `:` are refused.
+    func applyRename(id: String, to raw: String) {
+        guard !navigationLocked else { return }
+        guard let package else { return }
+        guard let previous = package.manifest.assets.first(where: { $0.id == id })?.displayName else {
+            return
+        }
+        do {
+            let outcome = try package.renameDisplayName(id: id, to: raw)
+            guard outcome.displayName != previous else { return }
+            // A TheDecks strip follows only while it still shows the depot's default
+            // label (extension dropped, underscores as spaces, long names shortened).
+            // A strip the user renamed in TheDecks keeps that name.
+            fixer.followDepotDisplayName(assetID: id, from: previous, to: outcome.displayName)
+            objectWillChange.send()
+            if outcome.warnsDuplicate {
+                alertMessage = "Another depot item is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
+            }
+        } catch DepotRenameError.emptyName {
+            alertMessage = "Enter a name. The old name was kept."
+        } catch DepotRenameError.illegalCharacter {
+            alertMessage = "A name can't include / or :. The old name was kept."
+        } catch {
+            alertMessage = error.localizedDescription
+        }
+    }
+
     /// Asks first, then removes the file from the depot and saves the project.
     func deleteAsset(_ asset: DepotAsset) {
         if UITestMode.enabled { return }
@@ -263,7 +346,7 @@ final class ProjectSession: ObservableObject {
         }
         do {
             applyMetadata(to: package)
-            try package.writeLimiterSettings(limiterSettings)
+            try writeSideFiles(to: package)
             try package.removeAsset(id: asset.id)
             adopt(package, keepWorkspace: true)
         } catch {
@@ -272,8 +355,9 @@ final class ProjectSession: ObservableObject {
     }
 
     /// Navigation only. Stops Limiter playback. Does not delete depot audio.
-    /// Does not stop a Fixer take — there is no recorder in this build.
+    /// While Fixer is recording this returns without calling Stop.
     func leaveWorkspace() {
+        guard fixer.requestLeave() else { return }
         guard !navigationLocked else { return }
         stopDepotPlayback()
         if activeWorkspace == .limiter {
@@ -290,7 +374,7 @@ final class ProjectSession: ObservableObject {
             throw PackageError.operationFailed("Create or open a project before saving a result.")
         }
         applyMetadata(to: package)
-        try package.writeLimiterSettings(limiterSettings)
+        try writeSideFiles(to: package)
         _ = try package.importResult(
             from: url,
             producedBy: "limiter",
@@ -380,7 +464,7 @@ final class ProjectSession: ObservableObject {
         }
         do {
             applyMetadata(to: package)
-            try package.writeLimiterSettings(limiterSettings)
+            try writeSideFiles(to: package)
             let tracks = model.namingRows.map {
                 StripperTrackImport(sourceURL: $0.sourceURL, displayName: $0.displayName)
             }
@@ -497,7 +581,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSSavePanel()
-        panel.title = "New Pod Lounge Project"
+        panel.title = "New Lounge Project"
         panel.prompt = "Create"
         panel.nameFieldStringValue = "Untitled Project"
         panel.canCreateDirectories = true
@@ -518,7 +602,7 @@ final class ProjectSession: ObservableObject {
             return
         }
         let panel = NSOpenPanel()
-        panel.title = "Open Pod Lounge Project"
+        panel.title = "Open Lounge Project"
         panel.prompt = "Open"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
@@ -526,7 +610,7 @@ final class ProjectSession: ObservableObject {
         panel.message = "Choose a .podlounge folder."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let root = ProjectPackage.locateRoot(from: url) else {
-            alertMessage = "That folder does not contain a Pod Lounge manifest.json."
+            alertMessage = "That folder does not contain a Lounge manifest.json."
             return
         }
         do {
@@ -542,7 +626,7 @@ final class ProjectSession: ObservableObject {
     private func importFiles(_ urls: [URL]) {
         guard let package else { return }
         applyMetadata(to: package)
-        try? package.writeLimiterSettings(limiterSettings)
+        try? writeSideFiles(to: package)
         var failures: [String] = []
         var importedAny = false
         for url in urls {
@@ -602,6 +686,15 @@ final class ProjectSession: ObservableObject {
         missingAssetIDs = package.missingAssetIDs
         mismatchedAssetIDs = package.mismatchedAssetIDs
         activeWorkspace = workspace
+        fixer.setRecordDirectory(package.producerRecoveryURL)
+        if rootChanged {
+            try? FileManager.default.createDirectory(at: package.producerRecoveryURL, withIntermediateDirectories: true)
+            fixer.restore(data: package.readProducerSession()) { id in
+                guard let asset = package.manifest.assets.first(where: { $0.id == id }) else { return nil }
+                guard package.health(of: asset) == .present else { return nil }
+                return try? package.resolvedURL(for: asset)
+            }
+        }
         markClean()
         if rootChanged {
             stopDepotPlayback()
@@ -615,6 +708,146 @@ final class ProjectSession: ObservableObject {
         savedNotes = notes
         savedSelection = selectedAssetID
         savedLimiterSettings = limiterSettings
+        savedFixerJSON = fixer.encodedDocument()
+        savedAssetNames = assetDisplayNames
+    }
+
+    private func writeSideFiles(to package: ProjectPackage) throws {
+        try package.writeLimiterSettings(limiterSettings)
+        try package.writeProducerSession(fixer.encodedDocument())
+    }
+
+    func addSelectedDepotToFixer() {
+        guard !navigationLocked else { return }
+        guard let package else {
+            alertMessage = "Create or open a project before adding audio."
+            return
+        }
+        guard let id = selectedAssetID, let asset = assets.first(where: { $0.id == id }) else {
+            alertMessage = "Select a depot file to add."
+            return
+        }
+        guard health(of: asset) == .present, let url = try? package.resolvedURL(for: asset) else {
+            alertMessage = "That depot file is missing."
+            return
+        }
+        fixer.importDepotFiles(
+            [ProducerDepotFile(url: url, assetID: asset.id, displayName: asset.displayName)],
+            append: fixer.hasSession
+        )
+    }
+
+    /// Copies dropped audio into the depot, then puts those copies on the mixer.
+    /// A `_speakers` folder is copied the same way. A mix sidecar is settings only.
+    func importFixerURLs(_ urls: [URL]) {
+        guard !navigationLocked else { return }
+        guard let package else {
+            alertMessage = "Create or open a project before adding audio."
+            return
+        }
+        let fm = FileManager.default
+        var audio: [URL] = []
+        var mix: URL?
+        for url in urls {
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue {
+                let found = ProducerFolderScan.audioAndMix(in: url)
+                audio.append(contentsOf: found.audio)
+                if mix == nil { mix = found.mix }
+            } else if ProducerFolderScan.isMixFile(url) {
+                if mix == nil { mix = url }
+            } else {
+                audio.append(url)
+            }
+        }
+        var labeled: [ProducerDepotFile] = []
+        var failures: [String] = []
+        for url in audio {
+            if let existing = depotAsset(matching: url, in: package) {
+                if let resolved = try? package.resolvedURL(for: existing) {
+                    labeled.append(ProducerDepotFile(url: resolved, assetID: existing.id, displayName: existing.displayName))
+                }
+                continue
+            }
+            do {
+                let asset = try package.importMedia(from: url, kind: .original, producedBy: nil, select: false)
+                let resolved = try package.resolvedURL(for: asset)
+                labeled.append(ProducerDepotFile(url: resolved, assetID: asset.id, displayName: asset.displayName))
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+        if !labeled.isEmpty {
+            fixer.importDepotFiles(labeled, append: fixer.hasSession)
+            objectWillChange.send()
+        }
+        if let mix, fixer.hasSession {
+            fixer.applyMixFile(mix)
+        } else if mix != nil, labeled.isEmpty {
+            alertMessage = "Add the audio first. A mix file is settings only and does not contain the recording."
+        }
+        if !failures.isEmpty {
+            let header = failures.count == 1 ? "1 file could not be imported:" : "\(failures.count) files could not be imported:"
+            alertMessage = ([header] + failures).joined(separator: "\n")
+        }
+    }
+
+    private func absorbFixerTakes(_ urls: [URL]) {
+        guard let package else { return }
+        let selected = selectedAssetID
+        for url in urls {
+            let display = url.deletingPathExtension().lastPathComponent
+            do {
+                let asset = try package.adoptRecoveredResult(from: url, displayName: display, producedBy: "fixer")
+                if let resolved = try? package.resolvedURL(for: asset) {
+                    fixer.retargetTake(from: url, to: resolved, assetID: asset.id)
+                }
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+        }
+        package.manifest.selectedAssetID = selected
+        selectedAssetID = selected
+        if (try? package.writeProducerSession(fixer.encodedDocument())) != nil {
+            savedFixerJSON = fixer.encodedDocument()
+        }
+        objectWillChange.send()
+    }
+
+    private func absorbFixerExport(folder: URL) {
+        guard let package else { return }
+        let selected = selectedAssetID
+        let fm = FileManager.default
+        let files = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        let audioExt: Set<String> = ["wav", "aiff", "aif", "mp3", "m4a", "caf", "aac"]
+        let recovery = package.rootURL.appendingPathComponent("recovery").standardizedFileURL.resolvingSymlinksInPath().path
+        for file in files where audioExt.contains(file.pathExtension.lowercased()) {
+            let display = file.deletingPathExtension().lastPathComponent
+            let path = file.standardizedFileURL.resolvingSymlinksInPath().path
+            do {
+                if path.hasPrefix(recovery + "/") {
+                    _ = try package.adoptRecoveredResult(from: file, displayName: display, producedBy: "fixer")
+                } else {
+                    _ = try package.importResult(from: file, producedBy: "fixer", displayName: display, select: false)
+                }
+            } catch {
+                alertMessage = error.localizedDescription
+            }
+        }
+        package.manifest.selectedAssetID = selected
+        selectedAssetID = selected
+        if (try? package.writeProducerSession(fixer.encodedDocument())) != nil {
+            savedFixerJSON = fixer.encodedDocument()
+        }
+        objectWillChange.send()
+    }
+
+    private func depotAsset(matching url: URL, in package: ProjectPackage) -> DepotAsset? {
+        let resolved = url.standardizedFileURL.resolvingSymlinksInPath()
+        return assets.first { asset in
+            guard let stored = try? package.resolvedURL(for: asset) else { return false }
+            return stored.standardizedFileURL.resolvingSymlinksInPath() == resolved
+        }
     }
 
     private func discardUnsavedEdits() {
@@ -627,6 +860,14 @@ final class ProjectSession: ObservableObject {
         package.manifest.selectedAssetID = savedSelection
         for id in WorkspaceID.allCases {
             package.manifest.workspaceSettings[id.rawValue] = WorkspaceSettings(notes: savedNotes[id] ?? "")
+        }
+        for index in package.manifest.assets.indices {
+            let id = package.manifest.assets[index].id
+            guard let saved = savedAssetNames[id] else { continue }
+            let current = package.manifest.assets[index].displayName
+            guard current != saved else { continue }
+            package.manifest.assets[index].displayName = saved
+            fixer.followDepotDisplayName(assetID: id, from: current, to: saved)
         }
     }
 }

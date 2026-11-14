@@ -17,8 +17,7 @@ struct StripperWorkspaceView: View {
                     .disabled(session.navigationLocked)
                     .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Stripper")
-                        .font(.system(size: 18, weight: .semibold))
+                    RoomTitleText(workspace: .stripper, size: 18)
                     Text("The selected depot file is the source. Dropping a new file imports it. Only Split Into Tracks starts a split.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)

@@ -115,10 +115,49 @@ enum MixerInputDevices {
         return rate
     }
 
+    /// Output channels on the box itself. The built-in mic is 0; Dante is not.
+    static func outputChannelCount(_ id: AudioDeviceID) -> Int {
+        streamChannelCount(id, scope: kAudioDevicePropertyScopeOutput)
+    }
+
+    /// Private aggregate: chosen input + default output. Clock follows the input so a
+    /// 48 kHz mic stays 48 kHz. Caller destroys the device when the engine stops.
+    static func makePrivateAggregate(inputUID: String, outputUID: String, clockUID: String) -> AudioDeviceID? {
+        let inputSub: [String: Any] = [
+            kAudioSubDeviceUIDKey: inputUID,
+            kAudioSubDeviceDriftCompensationKey: clockUID == inputUID ? 0 : 1,
+        ]
+        let outputSub: [String: Any] = [
+            kAudioSubDeviceUIDKey: outputUID,
+            kAudioSubDeviceDriftCompensationKey: clockUID == outputUID ? 0 : 1,
+        ]
+        let dict: [String: Any] = [
+            kAudioAggregateDeviceNameKey: "TheDecks Input",
+            kAudioAggregateDeviceUIDKey: "com.cougarcalc.thedecks.input.\(UUID().uuidString)",
+            kAudioAggregateDeviceSubDeviceListKey: [inputSub, outputSub],
+            kAudioAggregateDeviceMainSubDeviceKey: clockUID,
+            kAudioAggregateDeviceIsPrivateKey: true,
+            kAudioAggregateDeviceIsStackedKey: false,
+        ]
+        var aggregate = AudioDeviceID()
+        let status = AudioHardwareCreateAggregateDevice(dict as CFDictionary, &aggregate)
+        guard status == noErr, aggregate != 0 else { return nil }
+        return aggregate
+    }
+
+    static func destroyPrivateAggregate(_ id: AudioDeviceID) {
+        guard id != 0 else { return }
+        AudioHardwareDestroyAggregateDevice(id)
+    }
+
     private static func inputChannelCount(_ id: AudioDeviceID) -> Int {
+        streamChannelCount(id, scope: kAudioDevicePropertyScopeInput)
+    }
+
+    private static func streamChannelCount(_ id: AudioDeviceID, scope: AudioObjectPropertyScope) -> Int {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
         var dataSize: UInt32 = 0
@@ -153,5 +192,37 @@ enum MixerInputDevices {
         var sz = size
         guard AudioObjectGetPropertyData(id, &address, 0, nil, &sz, ptr) == noErr else { return nil }
         return ptr.pointee as String?
+    }
+}
+
+/// How TheDecks attaches the chosen INPUT to the playback engine.
+enum MixerInputAttachPlan: Equatable {
+    /// The interface already has outputs (Dante, a full-duplex box). Set it directly.
+    case useInputDevice
+    /// Input-only (built-in mic). A private aggregate keeps speakers alive and the mic as IN 1.
+    case privateAggregate(clockUID: String, outputUID: String)
+
+    static func plan(inputOutputChannels: Int, inputUID: String, outputUID: String?) -> MixerInputAttachPlan {
+        guard inputOutputChannels == 0, let outputUID, !outputUID.isEmpty, outputUID != inputUID else {
+            return .useInputDevice
+        }
+        return .privateAggregate(clockUID: inputUID, outputUID: outputUID)
+    }
+}
+
+/// Strip IN numbers are 1-based. Hardware channels are 0-based. A mono device's only channel is IN 1.
+enum MixerHardwareInput {
+    static func channelIndex(forInputNumber number: Int) -> Int {
+        max(0, number - 1)
+    }
+
+    static func isPresent(hwChannel: Int, channelCount: Int) -> Bool {
+        channelCount > 0 && hwChannel >= 0 && hwChannel < channelCount
+    }
+
+    /// IN 1 on a 1-channel device is channel 0. IN 2 on that device is absent.
+    static func hardwareChannel(inputNumber: Int, channelCount: Int) -> Int? {
+        let hw = channelIndex(forInputNumber: inputNumber)
+        return isPresent(hwChannel: hw, channelCount: channelCount) ? hw : nil
     }
 }

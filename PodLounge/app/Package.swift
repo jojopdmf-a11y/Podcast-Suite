@@ -16,6 +16,7 @@ let package = Package(
         // gives it its own name.
         .package(path: "../../LilLeveler/LilLevelerKit"),
         .package(path: "../../Podcast Stripper/PodStripperKit"),
+        .package(path: "../../FixerMixer/PodProducerKit"),
     ],
     targets: [
         .target(
@@ -28,6 +29,7 @@ let package = Package(
                 "PodLoungeCore",
                 .product(name: "LilLevelerKit", package: "LilLevelerKit"),
                 .product(name: "PodStripperKit", package: "PodStripperKit"),
+                .product(name: "PodProducerKit", package: "PodProducerKit"),
             ],
             path: "Sources/PodLounge",
             resources: [

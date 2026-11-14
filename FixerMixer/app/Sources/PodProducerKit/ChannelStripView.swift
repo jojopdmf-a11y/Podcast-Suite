@@ -903,7 +903,8 @@ struct ChannelStripView: View {
 
     private var fxDimmed: Bool { channel.dspBypass }
     private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 && !stripReorderable }
-    private var canRename: Bool { !channel.isStereo }
+    /// Speaker and stereo strips. Double-click the name. The session stores it.
+    private var canRename: Bool { true }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -1087,7 +1088,7 @@ struct ChannelStripView: View {
                         isPresented: $confirmRemove,
                         titleVisibility: .visible
                     ) {
-                        Button("Remove Strip", role: .destructive) { onRemove?() }
+                        Button("Remove Track", role: .destructive) { onRemove?() }
                         Button("Cancel", role: .cancel) {}
                     } message: {
                         Text("Only empty speaker strips can be removed. This cannot be undone.")
@@ -1189,7 +1190,7 @@ struct ChannelStripView: View {
             inputPicker
                 .frame(maxWidth: .infinity)
                 .disabled(isRecording || hardwareInputChannels <= 0)
-                .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through PodProducer.")
+                .help("Which input on the interface this strip records. — means do not record this strip. Monitor on the interface, not through TheDecks.")
             if isRecording, channel.inputChannel != nil {
                 Text("REC")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
@@ -1217,7 +1218,7 @@ struct ChannelStripView: View {
             if hardwareInputChannels > 0 {
                 ForEach(1...hardwareInputChannels, id: \.self) { n in
                     Button {
-                        channel.inputChannel = n - 1
+                        channel.inputChannel = MixerHardwareInput.channelIndex(forInputNumber: n)
                     } label: {
                         if current == n - 1 {
                             Label("\(n)", systemImage: "checkmark")
@@ -1305,12 +1306,7 @@ struct ChannelStripView: View {
     }
 
     private func commitRename() {
-        let cleaned = channel.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        if cleaned.isEmpty, let n = channel.speakerNumber {
-            channel.name = "SPK \(n)"
-        } else {
-            channel.name = cleaned
-        }
+        channel.commitDisplayName()
         isRenaming = false
         nameFieldFocused = false
         DispatchQueue.main.async {

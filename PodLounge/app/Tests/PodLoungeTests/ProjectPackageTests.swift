@@ -730,3 +730,97 @@ private func expect<T: Error & Equatable>(
     #expect(try Data(contentsOf: opened.limiterSettingsURL) == settingsBefore)
     #expect(opened.manifest.projectName == "Show saved")
 }
+
+@Test func recoveredTakeRenamesIntoDepotWithoutSelectingOrOverwriting() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let package = try ProjectPackage.create(
+        at: scratch.root.appendingPathComponent("Show.podlounge"),
+        name: "Show"
+    )
+    let original = try scratch.file("episode.wav", "original-bytes")
+    let originalBytes = try Data(contentsOf: original)
+    let kept = try package.importMedia(from: original, kind: .original, producedBy: nil, select: true)
+    #expect(package.manifest.selectedAssetID == kept.id)
+
+    let recovery = package.producerRecoveryURL
+    try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
+    let take = recovery.appendingPathComponent("Speaker_1.wav")
+    try Data("take-one".utf8).write(to: take)
+    let adopted = try package.adoptRecoveredResult(from: take, displayName: "Speaker_1", producedBy: "fixer")
+    #expect(package.manifest.selectedAssetID == kept.id)
+    #expect(!FileManager.default.fileExists(atPath: take.path))
+    let adoptedURL = try package.resolvedURL(for: adopted)
+    #expect(adoptedURL.path.contains("/depot/results/"))
+    #expect(try Data(contentsOf: adoptedURL) == Data("take-one".utf8))
+    #expect(try Data(contentsOf: original) == originalBytes)
+    #expect(adopted.producedBy == "fixer")
+    #expect(adopted.kind == .result)
+
+    let second = recovery.appendingPathComponent("Speaker_1.wav")
+    try Data("take-two".utf8).write(to: second)
+    let again = try package.adoptRecoveredResult(from: second, displayName: "Speaker_1", producedBy: "fixer")
+    #expect(again.id != adopted.id)
+    #expect(again.relativePath != adopted.relativePath)
+    #expect(try Data(contentsOf: adoptedURL) == Data("take-one".utf8))
+    #expect(package.manifest.selectedAssetID == kept.id)
+
+    let session = Data("{\"formatVersion\":1,\"mixJSON\":\"\",\"tracks\":[]}\n".utf8)
+    try package.writeProducerSession(session)
+    #expect(package.readProducerSession() == session)
+    let originalInDepot = try package.resolvedURL(for: kept)
+    #expect(try Data(contentsOf: originalInDepot) == originalBytes)
+}
+
+@Test func renameDisplayNameUpdatesManifestOnly() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("episode.wav", "episode-bytes")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    let storedURL = try package.resolvedURL(for: asset)
+    let bytes = try Data(contentsOf: storedURL)
+    let path = asset.relativePath
+    let id = asset.id
+
+    let other = try scratch.file("bed.wav", "bed-bytes")
+    let twin = try package.importMedia(from: other, kind: .original, producedBy: nil, select: false)
+    _ = twin
+
+    let outcome = try package.renameDisplayName(id: id, to: "  Host Take  ")
+    #expect(outcome.displayName == "Host Take")
+    #expect(outcome.warnsDuplicate == false)
+    #expect(package.manifest.assets[0].displayName == "Host Take")
+    #expect(package.manifest.assets[0].id == id)
+    #expect(package.manifest.assets[0].relativePath == path)
+    #expect(try Data(contentsOf: storedURL) == bytes)
+    #expect(storedURL.lastPathComponent == "episode.wav")
+
+    try package.save()
+    let reopened = try ProjectPackage.open(at: package.rootURL)
+    #expect(reopened.manifest.assets[0].displayName == "Host Take")
+    #expect(reopened.manifest.assets[0].id == id)
+    #expect(reopened.manifest.assets[0].relativePath == path)
+    let reopenedURL = try reopened.resolvedURL(for: reopened.manifest.assets[0])
+    #expect(reopenedURL.lastPathComponent == "episode.wav")
+    #expect(try Data(contentsOf: reopenedURL) == bytes)
+    #expect(ProjectPackage.exportCopySuggestedName(displayName: reopened.manifest.assets[0].displayName, relativePath: path) == "Host Take.wav")
+
+    expect(DepotRenameError.emptyName) {
+        _ = try package.renameDisplayName(id: id, to: "   ")
+    }
+    expect(DepotRenameError.illegalCharacter) {
+        _ = try package.renameDisplayName(id: id, to: "A/B Take")
+    }
+    expect(DepotRenameError.illegalCharacter) {
+        _ = try package.renameDisplayName(id: id, to: "Take: One")
+    }
+    #expect(package.manifest.assets[0].displayName == "Host Take")
+    #expect(try Data(contentsOf: storedURL) == bytes)
+
+    let duplicate = try package.renameDisplayName(id: id, to: twin.displayName)
+    #expect(duplicate.warnsDuplicate)
+    #expect(package.manifest.assets[0].displayName == twin.displayName)
+    #expect(package.manifest.assets[0].relativePath == path)
+    #expect(package.manifest.assets[0].id == id)
+}
