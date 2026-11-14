@@ -70,6 +70,45 @@ import Testing
     #expect(again.tracks.map(\.role) == ["speaker", "stereo"])
 }
 
+@Test @MainActor func depotDisplayNameNamesTheStripAndRenameFollowsOnlyTheDefault() throws {
+    let scratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("producer-rename-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    let mono = scratch.appendingPathComponent("episode.wav")
+    try WAVIO.write(
+        url: mono,
+        buffer: WAVIO.Buffer(sampleRate: 48_000, channelCount: 1, samples: Array(repeating: 0.1, count: 480))
+    )
+    let bytes = try Data(contentsOf: mono)
+
+    let model = ProducerLoungeModel()
+    model.importDepotFiles([
+        ProducerDepotFile(url: mono, assetID: "ep-1", displayName: "episode.wav"),
+    ], append: false)
+    let strip = try #require(model.session.voices.first)
+    #expect(strip.name == "episode")
+    #expect(strip.depotAssetID == "ep-1")
+    let eq = strip.eq
+
+    model.followDepotDisplayName(assetID: "ep-1", from: "episode.wav", to: "Host Take")
+    #expect(model.session.voices[0].name == "Host Take")
+    #expect(model.session.voices[0].eq == eq)
+    #expect(model.session.voices[0].fileURL?.path == mono.path)
+    #expect(try Data(contentsOf: mono) == bytes)
+
+    model.session.voices[0].name = "Jeffrey"
+    model.followDepotDisplayName(assetID: "ep-1", from: "Host Take", to: "Guest")
+    #expect(model.session.voices[0].name == "Jeffrey")
+
+    model.setRecordingForTest(true)
+    model.session.voices[0].name = "episode"
+    model.followDepotDisplayName(assetID: "ep-1", from: "episode.wav", to: "Host Take")
+    #expect(model.session.voices[0].name == "episode")
+    model.setRecordingForTest(false)
+}
+
 @Test @MainActor func standaloneMixFileRoundTrip() throws {
     let scratch = FileManager.default.temporaryDirectory
         .appendingPathComponent("producer-mix-\(UUID().uuidString)", isDirectory: true)

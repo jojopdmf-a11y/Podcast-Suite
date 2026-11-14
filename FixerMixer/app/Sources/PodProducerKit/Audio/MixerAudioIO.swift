@@ -31,12 +31,22 @@ enum MixerAudioIO {
     }
 
     static func displayName(url: URL) -> String {
-        let base = url.deletingPathExtension().lastPathComponent
+        shortenedLabel(url.deletingPathExtension().lastPathComponent)
+    }
+
+    /// Same shortening as a file name: drop a trailing extension, turn `_` into spaces, cap length.
+    /// Lounge uses this so a depot display name and a strip that still shows that name stay in step.
+    static func displayName(text: String) -> String {
+        shortenedLabel((text as NSString).deletingPathExtension)
+    }
+
+    private static func shortenedLabel(_ base: String) -> String {
+        let cleaned = base
             .replacingOccurrences(of: "_", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if base.isEmpty { return "Track" }
-        if base.count > 22 { return String(base.prefix(20)) + "…" }
-        return base
+        if cleaned.isEmpty { return "Track" }
+        if cleaned.count > 22 { return String(cleaned.prefix(20)) + "…" }
+        return cleaned
     }
 
     static func load(url: URL, targetSampleRate: Double? = nil) throws -> WAVIO.Buffer {

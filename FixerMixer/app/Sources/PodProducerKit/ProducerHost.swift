@@ -354,8 +354,18 @@ public final class ProducerLoungeModel: ObservableObject {
 
     public func importDepotFiles(_ files: [ProducerDepotFile], append: Bool) {
         session.importDepotAudio(
-            files.map { (url: $0.url, assetID: $0.assetID) },
+            files.map { (url: $0.url, assetID: $0.assetID, stripName: MixerAudioIO.displayName(text: $0.displayName)) },
             append: append
+        )
+    }
+
+    /// If a strip for `assetID` still shows the default label of `oldName`, it takes the label of `newName`.
+    /// A strip renamed in TheDecks (any other name) is not changed. Audio and EQ stay as they are.
+    public func followDepotDisplayName(assetID: String, from oldName: String, to newName: String) {
+        session.applyDepotStripLabel(
+            assetID: assetID,
+            previous: MixerAudioIO.displayName(text: oldName),
+            next: MixerAudioIO.displayName(text: newName)
         )
     }
 

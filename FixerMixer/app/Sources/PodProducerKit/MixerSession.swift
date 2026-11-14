@@ -485,6 +485,8 @@ final class MixerSession: ObservableObject {
     var onBounceFinished: ((URL) -> Void)?
     var onParametersSynced: (() -> Void)?
     private var assetIDsByPath: [String: String] = [:]
+    /// Strip labels supplied with a depot import. Cleared when the import finishes.
+    private var stripNamesByPath: [String: String] = [:]
     @Published var sampleRate: Double = 44100
     @Published var frameCount: Int = 0
     /// Voice slot id, stereo bed id (`musicID + slot`), or master.
@@ -1430,7 +1432,7 @@ final class MixerSession: ObservableObject {
                 if nextStereos.count < StripperFolderLoader.maxStereo {
                     var bed = ChannelStripState.stereo(
                         slot: nextStereos.count,
-                        name: MixerAudioIO.displayName(url: url)
+                        name: pendingStripName(for: url) ?? MixerAudioIO.displayName(url: url)
                     )
                     bed.fileURL = url
                     bed.depotAssetID = assetID(for: url)
@@ -1450,7 +1452,7 @@ final class MixerSession: ObservableObject {
             var ch = ChannelStripState.voice(
                 slot: slot,
                 speakerNumber: slot + 1,
-                name: MixerAudioIO.displayName(url: url)
+                name: pendingStripName(for: url) ?? MixerAudioIO.displayName(url: url)
             )
             ch.fileURL = url
             ch.depotAssetID = assetID(for: url)
@@ -1982,13 +1984,49 @@ final class MixerSession: ObservableObject {
     }
 
     func importDepotAudio(_ items: [(url: URL, assetID: String)], append: Bool) {
+        importDepotAudio(
+            items.map { (url: $0.url, assetID: $0.assetID, stripName: nil as String?) },
+            append: append
+        )
+    }
+
+    func importDepotAudio(_ items: [(url: URL, assetID: String, stripName: String?)], append: Bool) {
         var map: [String: String] = [:]
+        var names: [String: String] = [:]
         for item in items {
-            map[item.url.standardizedFileURL.resolvingSymlinksInPath().path] = item.assetID
+            let key = item.url.standardizedFileURL.resolvingSymlinksInPath().path
+            map[key] = item.assetID
+            if let stripName = item.stripName, stripName.isEmpty == false {
+                names[key] = stripName
+            }
         }
         assetIDsByPath = map
-        defer { assetIDsByPath = [:] }
+        stripNamesByPath = names
+        defer {
+            assetIDsByPath = [:]
+            stripNamesByPath = [:]
+        }
         importAudioFiles(items.map(\.url), append: append)
+    }
+
+    /// Renames a strip that still shows `previous` for this depot item.
+    /// A strip with any other name was renamed in TheDecks and is left alone.
+    /// Does not touch audio, EQ, or the file on disk. No-op while a take is recording.
+    func applyDepotStripLabel(assetID: String, previous: String, next: String) {
+        if protectTakeUntilStop, isRecording { return }
+        guard previous != next else { return }
+        var changed = false
+        for index in voices.indices where voices[index].depotAssetID == assetID && voices[index].name == previous {
+            voices[index].name = next
+            changed = true
+        }
+        for index in stereos.indices where stereos[index].depotAssetID == assetID && stereos[index].name == previous {
+            stereos[index].name = next
+            changed = true
+        }
+        if changed {
+            onParametersSynced?()
+        }
     }
 
     func retargetTake(from oldURL: URL, to newURL: URL, assetID: String) {
@@ -2024,6 +2062,10 @@ final class MixerSession: ObservableObject {
 
     private func assetID(for url: URL) -> String? {
         assetIDsByPath[url.standardizedFileURL.resolvingSymlinksInPath().path]
+    }
+
+    private func pendingStripName(for url: URL) -> String? {
+        stripNamesByPath[url.standardizedFileURL.resolvingSymlinksInPath().path]
     }
 
     private func refuseIfTakeIsProtected() -> Bool {

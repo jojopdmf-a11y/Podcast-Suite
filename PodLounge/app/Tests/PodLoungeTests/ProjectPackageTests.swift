@@ -771,3 +771,56 @@ private func expect<T: Error & Equatable>(
     let originalInDepot = try package.resolvedURL(for: kept)
     #expect(try Data(contentsOf: originalInDepot) == originalBytes)
 }
+
+@Test func renameDisplayNameUpdatesManifestOnly() throws {
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let source = try scratch.file("episode.wav", "episode-bytes")
+    let package = try ProjectPackage.create(at: scratch.root.appendingPathComponent("Show.podlounge"), name: "Show")
+    let asset = try package.importMedia(from: source, kind: .original, producedBy: nil)
+    let storedURL = try package.resolvedURL(for: asset)
+    let bytes = try Data(contentsOf: storedURL)
+    let path = asset.relativePath
+    let id = asset.id
+
+    let other = try scratch.file("bed.wav", "bed-bytes")
+    let twin = try package.importMedia(from: other, kind: .original, producedBy: nil, select: false)
+    _ = twin
+
+    let outcome = try package.renameDisplayName(id: id, to: "  Host Take  ")
+    #expect(outcome.displayName == "Host Take")
+    #expect(outcome.warnsDuplicate == false)
+    #expect(package.manifest.assets[0].displayName == "Host Take")
+    #expect(package.manifest.assets[0].id == id)
+    #expect(package.manifest.assets[0].relativePath == path)
+    #expect(try Data(contentsOf: storedURL) == bytes)
+    #expect(storedURL.lastPathComponent == "episode.wav")
+
+    try package.save()
+    let reopened = try ProjectPackage.open(at: package.rootURL)
+    #expect(reopened.manifest.assets[0].displayName == "Host Take")
+    #expect(reopened.manifest.assets[0].id == id)
+    #expect(reopened.manifest.assets[0].relativePath == path)
+    let reopenedURL = try reopened.resolvedURL(for: reopened.manifest.assets[0])
+    #expect(reopenedURL.lastPathComponent == "episode.wav")
+    #expect(try Data(contentsOf: reopenedURL) == bytes)
+    #expect(ProjectPackage.exportCopySuggestedName(displayName: reopened.manifest.assets[0].displayName, relativePath: path) == "Host Take.wav")
+
+    expect(DepotRenameError.emptyName) {
+        _ = try package.renameDisplayName(id: id, to: "   ")
+    }
+    expect(DepotRenameError.illegalCharacter) {
+        _ = try package.renameDisplayName(id: id, to: "A/B Take")
+    }
+    expect(DepotRenameError.illegalCharacter) {
+        _ = try package.renameDisplayName(id: id, to: "Take: One")
+    }
+    #expect(package.manifest.assets[0].displayName == "Host Take")
+    #expect(try Data(contentsOf: storedURL) == bytes)
+
+    let duplicate = try package.renameDisplayName(id: id, to: twin.displayName)
+    #expect(duplicate.warnsDuplicate)
+    #expect(package.manifest.assets[0].displayName == twin.displayName)
+    #expect(package.manifest.assets[0].relativePath == path)
+    #expect(package.manifest.assets[0].id == id)
+}

@@ -8,7 +8,7 @@ struct DepotSidebar: View {
         GeometryReader { geo in
             // A long list scrolls. A short one stays as tall as its rows.
             // Room below the list for the selected-file actions, including Export Copy and Show in Finder.
-            let listCap = max(72, geo.size.height - 440)
+            let listCap = max(72, geo.size.height - 488)
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -128,6 +128,10 @@ struct DepotSidebar: View {
                         .lineLimit(2)
                     healthLabel(session.health(of: asset))
                     VStack(alignment: .leading, spacing: 8) {
+                        Button("Rename…") { session.promptRename(asset) }
+                            .buttonStyle(LoungeButtonStyle())
+                            .disabled(session.navigationLocked)
+                            .accessibilityIdentifier("depot.rename")
                         Button("Export Copy…") { session.exportCopy(of: asset) }
                             .buttonStyle(LoungeButtonStyle())
                             .disabled(exportActionsDisabled(asset))
@@ -230,6 +234,11 @@ private struct DepotRow: View {
                             .font(.system(size: 12, weight: selected ? .semibold : .regular))
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .simultaneousGesture(
+                                TapGesture(count: 2).onEnded {
+                                    session.promptRename(asset)
+                                }
+                            )
                         Text(asset.kind.label)
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundStyle(asset.kind == .original ? LoungeTheme.original : LoungeTheme.result)
@@ -267,6 +276,8 @@ private struct DepotRow: View {
             }
         }
         .contextMenu {
+            Button("Rename…") { session.promptRename(asset) }
+                .disabled(session.navigationLocked)
             Button("Export Copy…") { session.exportCopy(of: asset) }
                 .disabled(session.navigationLocked || session.health(of: asset) == .missing)
             Button("Show in Finder") { session.showInFinder(asset) }

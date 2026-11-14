@@ -52,6 +52,8 @@ final class ProjectSession: ObservableObject {
     private var savedSelection: String?
     private var savedLimiterSettings = LimiterWorkspaceSettings.defaults
     private var savedFixerJSON = Data()
+    /// Display names last written (or loaded). A rename marks the project unsaved.
+    private var savedAssetNames: [String: String] = [:]
 
     init() {
         fixer.onRecordingChange = { [weak self] recording in
@@ -79,7 +81,12 @@ final class ProjectSession: ObservableObject {
             || notes != savedNotes
             || selectedAssetID != savedSelection
             || limiterSettings != savedLimiterSettings
+            || assetDisplayNames != savedAssetNames
             || (package != nil && fixer.encodedDocument() != savedFixerJSON)
+    }
+
+    private var assetDisplayNames: [String: String] {
+        Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0.displayName) })
     }
 
     var assets: [DepotAsset] {
@@ -271,6 +278,54 @@ final class ProjectSession: ObservableObject {
         panel.message = "Choose one or more files. A copy of each is stored in the project. The originals are left where they are."
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
         importFiles(panel.urls)
+    }
+
+    /// Asks for a new display name. The audio file on disk is not renamed or rewritten.
+    /// Disabled while TheDecks is recording (and while a split or export holds the depot).
+    func promptRename(_ asset: DepotAsset) {
+        if UITestMode.enabled { return }
+        guard !navigationLocked else { return }
+        guard package != nil else { return }
+        selectedAssetID = asset.id
+        let alert = NSAlert()
+        alert.messageText = "Rename \u{201C}\(asset.displayName)\u{201D}"
+        alert.informativeText = "This changes the name in the project list. The audio file stays where it is. Save Project keeps the new name."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = asset.displayName
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        applyRename(id: asset.id, to: field.stringValue)
+    }
+
+    /// Writes the trimmed name onto the manifest. Empty names and `/` or `:` are refused.
+    func applyRename(id: String, to raw: String) {
+        guard !navigationLocked else { return }
+        guard let package else { return }
+        guard let previous = package.manifest.assets.first(where: { $0.id == id })?.displayName else {
+            return
+        }
+        do {
+            let outcome = try package.renameDisplayName(id: id, to: raw)
+            guard outcome.displayName != previous else { return }
+            // A TheDecks strip follows only while it still shows the depot's default
+            // label (extension dropped, underscores as spaces, long names shortened).
+            // A strip the user renamed in TheDecks keeps that name.
+            fixer.followDepotDisplayName(assetID: id, from: previous, to: outcome.displayName)
+            objectWillChange.send()
+            if outcome.warnsDuplicate {
+                alertMessage = "Another depot item is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
+            }
+        } catch DepotRenameError.emptyName {
+            alertMessage = "Enter a name. The old name was kept."
+        } catch DepotRenameError.illegalCharacter {
+            alertMessage = "A name can't include / or :. The old name was kept."
+        } catch {
+            alertMessage = error.localizedDescription
+        }
     }
 
     /// Asks first, then removes the file from the depot and saves the project.
@@ -654,6 +709,7 @@ final class ProjectSession: ObservableObject {
         savedSelection = selectedAssetID
         savedLimiterSettings = limiterSettings
         savedFixerJSON = fixer.encodedDocument()
+        savedAssetNames = assetDisplayNames
     }
 
     private func writeSideFiles(to package: ProjectPackage) throws {
@@ -804,6 +860,14 @@ final class ProjectSession: ObservableObject {
         package.manifest.selectedAssetID = savedSelection
         for id in WorkspaceID.allCases {
             package.manifest.workspaceSettings[id.rawValue] = WorkspaceSettings(notes: savedNotes[id] ?? "")
+        }
+        for index in package.manifest.assets.indices {
+            let id = package.manifest.assets[index].id
+            guard let saved = savedAssetNames[id] else { continue }
+            let current = package.manifest.assets[index].displayName
+            guard current != saved else { continue }
+            package.manifest.assets[index].displayName = saved
+            fixer.followDepotDisplayName(assetID: id, from: current, to: saved)
         }
     }
 }
