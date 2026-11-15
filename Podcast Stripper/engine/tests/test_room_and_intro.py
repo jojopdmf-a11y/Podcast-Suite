@@ -295,3 +295,135 @@ def test_export_room_tone_on_and_off(tmp_path: Path):
     # The other person's words do not become this track's room.
     their_words = slice(int(1.9 * sample_rate), int(2.1 * sample_rate))
     assert _db(natural[their_words]) < _db(vocal[their_words]) - 18.0
+
+
+def test_spikes_between_solo_speech_do_not_steal_the_sentence(tmp_path: Path):
+    """Two loud music-stem spikes must not pull the words between them onto Music/SFX."""
+    sample_rate = 8000
+    seconds = 10.0
+    vocal = _sine(300, seconds, sample_rate, amplitude=0.32)
+    other = _sine(90, seconds, sample_rate, amplitude=0.01)
+    for start in (3.0, 5.2):
+        i0 = int(start * sample_rate)
+        i1 = int((start + 0.25) * sample_rate)
+        other[i0:i1] = _sine(70, 0.25, sample_rate, amplitude=0.55)
+    original = np.clip(vocal.astype(np.int32) + other.astype(np.int32), -32767, 32767).astype(np.int16)
+    segments = [(0.2, 9.6, "SPEAKER_00")]
+    mask, _info = intro_route_mask(
+        vocal.shape[0],
+        sample_rate,
+        segments,
+        other,
+        vocal,
+        detect=True,
+    )
+    between = slice(int(3.5 * sample_rate), int(5.0 * sample_rate))
+    assert float(np.mean(mask[between] > 0.5)) < 0.05
+
+    source = tmp_path / "mix.wav"
+    save_wav(source, original, sample_rate)
+    save_wav(tmp_path / "vocals.wav", vocal, sample_rate)
+    save_wav(tmp_path / "music.wav", other, sample_rate)
+    output = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output,
+        segments,
+        work_wav=source,
+        voice_wav=tmp_path / "vocals.wav",
+        music_wav=tmp_path / "music.wav",
+        room_tone=None,
+    )
+    speaker, _ = load_wav(output / "Speaker_1.wav")
+    music, _ = load_wav(output / "Music_and_SFX.wav")
+    assert _db(speaker[between]) > -22.0
+    assert _db(music[between]) < _db(original[between]) - 12.0
+
+
+def test_solo_voice_over_a_later_music_hit_stays_on_music(tmp_path: Path):
+    sample_rate = 8000
+    dry = _sine(280, 9.0, sample_rate, amplitude=0.34)
+    dry_bed = _sine(90, 9.0, sample_rate, amplitude=0.008)
+    hit_voice = _sine(360, 3.5, sample_rate, amplitude=0.22)
+    hit_music = _sine(80, 3.5, sample_rate, amplitude=0.30)
+    tail = _sine(280, 3.0, sample_rate, amplitude=0.34)
+    tail_bed = _sine(90, 3.0, sample_rate, amplitude=0.008)
+    vocal = np.concatenate([dry, hit_voice, tail], axis=0)
+    music_stem = np.concatenate([dry_bed, hit_music, tail_bed], axis=0)
+    original = np.clip(vocal.astype(np.int32) + music_stem.astype(np.int32), -32767, 32767).astype(np.int16)
+    segments = [(0.0, 15.5, "SPEAKER_00")]
+    mask, info = intro_route_mask(
+        vocal.shape[0],
+        sample_rate,
+        segments,
+        music_stem,
+        vocal,
+        detect=True,
+    )
+    assert info["auto_end"] is None or float(info["auto_end"]) < 0.75
+    hit = slice(int(10.0 * sample_rate), int(12.0 * sample_rate))
+    earlier = slice(int(2.0 * sample_rate), int(6.0 * sample_rate))
+    assert float(np.mean(mask[hit] > 0.5)) > 0.8
+    assert float(np.mean(mask[earlier] > 0.5)) < 0.05
+
+    source = tmp_path / "mix.wav"
+    save_wav(source, original, sample_rate)
+    save_wav(tmp_path / "vocals.wav", vocal, sample_rate)
+    save_wav(tmp_path / "music.wav", music_stem, sample_rate)
+    output = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output,
+        segments,
+        work_wav=source,
+        voice_wav=tmp_path / "vocals.wav",
+        music_wav=tmp_path / "music.wav",
+        room_tone=None,
+    )
+    speaker, _ = load_wav(output / "Speaker_1.wav")
+    music, _ = load_wav(output / "Music_and_SFX.wav")
+    assert _db(speaker[hit]) < -45.0
+    assert abs(_db(music[hit]) - _db(original[hit])) < 1.5
+    summed = speaker[hit].astype(np.float64) + music[hit].astype(np.float64)
+    assert abs(_db(summed) - _db(original[hit])) < 1.5
+    assert _db(speaker[earlier]) > -20.0
+
+
+def test_quiet_pause_is_not_sent_to_music(tmp_path: Path):
+    sample_rate = 8000
+    speech = _sine(260, 9.0, sample_rate, amplitude=0.32)
+    bleed = _sine(100, 9.0, sample_rate, amplitude=0.01)
+    pause_voice = _noise(2.2, sample_rate, amplitude=0.001, seed=4)
+    pause_bed = _noise(2.2, sample_rate, amplitude=0.001, seed=5)
+    vocal = np.concatenate([speech, pause_voice], axis=0)
+    music_stem = np.concatenate([bleed, pause_bed], axis=0)
+    original = np.clip(vocal.astype(np.int32) + music_stem.astype(np.int32), -32767, 32767).astype(np.int16)
+    segments = [(0.1, 8.8, "SPEAKER_00")]
+    mask, _info = intro_route_mask(
+        vocal.shape[0],
+        sample_rate,
+        segments,
+        music_stem,
+        vocal,
+        detect=True,
+    )
+    pause = slice(int(9.3 * sample_rate), int(10.8 * sample_rate))
+    assert float(np.mean(mask[pause] > 0.5)) < 0.05
+
+    source = tmp_path / "mix.wav"
+    save_wav(source, original, sample_rate)
+    save_wav(tmp_path / "vocals.wav", vocal, sample_rate)
+    save_wav(tmp_path / "music.wav", music_stem, sample_rate)
+    output = tmp_path / "out"
+    export_speaker_tracks(
+        source,
+        output,
+        segments,
+        work_wav=source,
+        voice_wav=tmp_path / "vocals.wav",
+        music_wav=tmp_path / "music.wav",
+        room_tone=0.0,
+    )
+    speaker, _ = load_wav(output / "Speaker_1.wav")
+    # The pause keeps the vocal stem's room instead of being muted for Music/SFX.
+    assert _db(speaker[pause]) > _db(vocal[pause]) - 3.0

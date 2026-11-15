@@ -378,7 +378,16 @@ DRY_SPEECH_BRIDGE_SECONDS = 1.5
 # Music stem is really there (not the quiet copy Demucs leaves under talk).
 MUSIC_PRESENT_VOCAL_RATIO = 0.30
 MUSIC_PRESENT_PEAK_FRACTION = 0.10
-MUSIC_PRESENT_BRIDGE_SECONDS = 2.5
+# A talk show is almost all speech, so the 95th percentile of the music stem
+# is leftover voice, not a bed. The 99th still reaches a music event that
+# only lasts a small part of the episode.
+MUSIC_PRESENT_PEAK_PERCENTILE = 99.0
+# Pause noise can match the vocal stem while both are near silence. The
+# music stem also has to reach this fraction of the loud vocal frames.
+MUSIC_PRESENT_SPEECH_FLOOR = 0.05
+# Fill a brief dip inside a real bed. A multi-second bridge copies the
+# sentence between two spikes onto Music/SFX.
+MUSIC_PRESENT_BRIDGE_SECONDS = 0.45
 MUSIC_PRESENT_MIN_SECONDS = 1.2
 # Two people each talking this long inside a music region means a bed, not an intro.
 CONVERSATION_GUARD_SECONDS = 2.0
@@ -636,11 +645,14 @@ def music_present_mask(
     peak_fraction: float = MUSIC_PRESENT_PEAK_FRACTION,
     bridge_seconds: float = MUSIC_PRESENT_BRIDGE_SECONDS,
     min_seconds: float = MUSIC_PRESENT_MIN_SECONDS,
+    peak_percentile: float = MUSIC_PRESENT_PEAK_PERCENTILE,
+    speech_floor: float = MUSIC_PRESENT_SPEECH_FLOOR,
 ) -> np.ndarray:
-    """Sample mask where the music stem is a real music event, including short voice-overs.
+    """Sample mask where the music stem is a real music event, including a voice on top.
 
-    Speech bleed stays off: the music stem has to be both loud in the file
-    and not tiny next to the vocal.
+    Speech bleed and pause noise stay off. The music stem has to be loud
+    next to this file's real music events, loud next to the voices, and
+    hold that level instead of spiking for a moment.
     """
     length = accompaniment.shape[0]
     vocal_rms, hop = frame_rms(vocals, sample_rate)
@@ -650,8 +662,10 @@ def music_present_mask(
         return np.zeros(length, dtype=np.float64)
     vocal_rms = vocal_rms[:n]
     other_rms = other_rms[:n]
-    peak = float(np.percentile(other_rms, 95)) or 1.0
-    present = (other_rms >= peak * peak_fraction) & (other_rms >= vocal_rms * vocal_ratio + peak * 0.01)
+    peak = float(np.percentile(other_rms, peak_percentile)) or 1.0
+    speech_ref = float(np.percentile(vocal_rms, 95)) or 1.0
+    loud = max(peak * peak_fraction, speech_ref * speech_floor)
+    present = (other_rms >= loud) & (other_rms >= vocal_rms * vocal_ratio + peak * 0.01)
     bridge = max(0, int(round(bridge_seconds / _frame_clock(hop, sample_rate))))
     present = _bridge_short_gaps(present.astype(np.float64), bridge)
     min_frames = max(1, int(round(min_seconds / _frame_clock(hop, sample_rate))))
