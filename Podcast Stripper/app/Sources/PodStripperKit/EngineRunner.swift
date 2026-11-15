@@ -169,6 +169,51 @@ enum ExportSampleRateChoice: String, CaseIterable, Identifiable {
     }
 }
 
+enum RoomToneSetting {
+    /// Slider 0 is today's mute. Slider 1 is the separated room at full level.
+    /// The middle is about −20 dB, which still sounds quieter than the room.
+    static func cliValue(for slider: Double) -> String {
+        if slider <= 0.03 { return "off" }
+        let db = 40.0 * (slider - 1.0)
+        if db > -0.5 { return "natural" }
+        return String(format: "%.0f", db.rounded())
+    }
+
+    static func caption(for slider: Double) -> String {
+        if slider <= 0.03 { return "OFF" }
+        if slider >= 0.97 { return "NATURAL" }
+        let db = 40.0 * (slider - 1.0)
+        return String(format: "%.0f dB", db.rounded())
+    }
+}
+
+enum IntroEndField: Equatable {
+    case automatic
+    case seconds(Double)
+    case invalid
+
+    static func parse(_ raw: String) -> IntroEndField {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return .automatic }
+        let parts = text.split(separator: ":").map(String.init)
+        if parts.count == 1, let seconds = Double(parts[0]), seconds >= 0, seconds.isFinite {
+            return .seconds(seconds)
+        }
+        if parts.count == 2,
+           let minutes = Double(parts[0]),
+           let secs = Double(parts[1]),
+           minutes >= 0,
+           secs >= 0,
+           secs < 60,
+           minutes.isFinite,
+           secs.isFinite
+        {
+            return .seconds(minutes * 60 + secs)
+        }
+        return .invalid
+    }
+}
+
 enum ExportAudioFormatChoice: String, CaseIterable, Identifiable {
     case wav16 = "WAV 16-bit"
     case wav24 = "WAV 24-bit"
@@ -349,7 +394,9 @@ final class EngineRunner: ObservableObject {
         speakerCount: SpeakerCountChoice,
         sampleRate: ExportSampleRateChoice = .native,
         audioFormat: ExportAudioFormatChoice = .wav16,
-        cleanup: StripperOutputCleanup = .standalone
+        cleanup: StripperOutputCleanup = .standalone,
+        roomTone: String = "natural",
+        introEnd: Double? = nil
     ) {
         errorMessage = nil
         result = nil
@@ -395,6 +442,10 @@ final class EngineRunner: ObservableObject {
                 }
                 arguments += ["--sample-rate", sampleRate.cliValue]
                 arguments += ["--audio-format", audioFormat.cliValue]
+                arguments += ["--room-tone", roomTone]
+                if let introEnd {
+                    arguments += ["--intro-end", String(format: "%.3f", introEnd)]
+                }
                 let output = try await runTool(paths: paths, arguments: arguments, streaming: true)
                 freezeElapsed()
                 if userCancelled {

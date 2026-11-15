@@ -3,6 +3,23 @@ import Foundation
 import Testing
 @testable import PodStripperKit
 
+@Test func roomToneSliderSpeaksTheEngineValues() {
+    #expect(RoomToneSetting.cliValue(for: 1) == "natural")
+    #expect(RoomToneSetting.cliValue(for: 0) == "off")
+    #expect(RoomToneSetting.cliValue(for: 0.5) == "-20")
+    #expect(RoomToneSetting.caption(for: 1) == "NATURAL")
+    #expect(RoomToneSetting.caption(for: 0) == "OFF")
+}
+
+@Test func introEndFieldAcceptsAClockOrStaysEmpty() {
+    #expect(IntroEndField.parse("") == .automatic)
+    #expect(IntroEndField.parse("   ") == .automatic)
+    #expect(IntroEndField.parse("1:05") == .seconds(65))
+    #expect(IntroEndField.parse("90") == .seconds(90))
+    #expect(IntroEndField.parse("1:60") == .invalid)
+    #expect(IntroEndField.parse("nope") == .invalid)
+}
+
 @Test @MainActor func elapsedClockStaysReadable() {
     #expect(EngineRunner.formatElapsed(0) == "0s")
     #expect(EngineRunner.formatElapsed(75) == "1m 15s")
