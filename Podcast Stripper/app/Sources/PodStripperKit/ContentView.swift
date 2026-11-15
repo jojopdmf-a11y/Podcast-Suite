@@ -18,6 +18,8 @@ public struct StripperRootView: View {
     }
     @State private var outputFolder: URL?
     @State private var speakerCount: SpeakerCountChoice = .two
+    @State private var roomTone: Double = 1
+    @State private var introEnds: String = ""
     @State private var exportSampleRate: ExportSampleRateChoice = .native
     @State private var exportAudioFormat: ExportAudioFormatChoice = .wav16
     @State private var showSettings = false
@@ -244,6 +246,43 @@ public struct StripperRootView: View {
                 .labelsHidden()
                 .frame(maxWidth: 380)
             }
+
+            HStack(alignment: .center, spacing: 14) {
+                Text("ROOM TONE")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                Slider(value: $roomTone, in: 0...1)
+                    .frame(maxWidth: 380)
+                    .accessibilityIdentifier("stripper.roomTone")
+                Text(RoomToneSetting.caption(for: roomTone))
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(StripperTheme.textPrimary)
+                    .frame(width: 72, alignment: .trailing)
+            }
+            .help("Natural keeps the room you recorded when someone pauses. Off is a hard mute. Drag left to keep less room.")
+
+            HStack(alignment: .center, spacing: 14) {
+                Text("INTRO ENDS")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(StripperTheme.cyanDim)
+                    .frame(width: 102, alignment: .leading)
+                TextField("mm:ss", text: $introEnds)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .frame(maxWidth: 88)
+                    .accessibilityIdentifier("stripper.introEnd")
+                Text(introEnds.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                     ? "Automatic. Voice on music stays with the music."
+                     : "Before this time, the whole mix stays on Music/SFX.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(StripperTheme.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .help("Leave empty and TheStrip finds the opening. Type 1:05 if you want the intro to end at a set time.")
 
             HStack(alignment: .center, spacing: 14) {
                 Text("SAMPLE RATE")
@@ -638,6 +677,13 @@ public struct StripperRootView: View {
 
     private func startSplit() {
         guard let activeInput, !runner.isRunning, !runner.isPreparingEngine, model.sourceLocked == false else { return }
+        let introField = IntroEndField.parse(introEnds)
+        if case .invalid = introField {
+            runner.errorMessage = "Intro ends needs a time like 1:05, or leave it empty."
+            return
+        }
+        let introSeconds: Double? = if case .seconds(let value) = introField { value } else { nil }
+        let roomArgument = RoomToneSetting.cliValue(for: roomTone)
         if lounge {
             guard let make = model.makeStagingDirectory else { return }
             let dest: URL
@@ -656,7 +702,9 @@ public struct StripperRootView: View {
                 speakerCount: speakerCount,
                 sampleRate: exportSampleRate,
                 audioFormat: exportAudioFormat,
-                cleanup: .ownedStaging
+                cleanup: .ownedStaging,
+                roomTone: roomArgument,
+                introEnd: introSeconds
             )
             return
         }
@@ -669,7 +717,9 @@ public struct StripperRootView: View {
             outputDir: dest,
             speakerCount: speakerCount,
             sampleRate: exportSampleRate,
-            audioFormat: exportAudioFormat
+            audioFormat: exportAudioFormat,
+            roomTone: roomArgument,
+            introEnd: introSeconds
         )
     }
 

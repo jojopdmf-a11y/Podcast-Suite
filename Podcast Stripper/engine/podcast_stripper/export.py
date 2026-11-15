@@ -7,8 +7,9 @@ from typing import Iterable
 import numpy as np
 
 from podcast_stripper.cleanup import (
-    apply_gate,
     build_music_and_sfx,
+    intro_route_mask,
+    mix_speaker_waves,
     music_activity_mask,
     shared_speaker_gates,
 )
@@ -153,6 +154,9 @@ def export_speaker_tracks(
     music_wav: Path | None = None,
     export_sample_rate: int | None = None,
     audio_format: str = "wav16",
+    room_tone: float | None = 0.0,
+    intro_end: float | None = None,
+    detect_intro: bool = True,
 ) -> dict:
     if work_wav is None:
         work_wav = output_dir / "_original.wav"
@@ -190,17 +194,42 @@ def export_speaker_tracks(
 
     tracks: list[dict] = []
     speaker_turns = [grouped[speaker] for speaker in speakers]
+    # Gates stay about the words. Intro and music beds are applied after room
+    # tone so a muted intro is not filled back in as "room".
     gates = shared_speaker_gates(
         voice_audio.shape[0],
         sample_rate,
         speaker_turns,
-        mute_mask=music_mute,
+    )
+    route_vocals = voice_audio if voice_wav is not None else None
+    intro_mask, intro_info = intro_route_mask(
+        voice_audio.shape[0],
+        sample_rate,
+        segments,
+        accompaniment,
+        route_vocals if accompaniment is not None else None,
+        intro_end=intro_end,
+        detect=detect_intro,
+    )
+    blocked = intro_mask
+    if music_mute is not None:
+        blocked = np.maximum(blocked, np.clip(music_mute[: blocked.size], 0.0, 1.0))
+    # Room tone uses the separated vocal. With no separation, pauses already
+    # live on the music track and a second copy would double them.
+    room_db = room_tone if voice_wav is not None else None
+    waves = mix_speaker_waves(
+        voice_audio,
+        gates,
+        sample_rate,
+        room_db=room_db,
+        blocked=blocked,
     )
     for index, speaker in enumerate(speakers):
         label = speaker_label(index)
         dest_base = output_dir / f"{label.replace(' ', '_')}"
         # Speaker strips are one person. Music/SFX below keeps the source layout.
-        track = downmix_to_mono(apply_gate(voice_audio, gates[index]))
+        pcm = np.clip(np.rint(waves[index]), -32768, 32767).astype(np.int16)
+        track = downmix_to_mono(pcm)
         dest = _write_finished_track(
             dest_base,
             track,
@@ -226,6 +255,7 @@ def export_speaker_tracks(
         sample_rate,
         segments,
         vocals=voice_audio if voice_wav is not None else None,
+        keep_original_mask=intro_mask,
     )
     music_path = _write_finished_track(
         output_dir / "Music_and_SFX",
@@ -249,6 +279,8 @@ def export_speaker_tracks(
         "duration": round(duration, 3),
         "speakers": tracks,
         "music": music_info,
+        "room_tone_db": None if room_db is None else round(float(room_db), 2),
+        "intro": intro_info,
     }
     return manifest
 

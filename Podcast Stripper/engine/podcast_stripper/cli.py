@@ -16,6 +16,7 @@ from podcast_stripper.convert import (
     parse_export_audio_format,
     parse_export_sample_rate,
 )
+from podcast_stripper.cleanup import parse_intro_end, parse_room_tone
 from podcast_stripper.export import export_speaker_tracks
 from podcast_stripper.ffmpeg_bin import FFmpegError, find_ffmpeg
 from podcast_stripper.progress import done, error, heartbeat, status
@@ -224,6 +225,9 @@ def _run_job(input_path: Path, output_dir: Path, args: argparse.Namespace, json_
                 music_wav=music_wav,
                 export_sample_rate=export_sample_rate,
                 audio_format=audio_format,
+                room_tone=parse_room_tone(args.room_tone),
+                intro_end=parse_intro_end(args.intro_end),
+                detect_intro=not args.no_intro_detect,
             )
 
     manifest_path = output_dir / "speakers.json"
@@ -404,6 +408,21 @@ def _build_parser() -> argparse.ArgumentParser:
         default="wav16",
         choices=["wav16", "wav24", "aiff24"],
         help="Export file format (conversion happens when writing tracks)",
+    )
+    parser.add_argument(
+        "--room-tone",
+        default="natural",
+        help="Room tone during pauses: natural (default), off, or a negative dB level such as -20",
+    )
+    parser.add_argument(
+        "--intro-end",
+        default=None,
+        help="Keep everything before this time on Music/SFX (mm:ss or seconds). Empty uses the automatic intro.",
+    )
+    parser.add_argument(
+        "--no-intro-detect",
+        action="store_true",
+        help="Do not move an opening or voice-over-music onto the Music/SFX track",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
