@@ -64,4 +64,9 @@ The music separator still shifts the audio by a random fraction of a second each
 
 Listening pack: ~/Music/ClubPod/StripTests/2026-11-14-v3/ (about 62 MB). Nothing was written to the Desktop.
 
+The shared engine in Application Support was reinstalled from this fix. Both apps were rebuilt:
+
+- `Podcast Stripper/dist/PodStripper.app`
+- `PodLounge/dist/PodLounge.app`
+
 Not merged.
