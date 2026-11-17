@@ -34,14 +34,20 @@ final class ProjectSession: ObservableObject {
     @Published var stripperRunning = false
     /// True while Fixer is recording. Leaving does not stop the take.
     @Published var fixerRecording = false
+    /// TheCut's timeline. A project with no trimmer.json stays empty.
+    @Published var trimmerDocument = TrimmerDocument.empty
+    /// True while TheCut is writing a mix. Depot clicks wait.
+    @Published var trimmerExporting = false
     /// Bumps when the mixer settings change so Save can light up.
     @Published private(set) var fixerRevision = 0
     let fixer = ProducerLoungeModel()
 
-    var navigationLocked: Bool { limiterExporting || stripperRunning || fixerRecording }
+    var navigationLocked: Bool { limiterExporting || stripperRunning || fixerRecording || trimmerExporting }
 
     /// Set by the Limiter workspace so leaving the card stops playback.
     var endLimiterPlayback: (() -> Void)?
+    /// Set by TheCut so leaving the room, or starting a depot preview, stops playback.
+    var endTrimmerPlayback: (() -> Void)?
     /// Stops Limiter transport without unloading the file. Depot preview calls this.
     var stopLimiterPlayback: (() -> Void)?
     let depotPlayer = DepotPreviewPlayer()
@@ -51,6 +57,7 @@ final class ProjectSession: ObservableObject {
     private var savedNotes: [WorkspaceID: String] = [:]
     private var savedSelection: String?
     private var savedLimiterSettings = LimiterWorkspaceSettings.defaults
+    private var savedTrimmer = TrimmerDocument.empty
     private var savedFixerJSON = Data()
     /// Display names last written (or loaded). A rename marks the project unsaved.
     private var savedAssetNames: [String: String] = [:]
@@ -81,6 +88,7 @@ final class ProjectSession: ObservableObject {
             || notes != savedNotes
             || selectedAssetID != savedSelection
             || limiterSettings != savedLimiterSettings
+            || trimmerDocument != savedTrimmer
             || assetDisplayNames != savedAssetNames
             || (package != nil && fixer.encodedDocument() != savedFixerJSON)
     }
@@ -119,6 +127,7 @@ final class ProjectSession: ObservableObject {
             alertMessage = "That depot file can't be played."
             return
         }
+        endTrimmerPlayback?()
         stopLimiterPlayback?()
         do {
             try depotPlayer.play(assetID: asset.id, url: url)
@@ -363,7 +372,28 @@ final class ProjectSession: ObservableObject {
         if activeWorkspace == .limiter {
             endLimiterPlayback?()
         }
+        if activeWorkspace == .trimmer {
+            endTrimmerPlayback?()
+        }
         activeWorkspace = nil
+    }
+
+    /// Copies a rendered cut into the depot and selects it. The source file is only read.
+    @discardableResult
+    func importTrimmerResult(from url: URL, displayName: String) throws -> DepotAsset {
+        guard let package else {
+            throw PackageError.operationFailed("Create or open a project before saving a result.")
+        }
+        applyMetadata(to: package)
+        try writeSideFiles(to: package)
+        let asset = try package.importResult(
+            from: url,
+            producedBy: "trimmer",
+            displayName: displayName,
+            select: true
+        )
+        adopt(package, keepWorkspace: true)
+        return asset
     }
 
     /// Renders nothing itself. The Limiter workspace passes a finished file.
@@ -683,6 +713,7 @@ final class ProjectSession: ObservableObject {
         notes = nextNotes
         selectedAssetID = package.manifest.selectedAssetID
         limiterSettings = package.readLimiterSettings()
+        trimmerDocument = package.readTrimmerDocument()
         missingAssetIDs = package.missingAssetIDs
         mismatchedAssetIDs = package.mismatchedAssetIDs
         activeWorkspace = workspace
@@ -708,12 +739,14 @@ final class ProjectSession: ObservableObject {
         savedNotes = notes
         savedSelection = selectedAssetID
         savedLimiterSettings = limiterSettings
+        savedTrimmer = trimmerDocument
         savedFixerJSON = fixer.encodedDocument()
         savedAssetNames = assetDisplayNames
     }
 
     private func writeSideFiles(to package: ProjectPackage) throws {
         try package.writeLimiterSettings(limiterSettings)
+        try package.writeTrimmerDocument(trimmerDocument)
         try package.writeProducerSession(fixer.encodedDocument())
     }
 

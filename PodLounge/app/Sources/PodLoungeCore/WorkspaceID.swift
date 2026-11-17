@@ -16,13 +16,10 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .stripper: "Separate speakers & music"
         case .fixer: "Record & mix the show"
-        case .trimmer: "Cuts, intros & commercials"
+        case .trimmer: "Edit the finished episode"
         case .limiter: "Final loudness & peak"
         }
     }
-
-    /// Trimmer has no product screenshot. The card must say it is a concept.
-    public var conceptOnly: Bool { self == .trimmer }
 
     public var screenshotResourceName: String? {
         switch self {
@@ -40,7 +37,7 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
         case .fixer:
             "TheDecks records and mixes. While a take is recording, stay here until Stop."
         case .trimmer:
-            "TheCut is a new tool for cuts, intros, and commercials. There is no TheCut app and no engine in this build."
+            "TheCut edits the finished episode on three tracks, then sends a new mix to TheRoof."
         case .limiter:
             "TheRoof sets final loudness and peak on the selected depot file."
         }

@@ -23,6 +23,7 @@ struct ContentView: View {
         case .limiter: LevelerPaneMetrics.limiterWorkspaceMinimum
         case .stripper: 780
         case .fixer: 960
+        case .trimmer: 860
         default: nil
         }
         guard let reserved else { return DepotChrome.maxWidth }
@@ -56,6 +57,8 @@ struct ContentView: View {
                                 StripperWorkspaceView()
                             } else if workspace == .fixer {
                                 FixerWorkspaceView()
+                            } else if workspace == .trimmer {
+                                TrimmerWorkspaceView()
                             } else {
                                 WorkspaceScaffoldView(workspace: workspace)
                             }
@@ -104,7 +107,7 @@ struct ContentView: View {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected depot file into speaker tracks and music. TheDecks records and mixes. TheRoof levels the selected depot file and can save a new result. TheCut does not process audio in this build. The first time TheDecks records, macOS asks Lounge for the microphone.")
+            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected depot file into speaker tracks and music. TheDecks records and mixes. TheCut edits the finished episode and can save a new mix for TheRoof. TheRoof levels the selected depot file and can save a new result. The first time TheDecks records, macOS asks Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -122,7 +125,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest, TheRoof settings, and the TheDecks session. It does not rewrite depot audio.")
+            Text("Save Project writes the manifest, TheCut edits, TheRoof settings, and the TheDecks session. It does not rewrite depot audio.")
         }
     }
 
@@ -339,19 +342,6 @@ struct WorkspaceCard: View {
                     }
                     .layoutPriority(1)
                     Spacer(minLength: 8)
-                    if workspace.conceptOnly {
-                        Text("Concept — new tool")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(LoungeTheme.amber)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                                    .stroke(LoungeTheme.amber.opacity(0.85), lineWidth: 1)
-                            )
-                    }
                 }
                 cardBody
                     .layoutPriority(-1)
@@ -365,9 +355,7 @@ struct WorkspaceCard: View {
             }
             .padding(12)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .loungePanel(
-                stroke: workspace.conceptOnly ? LoungeTheme.amber.opacity(0.85) : LoungeTheme.cyan.opacity(0.7)
-            )
+            .loungePanel(stroke: LoungeTheme.cyan.opacity(0.7))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(workspace.title). \(workspace.subtitle)")
@@ -376,60 +364,49 @@ struct WorkspaceCard: View {
 
     @ViewBuilder
     private var cardBody: some View {
-        if workspace.conceptOnly {
-            ConceptCardBody()
+        if workspace == .trimmer {
+            TheCutCardArt()
         } else if let name = workspace.screenshotResourceName {
             ScreenshotCardBody(name: name)
         }
     }
 }
 
-struct ConceptCardBody: View {
+/// Drawn timeline thumbnail. TheCut has no product screenshot.
+struct TheCutCardArt: View {
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.06, green: 0.07, blue: 0.05),
-                    Color(red: 0.04, green: 0.06, blue: 0.08),
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
+        Canvas { context, size in
+            let panel = CGRect(x: 0, y: 0, width: size.width, height: size.height)
+            context.fill(
+                Path(roundedRect: panel, cornerRadius: 8),
+                with: .color(Color(red: 0.03, green: 0.06, blue: 0.09))
             )
-            Canvas { context, size in
-                var path = Path()
-                let gap: CGFloat = 14
-                var x = -size.height
-                while x < size.width + size.height {
-                    path.move(to: CGPoint(x: x, y: size.height))
-                    path.addLine(to: CGPoint(x: x + size.height, y: 0))
-                    x += gap
-                }
-                context.stroke(path, with: .color(LoungeTheme.amber.opacity(0.16)), lineWidth: 1)
+            let laneHeight = size.height / 3
+            for index in 0..<3 {
+                let y = CGFloat(index) * laneHeight
+                var line = Path()
+                line.move(to: CGPoint(x: 0, y: y + laneHeight - 0.5))
+                line.addLine(to: CGPoint(x: size.width, y: y + laneHeight - 0.5))
+                context.stroke(line, with: .color(LoungeTheme.cyan.opacity(0.12)), lineWidth: 1)
             }
-            VStack(spacing: 6) {
-                Text("Concept — new tool")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(LoungeTheme.amber)
-                Text("No app screenshot yet")
-                    .font(.system(size: 12))
-                    .foregroundStyle(LoungeTheme.textDim)
-                Text("Cuts, intros, and commercials are planned.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(LoungeTheme.textDim)
-                    .multilineTextAlignment(.center)
+            func clip(_ x: CGFloat, _ width: CGFloat, _ lane: Int, _ color: Color) {
+                let height = laneHeight * 0.62
+                let y = CGFloat(lane) * laneHeight + (laneHeight - height) / 2
+                let rect = CGRect(x: x, y: y, width: max(8, width), height: height)
+                context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(color.opacity(0.85)))
             }
-            .minimumScaleFactor(0.6)
-            .padding(12)
-            .frame(maxWidth: 300)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.black.opacity(0.28))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(LoungeTheme.amber.opacity(0.9), lineWidth: 1)
-            )
+            clip(size.width * 0.08, size.width * 0.46, 0, LoungeTheme.cyan)
+            clip(size.width * 0.62, size.width * 0.3, 0, LoungeTheme.cyan)
+            clip(size.width * 0.02, size.width * 0.16, 1, LoungeTheme.original)
+            clip(size.width * 0.58, size.width * 0.14, 1, LoungeTheme.amber)
+            clip(0, size.width * 0.22, 2, LoungeTheme.result)
+            var playhead = Path()
+            let x = size.width * 0.36
+            playhead.move(to: CGPoint(x: x, y: 0))
+            playhead.addLine(to: CGPoint(x: x, y: size.height))
+            context.stroke(playhead, with: .color(LoungeTheme.cyan), lineWidth: 1.5)
         }
+        .accessibilityHidden(true)
     }
 }
 

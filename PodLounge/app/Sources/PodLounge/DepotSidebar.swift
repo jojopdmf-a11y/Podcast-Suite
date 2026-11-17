@@ -1,5 +1,15 @@
+import CoreTransferable
 import PodLoungeCore
 import SwiftUI
+import UniformTypeIdentifiers
+
+struct DepotAssetDrag: Codable, Transferable {
+    var assetID: String
+
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .json)
+    }
+}
 
 struct DepotSidebar: View {
     @EnvironmentObject private var session: ProjectSession
@@ -30,6 +40,14 @@ struct DepotSidebar: View {
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LoungeTheme.amber)
                     Text("The depot stays locked until the file is written.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if session.trimmerExporting {
+                    Text("Exporting…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.amber)
+                    Text("The depot stays locked until the cut is written.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -253,6 +271,12 @@ private struct DepotRow: View {
                 .buttonStyle(.plain)
                 .disabled(session.navigationLocked)
                 .accessibilityIdentifier("depot.file.\(asset.displayName)")
+                .draggable(DepotAssetDrag(assetID: asset.id)) {
+                    Text(asset.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
