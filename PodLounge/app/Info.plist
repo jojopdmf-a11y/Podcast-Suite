@@ -28,5 +28,18 @@
 	<string>Lounge records in TheDecks from the input you pick (your interface or mic) onto speaker strips. Audio stays on this Mac. The first recording asks for the microphone. Monitor through your interface — Lounge does not play the mic back.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.cougarcalc.podlounge.depot-asset</string>
+			<key>UTTypeDescription</key>
+			<string>Pod Lounge depot asset</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

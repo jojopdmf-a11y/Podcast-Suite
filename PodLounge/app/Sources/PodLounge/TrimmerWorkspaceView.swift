@@ -1,7 +1,6 @@
 import AppKit
 import PodLoungeCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct TrimmerWorkspaceView: View {
     @EnvironmentObject private var session: ProjectSession
@@ -20,6 +19,8 @@ struct TrimmerWorkspaceView: View {
     @State private var faderDraft: [TrimmerTrackID: Double] = [:]
     @State private var exportProgress: Double?
     @State private var viewportWidth: CGFloat = 640
+    @State private var dropHoverTrack: TrimmerTrackID?
+    @State private var pendingDrop: PendingDepotDrop?
 
     private var shown: TrimmerDocument { editor.document }
 
@@ -54,6 +55,14 @@ struct TrimmerWorkspaceView: View {
             if session.trimmerDocument != newValue {
                 session.trimmerDocument = newValue
             }
+        }
+        .onChange(of: pendingDrop) { _, drop in
+            // Place from the SwiftUI update, so the drop joins the window's undo list.
+            guard let drop else { return }
+            pendingDrop = nil
+            guard session.trimmerExporting == false else { return }
+            let time = DepotAssetDrag.timelineSeconds(dropX: drop.x, pixelsPerSecond: pixelsPerSecond)
+            place(assetID: drop.assetID, on: drop.track, at: time)
         }
         .background {
             if editingMarkerID == nil {
@@ -468,6 +477,11 @@ struct TrimmerWorkspaceView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
+                    // A depot drag is handled by LaneDropCatcher. Don't also draw a range.
+                    guard dropHoverTrack != track else {
+                        rangeSelection = nil
+                        return
+                    }
                     guard hypot(value.translation.width, value.translation.height) >= 4 else { return }
                     let start = Double(value.startLocation.x / pixelsPerSecond)
                     let end = Double(value.location.x / pixelsPerSecond)
@@ -477,6 +491,7 @@ struct TrimmerWorkspaceView: View {
                     selectedMarkerID = nil
                 }
                 .onEnded { value in
+                    guard dropHoverTrack != track else { return }
                     if hypot(value.translation.width, value.translation.height) < 4 {
                         scrub(Double(value.location.x / pixelsPerSecond))
                         selectedTrack = track
@@ -484,12 +499,45 @@ struct TrimmerWorkspaceView: View {
                     }
                 }
         )
-        .dropDestination(for: DepotAssetDrag.self) { items, location in
-            guard let item = items.first, !session.trimmerExporting else { return false }
-            place(assetID: item.assetID, on: track, at: Double(location.x / pixelsPerSecond))
-            return true
+        .overlay {
+            LaneDropCatcher(
+                onHover: { hovering in
+                    if hovering {
+                        dropHoverTrack = track
+                    } else if dropHoverTrack == track {
+                        dropHoverTrack = nil
+                    }
+                },
+                onPerform: { assetID, x in
+                    guard session.trimmerExporting == false else { return false }
+                    pendingDrop = PendingDepotDrop(assetID: assetID, track: track, x: x, token: UUID())
+                    return true
+                }
+            )
+            .allowsHitTesting(false)
         }
-        .overlay(alignment: .bottom) { Rectangle().fill(LoungeTheme.cyan.opacity(0.12)).frame(height: 1) }
+        .overlay {
+            if dropHoverTrack == track {
+                ZStack {
+                    LoungeTheme.cyan.opacity(0.20)
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(LoungeTheme.cyan, lineWidth: 3)
+                    Text("Drop here")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.cyan)
+                }
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("Drop here")
+                .accessibilityIdentifier("thecut.dropHighlight.\(track.rawValue)")
+            }
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(LoungeTheme.cyan.opacity(0.12)).frame(height: 1).allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(track.title)
+        .accessibilityIdentifier("thecut.lane.\(track.rawValue)")
     }
 
     private func clipView(_ clip: TrimmerClip, height: CGFloat, laneHeight: CGFloat) -> some View {
@@ -583,6 +631,9 @@ struct TrimmerWorkspaceView: View {
                 )
                 .padding(3)
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(name(for: clip.assetID))
+        .accessibilityIdentifier("thecut.clip.\(name(for: clip.assetID))")
     }
 
     private func fadeHandle() -> some View {
@@ -1032,6 +1083,13 @@ private struct FollowDrag: ViewModifier {
                     .onEnded { onEnded($0.translation) }
             )
     }
+}
+
+private struct PendingDepotDrop: Equatable {
+    var assetID: String
+    var track: TrimmerTrackID
+    var x: CGFloat
+    var token: UUID
 }
 
 private struct CutRange: Equatable {
