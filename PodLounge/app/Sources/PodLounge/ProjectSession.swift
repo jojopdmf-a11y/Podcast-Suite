@@ -399,19 +399,21 @@ final class ProjectSession: ObservableObject {
     /// Renders nothing itself. The Limiter workspace passes a finished file.
     /// The original depot bytes are not rewritten, and the selection stays on
     /// the file that was leveled.
-    func importLimiterResult(from url: URL, displayName: String) throws {
+    @discardableResult
+    func importLimiterResult(from url: URL, displayName: String) throws -> DepotAsset {
         guard let package else {
             throw PackageError.operationFailed("Create or open a project before saving a result.")
         }
         applyMetadata(to: package)
         try writeSideFiles(to: package)
-        _ = try package.importResult(
+        let asset = try package.importResult(
             from: url,
             producedBy: "limiter",
             displayName: displayName,
             select: false
         )
         adopt(package, keepWorkspace: true)
+        return asset
     }
 
     /// Drop or choose on the Stripper screen. An outside file is copied in as an

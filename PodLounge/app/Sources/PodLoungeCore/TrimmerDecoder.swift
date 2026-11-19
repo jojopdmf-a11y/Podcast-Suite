@@ -9,6 +9,14 @@ public enum TrimmerDecoder {
         return rate > 0 ? rate : nil
     }
 
+    /// Same channel count TheDecks reads in `MixerAudioIO.channelCount` (`processingFormat`).
+    /// One channel becomes a speaker strip. Two or more become a music strip.
+    public static func channelCount(of url: URL) -> Int? {
+        guard let file = try? AVAudioFile(forReading: url) else { return nil }
+        let count = Int(file.processingFormat.channelCount)
+        return count > 0 ? count : nil
+    }
+
     /// Stereo float samples at `targetRate`. A mono file is copied to both channels.
     public static func readStereo(url: URL, targetRate: Double) throws -> TrimmerSourceAudio {
         let raw = FileManager.default.temporaryDirectory

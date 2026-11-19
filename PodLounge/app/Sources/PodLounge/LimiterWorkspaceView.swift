@@ -1,3 +1,4 @@
+import AppKit
 import LilLevelerKit
 import PodLoungeCore
 import SwiftUI
@@ -7,6 +8,8 @@ struct LimiterWorkspaceView: View {
     @EnvironmentObject private var session: ProjectSession
     @StateObject private var leveler = LevelerSession()
     @State private var acceptControlEdits = false
+    @State private var chapterSidecar: [PodcastChapter] = []
+    @State private var chapterDuration: Double = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -29,6 +32,10 @@ struct LimiterWorkspaceView: View {
             .padding(.top, 8)
             .padding(.bottom, 4)
 
+            if chapterSidecar.isEmpty == false {
+                chapterStrip
+            }
+
             LevelerRootView(
                 session: leveler,
                 mode: .lounge,
@@ -36,7 +43,7 @@ struct LimiterWorkspaceView: View {
                 resultName: resultNameBinding,
                 resultNameFollowsSource: followsBinding,
                     onSaveToDepot: { url, name in
-                        try session.importLimiterResult(from: url, displayName: name)
+                        try saveLeveledFile(url: url, displayName: name)
                     },
                     onControlsChanged: syncControls,
                     onPlaybackWillStart: { session.stopDepotPlayback() }
@@ -160,7 +167,94 @@ struct LimiterWorkspaceView: View {
         session.limiterSettings = next
     }
 
+    private var chapterList: PodcastTimestampList.Result {
+        PodcastTimestampList.make(chapters: chapterSidecar, episodeDuration: chapterDuration)
+    }
+
+    private var chapterStrip: some View {
+        let list = chapterList
+        return HStack(alignment: .center, spacing: 8) {
+            Text("Chapters (\(chapterSidecar.count))")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(LoungeTheme.text)
+                .accessibilityIdentifier("roof.chapters")
+            Button("Copy timestamp list") { copyChapterList(list) }
+                .buttonStyle(LoungeButtonStyle())
+                .accessibilityIdentifier("roof.chapters.copy")
+            if list.addedOpening {
+                Text(list.note)
+                    .font(.system(size: 10))
+                    .foregroundStyle(LoungeTheme.textDim)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+    }
+
+    private func copyChapterList(_ list: PodcastTimestampList.Result) {
+        let board = NSPasteboard.general
+        board.clearContents()
+        board.setString(list.text, forType: .string)
+    }
+
+    private func saveLeveledFile(url: URL, displayName: String) throws {
+        let sourceURL = selectedSourceURL()
+        let chapters = sourceURL.flatMap { PodcastChapters.load(beside: $0) } ?? []
+        if url.pathExtension.lowercased() == "mp3", chapters.isEmpty == false {
+            let sourceDuration = sourceURL.flatMap(AudioFileClock.duration(of:)) ?? 0
+            let outputDuration = AudioFileClock.duration(of: url) ?? sourceDuration
+            let map = RoofChapterClock.map(sourceDuration: sourceDuration, outputDuration: outputDuration)
+            let aligned = PodcastChapters.apply(chapters, map: map, outputDuration: outputDuration)
+            let end = max(outputDuration, aligned.map(\.start).max() ?? 0)
+            do {
+                try PodcastID3.apply(chapters: aligned, duration: end, to: url)
+            } catch {
+                session.alertMessage = "The leveled file was saved. The chapter markers could not be written into the MP3."
+            }
+        }
+        let asset = try session.importLimiterResult(from: url, displayName: displayName)
+        guard chapters.isEmpty == false,
+              let package = session.package,
+              let destination = try? package.resolvedURL(for: asset)
+        else { return }
+        let sourceDuration = sourceURL.flatMap(AudioFileClock.duration(of:)) ?? 0
+        let outputDuration = AudioFileClock.duration(of: destination) ?? sourceDuration
+        let map = RoofChapterClock.map(sourceDuration: sourceDuration, outputDuration: outputDuration)
+        let original = sourceURL.map(PodcastChapters.sidecarURL(forAudio:))
+        try? PodcastChapters.write(
+            chapters,
+            map: map,
+            outputDuration: outputDuration,
+            beside: destination,
+            originalSidecar: original
+        )
+    }
+
+    private func selectedSourceURL() -> URL? {
+        guard let package = session.package,
+              let id = session.selectedAssetID,
+              let asset = session.assets.first(where: { $0.id == id }),
+              session.health(of: asset) == .present
+        else { return nil }
+        return try? package.resolvedURL(for: asset)
+    }
+
+    private func refreshChapters() {
+        guard let url = selectedSourceURL() else {
+            chapterSidecar = []
+            chapterDuration = 0
+            return
+        }
+        let chapters = PodcastChapters.load(beside: url) ?? []
+        chapterSidecar = chapters
+        chapterDuration = AudioFileClock.duration(of: url) ?? chapters.map(\.start).max() ?? 0
+    }
+
     private func loadSelected() {
+        defer { refreshChapters() }
         guard let package = session.package else {
             if leveler.sourceURL != nil { leveler.teardown() }
             leveler.status = "Open a project, then pick a file in TheValet."

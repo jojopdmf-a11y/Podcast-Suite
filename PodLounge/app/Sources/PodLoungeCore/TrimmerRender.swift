@@ -176,9 +176,10 @@ public enum TrimmerRenderer {
         document: TrimmerDocument,
         sampleRate: Double,
         sources: [String: TrimmerSourceAudio],
+        scope: TrimmerExportScope = .fullMix,
         progress: ((Double) -> Void)? = nil
     ) -> TrimmerRenderResult {
-        let timeline = timelineFrames(document: document, sampleRate: sampleRate)
+        let timeline = timelineFrames(document: document, sampleRate: sampleRate, scope: scope)
         var stereo: [Float] = []
         stereo.reserveCapacity(timeline * 2)
         let peak = renderStreaming(
@@ -187,6 +188,7 @@ public enum TrimmerRenderer {
             read: { assetID, frame, count in
                 sources[assetID]?.read(frame: frame, count: count) ?? [Float](repeating: 0, count: max(0, count) * 2)
             },
+            scope: scope,
             progress: progress
         ) { block in
             stereo.append(contentsOf: block)
@@ -200,20 +202,22 @@ public enum TrimmerRenderer {
     }
 
     /// Mixes the timeline in blocks. `read` returns interleaved stereo at `sampleRate`.
+    /// One track ignores mute and solo, including its own mute, and still uses that track's fader.
     @discardableResult
     public static func renderStreaming(
         document: TrimmerDocument,
         sampleRate: Double,
         read: (String, Int, Int) -> [Float],
+        scope: TrimmerExportScope = .fullMix,
         progress: ((Double) -> Void)? = nil,
         consume: ([Float]) -> Void
     ) -> Float {
-        let timeline = timelineFrames(document: document, sampleRate: sampleRate)
+        let timeline = timelineFrames(document: document, sampleRate: sampleRate, scope: scope)
         guard timeline > 0, sampleRate > 0 else {
             progress?(1)
             return 0
         }
-        let prepared = prepare(document: document, sampleRate: sampleRate)
+        let prepared = prepare(document: document, sampleRate: sampleRate, scope: scope)
         var peak: Float = 0
         var frame = 0
         while frame < timeline {
@@ -250,8 +254,15 @@ public enum TrimmerRenderer {
         return peak
     }
 
-    public static func timelineFrames(document: TrimmerDocument, sampleRate: Double) -> Int {
-        document.clips.map { clip in
+    public static func timelineFrames(
+        document: TrimmerDocument,
+        sampleRate: Double,
+        scope: TrimmerExportScope = .fullMix
+    ) -> Int {
+        let clips = scope.track.map { track in
+            document.clips.filter { $0.track == track }
+        } ?? document.clips
+        return clips.map { clip in
             TrimmerClock.frames(seconds: clip.start, sampleRate: sampleRate)
                 + TrimmerClock.frames(seconds: clip.length, sampleRate: sampleRate)
         }.max() ?? 0
@@ -271,9 +282,19 @@ public enum TrimmerRenderer {
         }
     }
 
-    private static func prepare(document: TrimmerDocument, sampleRate: Double) -> [PreparedClip] {
+    /// Full mix follows mute and solo. A single track is always included, so a muted track can be exported alone.
+    private static func audibleTracks(document: TrimmerDocument, scope: TrimmerExportScope) -> [TrimmerTrackID] {
+        if let track = scope.track { return [track] }
+        return TrimmerTrackID.allCases.filter { document.isAudible($0) }
+    }
+
+    private static func prepare(
+        document: TrimmerDocument,
+        sampleRate: Double,
+        scope: TrimmerExportScope
+    ) -> [PreparedClip] {
         var prepared: [PreparedClip] = []
-        for track in TrimmerTrackID.allCases where document.isAudible(track) {
+        for track in audibleTracks(document: document, scope: scope) {
             let trackGain = TrimmerGain.linear(decibels: document.trackState(track).gainDB)
             let mates = document.clips.filter { $0.track == track }
             for clip in mates {
