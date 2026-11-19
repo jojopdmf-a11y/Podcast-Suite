@@ -41,6 +41,11 @@ struct ContentView: View {
     private static let stripColumnSpacing: CGFloat = 10
 
     var body: some View {
+        applyOverlays(deskWithEvents)
+    }
+
+    /// Split out of `body` so the compiler type-checks it in reasonable time.
+    private var deskWithEvents: some View {
         ZStack {
             MixerTheme.windowBackground.ignoresSafeArea()
             RadialGradient(
@@ -102,6 +107,11 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerImportFiles), perform: importFilesFromMenu)
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerExport), perform: exportFromMenu)
         .onReceive(NotificationCenter.default.publisher(for: .fixerMixerPickInput), perform: pickInputFromMenu)
+    }
+
+    /// Pop-ups and sheets, kept apart from the desk layout for the same reason.
+    private func applyOverlays<V: View>(_ content: V) -> some View {
+        content
         .background {
             // One shortcut for the whole desk. The header may draw Play twice while measuring a tight window.
             Button("Play or pause") { session.togglePlay() }
