@@ -63,7 +63,7 @@ extension ProjectPackage {
             }
             for index in staged.indices {
                 if fm.fileExists(atPath: staged[index].destination.path) {
-                    throw PackageError.importFailed("A TheValet file already uses that name.")
+                    throw PackageError.importFailed("A file in TheValet already uses that name.")
                 }
                 try fm.moveItem(at: staged[index].partial, to: staged[index].destination)
                 created.removeAll { $0 == staged[index].partial }

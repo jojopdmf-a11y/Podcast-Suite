@@ -274,7 +274,7 @@ public struct LevelerRootView: View {
                 resultName: resultName,
                 followsSource: resultNameFollowsSource,
                 primaryTitle: session.isBusy ? "WORKING…" : "Export File to TheValet",
-                primaryHelp: "Render the leveled file into the project. The original is not changed, and the TheValet selection stays on this file.",
+                primaryHelp: "Render the leveled file into the project. The original is not changed, and TheValet selection stays on this file.",
                 primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
                 primaryAction: saveToDepot,
                 fillsColumn: false,
@@ -488,11 +488,11 @@ public struct LevelerRootView: View {
                 Image(systemName: "waveform.badge.mic")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(LevelerTheme.cyan)
-                Text("SELECT A TheValet FILE")
+                Text("SELECT A FILE IN THEVALET")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(LevelerTheme.textPrimary)
-                Text("Pick one in the TheValet list. The original stays where it is.")
+                Text("Pick one in TheValet. The original stays where it is.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                     .multilineTextAlignment(.center)

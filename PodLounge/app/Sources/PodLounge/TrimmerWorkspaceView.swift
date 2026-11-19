@@ -414,7 +414,7 @@ struct TrimmerWorkspaceView: View {
             }
             playhead(height: rulerHeight + markerHeight + laneHeight * 3)
             if shown.clips.isEmpty {
-                Text("Drag a TheValet item onto a track.")
+                Text("Drag an item from TheValet onto a track.")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LoungeTheme.textDim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -962,7 +962,7 @@ struct TrimmerWorkspaceView: View {
     private func place(assetID: String, on track: TrimmerTrackID, at time: Double) {
         guard let asset = session.assets.first(where: { $0.id == assetID }) else { return }
         guard session.health(of: asset) == .present, let fileURL = url(for: assetID) else {
-            session.alertMessage = "That TheValet file is missing."
+            session.alertMessage = "That file is missing from TheValet."
             return
         }
         guard let duration = AudioDuration.seconds(for: fileURL), duration >= TrimmerDocument.minimumLength else {

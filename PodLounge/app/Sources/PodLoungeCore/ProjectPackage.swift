@@ -207,7 +207,7 @@ public final class ProjectPackage {
         }
         let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
         if Self.isInsideOrEqual(resolvedSource, root: root) {
-            throw PackageError.importFailed("Choose a file outside this project. TheValet files are already inside the package.")
+            throw PackageError.importFailed("Choose a file outside this project. Files in TheValet are already inside the package.")
         }
 
         let id = UUID().uuidString.lowercased()
@@ -217,7 +217,7 @@ public final class ProjectPackage {
         let relativePath = "\(kind.depotDirectory)/\(fileName)"
         let destination = try Self.locate(relativePath: relativePath, kind: kind, in: rootURL)
         if fm.fileExists(atPath: destination.path) {
-            throw PackageError.importFailed("A TheValet file already uses that name.")
+            throw PackageError.importFailed("A file in TheValet already uses that name.")
         }
         let partial = destination.appendingPathExtension("partial")
         if fm.fileExists(atPath: partial.path) {
@@ -411,7 +411,7 @@ public final class ProjectPackage {
         let relativePath = "\(AssetKind.result.depotDirectory)/\(fileName)"
         let destination = try Self.locate(relativePath: relativePath, kind: .result, in: rootURL)
         if fm.fileExists(atPath: destination.path) {
-            throw PackageError.operationFailed("A TheValet file already uses that name.")
+            throw PackageError.operationFailed("A file in TheValet already uses that name.")
         }
         let selected = manifest.selectedAssetID
         do {

@@ -179,7 +179,7 @@ public struct StripperRootView: View {
                     .shadow(color: StripperTheme.cyan.opacity(0.5), radius: 8)
                 if lounge {
                     if model.inputTitle.isEmpty {
-                        Text("SELECT A TheValet FILE")
+                        Text("SELECT A FILE IN THEVALET")
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .tracking(1.2)
                             .foregroundStyle(StripperTheme.textPrimary)
@@ -193,7 +193,7 @@ public struct StripperRootView: View {
                             .foregroundStyle(StripperTheme.textPrimary)
                             .lineLimit(1)
                             .accessibilityIdentifier("stripper.input")
-                        Text(model.inputDetail.isEmpty ? "Selected TheValet file" : model.inputDetail)
+                        Text(model.inputDetail.isEmpty ? "File selected in TheValet" : model.inputDetail)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(StripperTheme.textSecondary)
                             .lineLimit(1)

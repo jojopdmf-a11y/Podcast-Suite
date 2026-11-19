@@ -154,7 +154,7 @@ struct DepotSidebar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .loungePanel(radius: 10)
             } else {
-                Text("Select a TheValet file.")
+                Text("Select a file in TheValet.")
                     .font(.system(size: 12))
                     .foregroundStyle(LoungeTheme.textDim)
             }

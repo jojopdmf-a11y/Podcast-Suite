@@ -124,7 +124,7 @@ final class ProjectSession: ObservableObject {
               let url = try? package.resolvedURL(for: asset)
         else {
             stopDepotPlayback()
-            alertMessage = "That TheValet file can't be played."
+            alertMessage = "That file in TheValet can't be played."
             return
         }
         endTrimmerPlayback?()
@@ -326,7 +326,7 @@ final class ProjectSession: ObservableObject {
             fixer.followDepotDisplayName(assetID: id, from: previous, to: outcome.displayName)
             objectWillChange.send()
             if outcome.warnsDuplicate {
-                alertMessage = "Another TheValet item is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
+                alertMessage = "Another item in TheValet is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
             }
         } catch DepotRenameError.emptyName {
             alertMessage = "Enter a name. The old name was kept."
@@ -757,11 +757,11 @@ final class ProjectSession: ObservableObject {
             return
         }
         guard let id = selectedAssetID, let asset = assets.first(where: { $0.id == id }) else {
-            alertMessage = "Select a TheValet file to add."
+            alertMessage = "Select a file in TheValet to add."
             return
         }
         guard health(of: asset) == .present, let url = try? package.resolvedURL(for: asset) else {
-            alertMessage = "That TheValet file is missing."
+            alertMessage = "That file is missing from TheValet."
             return
         }
         fixer.importDepotFiles(

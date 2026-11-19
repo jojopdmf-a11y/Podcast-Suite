@@ -18,7 +18,7 @@ struct StripperWorkspaceView: View {
                     .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
                     RoomTitleText(workspace: .stripper, size: 18)
-                    Text("The selected TheValet file is the source. Dropping a new file imports it. Only Split Into Tracks starts a split.")
+                    Text("The file selected in TheValet is the source. Dropping a new file imports it. Only Split Into Tracks starts a split.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .lineLimit(1)
@@ -93,7 +93,7 @@ struct StripperWorkspaceView: View {
         guard let package = session.package else {
             model.inputURL = nil
             model.inputTitle = ""
-            model.inputDetail = "Open a project, then pick a TheValet file."
+            model.inputDetail = "Open a project, then pick a file in TheValet."
             return
         }
         guard let id = session.selectedAssetID,
@@ -101,13 +101,13 @@ struct StripperWorkspaceView: View {
         else {
             model.inputURL = nil
             model.inputTitle = ""
-            model.inputDetail = "Select a TheValet file to split."
+            model.inputDetail = "Select a file in TheValet to split."
             return
         }
         guard session.health(of: asset) == .present, let url = try? package.resolvedURL(for: asset) else {
             model.inputURL = nil
             model.inputTitle = asset.displayName
-            model.inputDetail = "That TheValet file is missing."
+            model.inputDetail = "That file is missing from TheValet."
             return
         }
         model.inputURL = url

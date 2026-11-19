@@ -33,13 +33,13 @@ public enum WorkspaceID: String, CaseIterable, Identifiable, Codable, Sendable {
     public var scaffoldMessage: String {
         switch self {
         case .stripper:
-            "TheStrip splits the selected TheValet file into speaker tracks and a music track."
+            "TheStrip splits the file selected in TheValet into speaker tracks and a music track."
         case .fixer:
             "TheDecks records and mixes. While a take is recording, stay here until Stop."
         case .trimmer:
             "TheCut edits the finished episode on three tracks, then sends a new mix to TheRoof."
         case .limiter:
-            "TheRoof sets final loudness and peak on the selected TheValet file."
+            "TheRoof sets final loudness and peak on the file selected in TheValet."
         }
     }
 }

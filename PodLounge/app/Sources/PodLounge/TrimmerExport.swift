@@ -60,7 +60,7 @@ enum TrimmerExporter {
         var readers: [String: TrimmerRawAudio] = [:]
         let ids = Array(Set(clips.map(\.assetID)))
         for (index, id) in ids.enumerated() {
-            let name = names[id] ?? "A TheValet file"
+            let name = names[id] ?? "A file in TheValet"
             guard let source = urls[id] else { throw TrimmerExportError.missing(name) }
             let raw = folder.appendingPathComponent("source-\(index).f32")
             let frames: Int

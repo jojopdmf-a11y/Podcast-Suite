@@ -301,7 +301,7 @@ struct ContentView: View {
                         "ADD SELECTED",
                         identifier: "fixer.addSelected",
                         enabled: !session.isRecording,
-                        help: "Add the TheValet file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
+                        help: "Add the file selected in TheValet. A mono file becomes a speaker strip. A stereo file becomes a music strip."
                     ) { onAddSelectedDepot?() }
                 }
                 deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
@@ -450,7 +450,7 @@ struct ContentView: View {
                     Button("ADD SELECTED") { onAddSelectedDepot() }
                         .buttonStyle(MixerPrimaryButtonStyle())
                         .accessibilityIdentifier("fixer.addSelected")
-                        .help("Add the TheValet file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                        .help("Add the file selected in TheValet. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
                 }
                 if chrome == .application {
                     Button("CHOOSE FOLDER…") { pickFolder() }

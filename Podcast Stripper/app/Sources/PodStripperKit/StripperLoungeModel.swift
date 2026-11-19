@@ -71,7 +71,7 @@ public final class StripperLoungeModel: ObservableObject {
             return outsideFolder.path
         }
         if chrome == .lounge {
-            return "Project TheValet"
+            return "TheValet"
         }
         return ""
     }

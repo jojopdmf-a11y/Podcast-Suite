@@ -107,7 +107,7 @@ struct ContentView: View {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected TheValet file into speaker tracks and music. TheDecks records and mixes. TheCut edits the finished episode and can save a new mix for TheRoof. TheRoof levels the selected TheValet file and can save a new result. The first time TheDecks records, macOS asks Lounge for the microphone.")
+            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the file selected in TheValet into speaker tracks and music. TheDecks records and mixes. TheCut edits the finished episode and can save a new mix for TheRoof. TheRoof levels the file selected in TheValet and can save a new result. The first time TheDecks records, macOS asks Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
