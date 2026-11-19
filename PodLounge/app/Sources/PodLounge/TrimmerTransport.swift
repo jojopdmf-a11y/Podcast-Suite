@@ -3,21 +3,41 @@ import Darwin
 import Foundation
 import PodLoungeCore
 
+struct TrimmerMeterReading: Equatable {
+    var left: Float = 0
+    var right: Float = 0
+    var holdLeft: Float = 0
+    var holdRight: Float = 0
+}
+
 /// One player node per clip, mixed by a fader for each of the three tracks.
 @MainActor
 final class TrimmerTransport: ObservableObject {
     @Published private(set) var isPlaying = false
     @Published var playhead: Double = 0
     @Published var message: String?
+    @Published private(set) var meters: [TrimmerTrackID: TrimmerMeterReading] = TrimmerTransport.silentMeters
 
     private let engine = AVAudioEngine()
     private var trackMixers: [TrimmerTrackID: AVAudioMixerNode] = [:]
+    private var meterMixers: [TrimmerTrackID: AVAudioMixerNode] = [:]
+    private var peakBoxes: [TrimmerTrackID: TrackPeakBox] = [:]
+    private var meterBallistics: [TrimmerTrackID: MeterBallistic] = [:]
     private var graphReady = false
+    private var tapsInstalled = false
     private var players: [AVAudioPlayerNode] = []
     private var voices: [Voice] = []
     private var timer: Timer?
     private var startedAt = Date()
     private var startedPlayhead = 0.0
+
+    private static var silentMeters: [TrimmerTrackID: TrimmerMeterReading] {
+        var meters: [TrimmerTrackID: TrimmerMeterReading] = [:]
+        for track in TrimmerTrackID.allCases {
+            meters[track] = TrimmerMeterReading()
+        }
+        return meters
+    }
 
     func stop() {
         if isPlaying {
@@ -33,6 +53,7 @@ final class TrimmerTransport: ObservableObject {
         voices.removeAll()
         engine.stop()
         isPlaying = false
+        clearMeters()
     }
 
     func shutdown() {
@@ -42,7 +63,22 @@ final class TrimmerTransport: ObservableObject {
 
     func setPlayhead(_ time: Double) {
         guard !isPlaying else { return }
-        playhead = max(0, time)
+        playhead = max(0, time.isFinite ? time : 0)
+    }
+
+    /// Moves the playhead. When audio is already running, it keeps running from the new time.
+    func seek(to time: Double, document: TrimmerDocument, urlFor: (String) -> URL?) {
+        let decision = TrimmerSeek.decide(isPlaying: isPlaying, time: time)
+        relocate(to: decision.time, resume: decision.keepPlaying, document: document, urlFor: urlFor)
+    }
+
+    /// `resume` is remembered from mouse-down, because a ruler drag stops the engine before mouse-up.
+    func relocate(to time: Double, resume: Bool, document: TrimmerDocument, urlFor: (String) -> URL?) {
+        let target = time.isFinite ? max(0, time) : 0
+        if isPlaying { stop() }
+        playhead = target
+        guard resume else { return }
+        play(document: document, urlFor: urlFor)
     }
 
     func applyMix(_ document: TrimmerDocument) {
@@ -107,6 +143,7 @@ final class TrimmerTransport: ObservableObject {
             message = "Playback could not start."
             return
         }
+        installMeters()
         for player in players {
             player.play()
         }
@@ -135,17 +172,65 @@ final class TrimmerTransport: ObservableObject {
             let envelope = TrimmerEnvelope.gain(of: voice.clip, among: voice.mates, at: time)
             voice.player.volume = envelope * TrimmerGain.linear(decibels: voice.clip.gainDB)
         }
+        publishMeters()
     }
 
     private func prepareGraph() {
         guard !graphReady else { return }
         for track in TrimmerTrackID.allCases {
             let mixer = AVAudioMixerNode()
+            let meter = AVAudioMixerNode()
             engine.attach(mixer)
-            engine.connect(mixer, to: engine.mainMixerNode, format: nil)
+            engine.attach(meter)
+            // Players feed the fader. The meter node sits after it, so a tap there is post-fader and post-mute.
+            engine.connect(mixer, to: meter, format: nil)
+            engine.connect(meter, to: engine.mainMixerNode, format: nil)
+            meter.outputVolume = 1
             trackMixers[track] = mixer
+            meterMixers[track] = meter
+            peakBoxes[track] = TrackPeakBox()
         }
         graphReady = true
+    }
+
+    private func installMeters() {
+        guard !tapsInstalled else { return }
+        var installed = 0
+        for track in TrimmerTrackID.allCases {
+            guard let meter = meterMixers[track], let box = peakBoxes[track] else { continue }
+            let format = meter.outputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0 else { continue }
+            let frames = AVAudioFrameCount(min(format.sampleRate * 0.30, max(format.sampleRate * 0.10, 256)))
+            // nil keeps the connection format. The meter node is downstream of the fader, so this tap is post-fader.
+            meter.installTap(onBus: 0, bufferSize: frames, format: nil) { buffer, _ in
+                box.store(buffer)
+            }
+            installed += 1
+        }
+        if installed == TrimmerTrackID.allCases.count {
+            tapsInstalled = true
+        }
+    }
+
+    private func publishMeters() {
+        let now = Date()
+        var next: [TrimmerTrackID: TrimmerMeterReading] = [:]
+        for track in TrimmerTrackID.allCases {
+            let instant = peakBoxes[track]?.read() ?? (0, 0)
+            var ballistic = meterBallistics[track] ?? MeterBallistic()
+            ballistic.advance(left: instant.0, right: instant.1, now: now)
+            meterBallistics[track] = ballistic
+            next[track] = ballistic.reading
+        }
+        meters = next
+    }
+
+    private func clearMeters() {
+        for box in peakBoxes.values {
+            box.reset()
+        }
+        meterBallistics.removeAll()
+        meters = Self.silentMeters
     }
 
     private func hostTicks(_ seconds: Double) -> UInt64 {
@@ -160,5 +245,81 @@ final class TrimmerTransport: ObservableObject {
         var player: AVAudioPlayerNode
         var clip: TrimmerClip
         var mates: [TrimmerClip]
+    }
+}
+
+/// Latest buffer peak. The audio thread writes it; the meter timer reads it.
+private final class TrackPeakBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var left: Float = 0
+    private var right: Float = 0
+
+    func store(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData else { return }
+        let frames = Int(buffer.frameLength)
+        guard frames > 0 else { return }
+        let count = Int(buffer.format.channelCount)
+        var peakL: Float = 0
+        var peakR: Float = 0
+        if count >= 1 {
+            for index in 0..<frames {
+                peakL = max(peakL, abs(channels[0][index]))
+            }
+        }
+        if count >= 2 {
+            for index in 0..<frames {
+                peakR = max(peakR, abs(channels[1][index]))
+            }
+        } else {
+            peakR = peakL
+        }
+        lock.lock()
+        left = peakL
+        right = peakR
+        lock.unlock()
+    }
+
+    func read() -> (Float, Float) {
+        lock.lock()
+        let value = (left, right)
+        lock.unlock()
+        return value
+    }
+
+    func reset() {
+        lock.lock()
+        left = 0
+        right = 0
+        lock.unlock()
+    }
+}
+
+private struct MeterBallistic {
+    var left: Float = 0
+    var right: Float = 0
+    var holdLeft: Float = 0
+    var holdRight: Float = 0
+    var holdLeftUntil = Date.distantPast
+    var holdRightUntil = Date.distantPast
+
+    var reading: TrimmerMeterReading {
+        TrimmerMeterReading(left: left, right: right, holdLeft: holdLeft, holdRight: holdRight)
+    }
+
+    mutating func advance(left instantL: Float, right instantR: Float, now: Date) {
+        left = instantL >= left ? instantL : left * 0.78
+        right = instantR >= right ? instantR : right * 0.78
+        if instantL >= holdLeft {
+            holdLeft = instantL
+            holdLeftUntil = now.addingTimeInterval(0.85)
+        } else if now > holdLeftUntil {
+            holdLeft *= 0.86
+        }
+        if instantR >= holdRight {
+            holdRight = instantR
+            holdRightUntil = now.addingTimeInterval(0.85)
+        } else if now > holdRightUntil {
+            holdRight *= 0.86
+        }
     }
 }

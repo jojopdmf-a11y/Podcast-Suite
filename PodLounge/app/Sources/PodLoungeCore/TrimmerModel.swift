@@ -323,22 +323,43 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
             }
             clip.length = max(Self.minimumLength, newEnd - clip.start)
         }
-        clip.fadeIn = min(clip.fadeIn, clip.length)
-        clip.fadeOut = min(clip.fadeOut, clip.length)
+        // A trim changes only this clip. The neighbor is left where it is, so a gap can open.
+        fittingFades(on: &clip)
         var copy = self
         copy.clips[index] = clip
         return copy
     }
 
+    /// Keeps fade-in and fade-out from crossing. A fade already stored that way (an older edit) is left alone until the next fade drag.
     public func settingFade(clipID: UUID, edge: TrimmerFadeEdge, seconds: Double) -> TrimmerDocument {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return self }
         var copy = self
-        let capped = min(max(0, seconds), copy.clips[index].length)
+        var clip = copy.clips[index]
+        let asked = max(0, seconds)
         switch edge {
-        case .fadeIn: copy.clips[index].fadeIn = capped
-        case .fadeOut: copy.clips[index].fadeOut = capped
+        case .fadeIn:
+            clip.fadeIn = min(asked, max(0, clip.length - max(0, clip.fadeOut)))
+        case .fadeOut:
+            clip.fadeOut = min(asked, max(0, clip.length - max(0, clip.fadeIn)))
         }
+        copy.clips[index] = clip
         return copy
+    }
+
+    /// Shrinks the two fades together when a shorter clip can no longer hold both.
+    private func fittingFades(on clip: inout TrimmerClip) {
+        clip.fadeIn = max(0, clip.fadeIn)
+        clip.fadeOut = max(0, clip.fadeOut)
+        let sum = clip.fadeIn + clip.fadeOut
+        guard sum > clip.length else { return }
+        guard clip.length > 0, sum > 0 else {
+            clip.fadeIn = 0
+            clip.fadeOut = 0
+            return
+        }
+        let scale = clip.length / sum
+        clip.fadeIn *= scale
+        clip.fadeOut *= scale
     }
 
     public func applyingDefaultFades(clipID: UUID) -> TrimmerDocument {
@@ -574,6 +595,62 @@ public final class TrimmerEditor: ObservableObject {
         }
         undoManager.setActionName(label)
         if openGroup { undoManager.endUndoGrouping() }
+    }
+}
+
+/// What Fit shows, and how far minus is allowed to zoom out.
+public enum TrimmerViewport: Sendable {
+    /// Empty seconds after the last clip.
+    public static let margin = 1.0
+    /// Points kept clear on the right so the last clip is not cut off by the window edge.
+    public static let edgePadding = 16.0
+    /// Ruler span when TheCut has no clips yet.
+    public static let emptySpan = 30.0
+    public static let maximumPixelsPerSecond = 800.0
+    /// Same step as the plus and minus buttons.
+    public static let zoomFactor = 1.25
+
+    /// 0 through the end of the latest clip, plus `margin`. Every track is included.
+    public static func fitEnd(of document: TrimmerDocument) -> Double {
+        let clipEnd = document.clips.map(\.end).max() ?? 0
+        if clipEnd > TrimmerDocument.epsilon {
+            return clipEnd + margin
+        }
+        return emptySpan
+    }
+
+    public static func fitPixelsPerSecond(of document: TrimmerDocument, width: Double) -> Double {
+        let span = max(fitEnd(of: document), 0.001)
+        let available = max(1, width - edgePadding)
+        return min(maximumPixelsPerSecond, available / span)
+    }
+
+    /// Zooming out stops at Fit, so minus can always reach the whole timeline.
+    public static func zoom(pixelsPerSecond: Double, by factor: Double, fitPixelsPerSecond: Double) -> Double {
+        let floor = max(0.000_1, fitPixelsPerSecond)
+        guard pixelsPerSecond.isFinite, factor.isFinite, factor > 0 else { return floor }
+        let next = pixelsPerSecond * factor
+        if factor < 1 {
+            return max(floor, next)
+        }
+        return min(maximumPixelsPerSecond, max(floor, next))
+    }
+}
+
+/// A click on the ruler, a clip, an empty lane, or a chapter.
+public struct TrimmerSeek: Equatable, Sendable {
+    public var time: Double
+    /// True when playback was already running and should continue from `time`.
+    public var keepPlaying: Bool
+
+    public init(time: Double, keepPlaying: Bool) {
+        self.time = time
+        self.keepPlaying = keepPlaying
+    }
+
+    public static func decide(isPlaying: Bool, time: Double) -> TrimmerSeek {
+        let landed = time.isFinite ? max(0, time) : 0
+        return TrimmerSeek(time: landed, keepPlaying: isPlaying)
     }
 }
 

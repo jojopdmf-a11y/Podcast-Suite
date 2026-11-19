@@ -328,6 +328,158 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
     #expect(abs(decoded.stereo[mid * 2 + 1] - 0.5) < 0.02)
 }
 
+@Test func trimDoesNotRollTheNeighborAndStaysInsideTheSource() {
+    let left = clip(start: 0, length: 4, inOffset: 0, sourceDuration: 10)
+    let right = clip(start: 4, length: 6, inOffset: 4, sourceDuration: 10)
+    var document = TrimmerDocument.empty
+    document.clips = [left, right]
+
+    let opened = document.trimming(clipID: left.id, edge: .end, to: 3)
+    #expect(abs((opened.clip(left.id)?.end ?? 0) - 3) < 0.000_1)
+    #expect(opened.clip(right.id) == right)
+
+    let overlapped = document.trimming(clipID: right.id, edge: .start, to: 3)
+    #expect(overlapped.clip(left.id) == left)
+    #expect(abs((overlapped.clip(right.id)?.start ?? 0) - 3) < 0.000_1)
+    #expect(abs((overlapped.clip(right.id)?.length ?? 0) - 7) < 0.000_1)
+    #expect(abs((overlapped.clip(right.id)?.inOffset ?? 0) - 3) < 0.000_1)
+
+    let head = clip(start: 5, length: 3, inOffset: 1, sourceDuration: 10)
+    var headed = TrimmerDocument.empty
+    headed.clips = [head]
+    let clamped = headed.trimming(clipID: head.id, edge: .start, to: 0)
+    #expect(abs((clamped.clip(head.id)?.start ?? -1) - 4) < 0.000_1)
+    #expect((clamped.clip(head.id)?.inOffset ?? -1) < 0.000_1)
+    #expect(abs((clamped.clip(head.id)?.length ?? 0) - 4) < 0.000_1)
+
+    let pastEnd = document.trimming(clipID: right.id, edge: .end, to: 40)
+    #expect(abs((pastEnd.clip(right.id)?.end ?? 0) - 10) < 0.000_1)
+    #expect(pastEnd.clip(left.id) == left)
+
+    let tooShort = document.trimming(clipID: left.id, edge: .end, to: 0.01)
+    #expect(abs((tooShort.clip(left.id)?.length ?? 0) - TrimmerDocument.minimumLength) < 0.000_1)
+    #expect(tooShort.clip(right.id) == right)
+}
+
+@Test @MainActor func trimAndFadeUndoRestoreTheClip() {
+    let left = clip(start: 0, length: 4, sourceDuration: 10)
+    let right = clip(start: 4, length: 6, inOffset: 4, sourceDuration: 10)
+    let editor = TrimmerEditor()
+    editor.edit("Place") { $0.clips = [left, right] }
+    editor.edit("Trim") { document in
+        document = document.trimming(clipID: left.id, edge: .end, to: 2.5)
+    }
+    #expect(abs((editor.document.clip(left.id)?.end ?? 0) - 2.5) < 0.000_1)
+    #expect(editor.document.clip(right.id)?.start == 4)
+    editor.undoManager.undo()
+    #expect(abs((editor.document.clip(left.id)?.length ?? 0) - 4) < 0.000_1)
+    #expect(abs((editor.document.clip(right.id)?.start ?? 0) - 4) < 0.000_1)
+
+    editor.edit("Fade") { document in
+        document = document.settingFade(clipID: left.id, edge: .fadeIn, seconds: 0.6)
+    }
+    #expect(abs((editor.document.clip(left.id)?.fadeIn ?? 0) - 0.6) < 0.000_1)
+    editor.undoManager.undo()
+    #expect((editor.document.clip(left.id)?.fadeIn ?? 1) < 0.000_1)
+}
+
+@Test func fadeLengthsRoundTripAndReachTheMix() throws {
+    var document = TrimmerDocument.empty
+    let episode = clip(start: 0, length: 1, fadeIn: 0.4, fadeOut: 0.25, sourceDuration: 1)
+    document.clips = [episode]
+    let loaded = try TrimmerDocument.decode(try document.encoded())
+    #expect(abs(loaded.clips[0].fadeIn - 0.4) < 0.000_1)
+    #expect(abs(loaded.clips[0].fadeOut - 0.25) < 0.000_1)
+
+    var crossed = TrimmerDocument.empty
+    crossed.clips = [clip(start: 0, length: 1, fadeIn: 0.8, fadeOut: 0.8, sourceDuration: 1)]
+    let kept = try TrimmerDocument.decode(try crossed.encoded())
+    #expect(abs(kept.clips[0].fadeIn - 0.8) < 0.000_1)
+    #expect(abs(kept.clips[0].fadeOut - 0.8) < 0.000_1)
+
+    let limited = loaded.settingFade(clipID: loaded.clips[0].id, edge: .fadeIn, seconds: 10)
+    #expect(abs((limited.clip(loaded.clips[0].id)?.fadeIn ?? 0) - 0.75) < 0.000_1)
+    #expect(abs((limited.clip(loaded.clips[0].id)?.fadeOut ?? 0) - 0.25) < 0.000_1)
+
+    let result = TrimmerRenderer.render(
+        document: loaded,
+        sampleRate: rate,
+        sources: ["mix": .constant(frames: 48_000, amplitude: 1, sampleRate: rate)]
+    )
+    let early = TrimmerClock.frames(seconds: 0.2, sampleRate: rate)
+    #expect(abs(sample(result, frame: early) - TrimmerGain.fadeIn(0.5)) < 0.002)
+    let middle = TrimmerClock.frames(seconds: 0.5, sampleRate: rate)
+    #expect(abs(sample(result, frame: middle) - 1) < 0.002)
+    let late = TrimmerClock.frames(seconds: 0.875, sampleRate: rate)
+    #expect(abs(sample(result, frame: late) - TrimmerGain.fadeOut(0.5)) < 0.002)
+    #expect(abs(sample(result, frame: 0)) < 0.002)
+}
+
+@Test func fitRangeCoversEveryTrackAndMinusCanReachIt() {
+    var document = TrimmerDocument.empty
+    document.clips = [
+        clip(track: .episodeMix, start: 0, length: 12),
+        clip(track: .introsOutrosAds, start: 40, length: 5),
+        clip(track: .musicBeds, start: 3, length: 2),
+    ]
+    let end = TrimmerViewport.fitEnd(of: document)
+    #expect(abs(end - (45 + TrimmerViewport.margin)) < 0.000_1)
+    for item in document.clips {
+        #expect(item.start >= 0)
+        #expect(item.end <= end)
+    }
+    let width = 900.0
+    let pps = TrimmerViewport.fitPixelsPerSecond(of: document, width: width)
+    #expect(abs(pps * end - (width - TrimmerViewport.edgePadding)) < 0.001)
+
+    var zoomed = pps * 8
+    for _ in 0..<40 {
+        zoomed = TrimmerViewport.zoom(
+            pixelsPerSecond: zoomed,
+            by: 1 / TrimmerViewport.zoomFactor,
+            fitPixelsPerSecond: pps
+        )
+    }
+    #expect(abs(zoomed - pps) < 0.000_1)
+
+    var long = TrimmerDocument.empty
+    long.clips = [clip(start: 0, length: 7_200)]
+    let longEnd = TrimmerViewport.fitEnd(of: long)
+    let longFit = TrimmerViewport.fitPixelsPerSecond(of: long, width: 800)
+    #expect(longEnd >= 7_200)
+    #expect(longFit < 2)
+    var pulled = 2.0
+    for _ in 0..<40 {
+        pulled = TrimmerViewport.zoom(
+            pixelsPerSecond: pulled,
+            by: 1 / TrimmerViewport.zoomFactor,
+            fitPixelsPerSecond: longFit
+        )
+    }
+    #expect(abs(pulled - longFit) < 0.000_1)
+    let inward = TrimmerViewport.zoom(
+        pixelsPerSecond: longFit,
+        by: TrimmerViewport.zoomFactor,
+        fitPixelsPerSecond: longFit
+    )
+    #expect(inward > longFit)
+}
+
+@Test func seekWhilePlayingKeepsPlayback() {
+    let playing = TrimmerSeek.decide(isPlaying: true, time: 12.5)
+    #expect(playing.keepPlaying)
+    #expect(playing.time == 12.5)
+    let stopped = TrimmerSeek.decide(isPlaying: false, time: 4)
+    #expect(stopped.keepPlaying == false)
+    #expect(stopped.time == 4)
+    let negative = TrimmerSeek.decide(isPlaying: true, time: -3)
+    #expect(negative.keepPlaying)
+    #expect(negative.time == 0)
+    let nonsense = TrimmerSeek.decide(isPlaying: false, time: .nan)
+    #expect(nonsense.keepPlaying == false)
+    #expect(nonsense.time == 0)
+}
+
 @Test func chaptersTextUsesClockLines() {
     let markers = [
         TrimmerMarker(time: 65, title: "Interview"),
