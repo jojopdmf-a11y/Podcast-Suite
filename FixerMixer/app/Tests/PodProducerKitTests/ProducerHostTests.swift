@@ -428,6 +428,86 @@ import Testing
     #expect(!session.isRecording)
 }
 
+@Test @MainActor func loungeCanDeleteALoadedTrackAndLeaveTheFileOnDisk() throws {
+    let scratch = FileManager.default.temporaryDirectory
+        .appendingPathComponent("producer-delete-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: scratch) }
+
+    func write(_ name: String, channels: Int) throws -> URL {
+        let url = scratch.appendingPathComponent(name)
+        let frames = 4_800
+        try WAVIO.write(
+            url: url,
+            buffer: WAVIO.Buffer(
+                sampleRate: 48_000,
+                channelCount: channels,
+                samples: Array(repeating: 0.2, count: frames * channels)
+            )
+        )
+        return url
+    }
+
+    let host = try write("host.wav", channels: 1)
+    let guest = try write("guest.wav", channels: 1)
+    let extra = try write("extra.wav", channels: 1)
+    let bed = try write("bed.wav", channels: 2)
+
+    let standalone = MixerSession()
+    #expect(standalone.allowRemovingTracksWithAudio == false)
+    standalone.importAudioFiles([host], append: false)
+    let blocked = try #require(standalone.voices.first?.id)
+    #expect(standalone.canRemoveStrip(blocked) == false)
+    standalone.removeEmptyStrip(blocked)
+    #expect(standalone.voices.count == 1)
+    #expect(FileManager.default.fileExists(atPath: host.path))
+    #expect(standalone.canRemoveStrip(ChannelStripState.masterID) == false)
+
+    let session = MixerSession()
+    session.allowRemovingTracksWithAudio = true
+    var structureChanges = 0
+    session.onStructureChanged = { structureChanges += 1 }
+    session.importAudioFiles([host, guest, extra], append: false)
+    #expect(session.voices.count == 3)
+    session.toggleMonoLink(between: session.voices[1].id, and: session.voices[2].id)
+    #expect(session.voices[1].linkedPeerID == session.voices[2].id)
+    #expect(session.voices[2].linkedPeerID == session.voices[1].id)
+
+    session.isRecording = true
+    #expect(session.canRemoveStrip(session.voices[0].id) == false)
+    session.isRecording = false
+
+    let removedName = session.voices[0].name
+    let removedURL = try #require(session.voices[0].fileURL)
+    session.removeEmptyStrip(session.voices[0].id)
+    #expect(session.voices.count == 2)
+    #expect(session.voices.map(\.id) == [0, 1])
+    #expect(session.voices[0].linkedPeerID == 1)
+    #expect(session.voices[1].linkedPeerID == 0)
+    #expect(session.producerDocument().tracks.contains { $0.name == removedName } == false)
+    #expect(FileManager.default.fileExists(atPath: removedURL.path))
+    #expect(structureChanges == 1)
+
+    session.newTrack()
+    let emptyID = try #require(session.voices.last?.id)
+    #expect(session.stripHasAudio(emptyID) == false)
+    #expect(session.canRemoveStrip(emptyID))
+    session.removeEmptyStrip(emptyID)
+    #expect(session.voices.count == 2)
+
+    session.importAudioFiles([bed], append: true)
+    let bedID = try #require(session.stereos.first?.id)
+    #expect(session.canRemoveStrip(bedID))
+    session.removeEmptyStrip(bedID)
+    #expect(session.stereos.isEmpty)
+    #expect(session.voices.count == 2)
+    #expect(FileManager.default.fileExists(atPath: bed.path))
+    #expect(session.canRemoveStrip(ChannelStripState.masterID) == false)
+
+    let lounge = ProducerLoungeModel()
+    #expect(lounge.session.allowRemovingTracksWithAudio)
+}
+
 @Test @MainActor func loungeModelMirrorsStatusIntoTheTitleRow() {
     let model = ProducerLoungeModel()
     model.session.status = "Paused · 3:34"

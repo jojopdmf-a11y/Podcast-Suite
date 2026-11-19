@@ -574,6 +574,60 @@ enum LevelerOutputWriter {
     }
 }
 
+/// Writes a float WAV with the same encoders TheRoof uses.
+/// WAV, AIFF, M4A, and MP3, including a one-channel file, stay at the source channel count.
+public enum LevelerFileExport {
+    public static func write(
+        pcmWAV: URL,
+        to url: URL,
+        settings: LevelerOutputSettings,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) throws {
+        let file = try AVAudioFile(forReading: pcmWAV)
+        let frames = Int(file.length)
+        let channels = Int(file.processingFormat.channelCount)
+        let rate = file.processingFormat.sampleRate
+        guard frames > 0, channels >= 1, rate > 0 else {
+            throw LevelerError.processFailed("Nothing to export yet.")
+        }
+        let store = try PCMStore.createTemporary(
+            sampleRate: rate,
+            channelCount: channels,
+            frameCount: frames
+        )
+        let chunk: AVAudioFrameCount = 8_192
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: chunk) else {
+            throw LevelerError.processFailed("Out of memory writing the file.")
+        }
+        var position = 0
+        while position < frames {
+            let ask = min(chunk, AVAudioFrameCount(frames - position))
+            do {
+                try file.read(into: buffer, frameCount: ask)
+            } catch {
+                if position == 0 {
+                    throw LevelerError.processFailed("Could not read the mix.")
+                }
+                break
+            }
+            let got = Int(buffer.frameLength)
+            if got == 0 { break }
+            try store.write(from: buffer, atFrame: position)
+            position += got
+            progress?(0.3 * Double(position) / Double(frames))
+        }
+        guard position > 0 else {
+            throw LevelerError.processFailed("Nothing to export yet.")
+        }
+        if position < frames {
+            try store.shrinkFrameCount(to: position)
+        }
+        try LevelerOutputWriter.write(store: store, to: url, settings: settings) { fraction in
+            progress?(0.3 + 0.7 * fraction)
+        }
+    }
+}
+
 struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
 

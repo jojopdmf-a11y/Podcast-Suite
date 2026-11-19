@@ -118,6 +118,18 @@ public enum PodcastChapters {
         return TrimmerChapters.text(markers: markers)
     }
 
+    /// A marker this close to 0:00 already opens the episode.
+    public static let openingGap = 0.5
+
+    /// Adds "Intro" at 0:00 when the first marker is more than half a second in.
+    /// A marker already at the start is left alone. Nothing is added at the end.
+    public static func withOpeningIntro(_ chapters: [PodcastChapter]) -> [PodcastChapter] {
+        guard chapters.isEmpty == false else { return chapters }
+        let earliest = chapters.map(\.start).min() ?? 0
+        if earliest <= openingGap { return chapters }
+        return [PodcastChapter(start: 0, title: "Intro")] + chapters
+    }
+
     public static func apply(
         _ chapters: [PodcastChapter],
         map: PodcastChapterAlignment,
@@ -140,16 +152,20 @@ public enum PodcastChapters {
         beside audio: URL,
         originalSidecar: URL?
     ) throws {
+        let prepared = withOpeningIntro(chapters)
         let destination = sidecarURL(forAudio: audio)
         if map.isUnshifted, let originalSidecar, FileManager.default.fileExists(atPath: originalSidecar.path) {
-            if originalSidecar.standardizedFileURL == destination.standardizedFileURL { return }
-            if FileManager.default.fileExists(atPath: destination.path) {
-                try FileManager.default.removeItem(at: destination)
+            let originalText = (try? String(contentsOf: originalSidecar, encoding: .utf8)) ?? ""
+            if parse(originalText) == prepared {
+                if originalSidecar.standardizedFileURL == destination.standardizedFileURL { return }
+                if FileManager.default.fileExists(atPath: destination.path) {
+                    try FileManager.default.removeItem(at: destination)
+                }
+                try FileManager.default.copyItem(at: originalSidecar, to: destination)
+                return
             }
-            try FileManager.default.copyItem(at: originalSidecar, to: destination)
-            return
         }
-        let aligned = apply(chapters, map: map, outputDuration: outputDuration)
+        let aligned = apply(prepared, map: map, outputDuration: outputDuration)
         try Data(sidecarText(aligned).utf8).write(to: destination, options: .atomic)
     }
 

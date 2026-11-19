@@ -271,6 +271,62 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
     #expect(after == mpeg)
 }
 
+@Test func openingIntroIsAddedOnlyWhenTheFirstMarkerIsLate() throws {
+    #expect(PodcastChapters.withOpeningIntro([]) == [])
+    let atStart = [PodcastChapter(start: 0, title: "Cold open")]
+    #expect(PodcastChapters.withOpeningIntro(atStart) == atStart)
+    let close = [PodcastChapter(start: 0.5, title: "Cold open")]
+    #expect(PodcastChapters.withOpeningIntro(close) == close)
+    let late = [
+        PodcastChapter(start: 12.2, title: "Talk"),
+        PodcastChapter(start: 40, title: "Wrap"),
+    ]
+    let opened = PodcastChapters.withOpeningIntro(late)
+    #expect(opened.map(\.title) == ["Intro", "Talk", "Wrap"])
+    #expect(opened.map(\.start) == [0, 12.2, 40])
+    #expect(PodcastChapters.withOpeningIntro(opened) == opened)
+
+    let list = PodcastTimestampList.make(chapters: opened, episodeDuration: 90)
+    #expect(list.addedOpening == false)
+    #expect(list.text.hasPrefix("00:00 Intro\n"))
+    #expect(list.note.isEmpty)
+
+    let tag = PodcastID3.tag(chapters: opened, duration: 90)
+    let read = try readID3Chapters(tag)
+    #expect(read.chapters.map(\.title) == ["Intro", "Talk", "Wrap"])
+    #expect(read.chapters.map(\.start) == [0, 12.2, 40])
+    #expect(read.chapters.map(\.end) == [12.2, 40, 90])
+
+    let scratch = try Scratch()
+    defer { scratch.cleanup() }
+    let audio = scratch.root.appendingPathComponent("show.mp3")
+    try Data([0xFF, 0xFB, 0x90, 0x64]).write(to: audio)
+    let sidecar = PodcastChapters.sidecarURL(forAudio: audio)
+    try Data("00:00:12 Talk\n00:00:40 Wrap\n".utf8).write(to: sidecar)
+    try PodcastChapters.write(
+        late,
+        map: PodcastChapterAlignment(offset: 0, scale: 1),
+        outputDuration: 90,
+        beside: audio,
+        originalSidecar: sidecar
+    )
+    let written = try String(contentsOf: sidecar, encoding: .utf8)
+    #expect(written.hasPrefix("00:00:00 Intro\n"))
+    #expect(written.contains("Talk"))
+    #expect(written.contains("Wrap"))
+    #expect(written.contains("End") == false)
+
+    try Data("00:00:00 Cold open\n".utf8).write(to: sidecar)
+    try PodcastChapters.write(
+        atStart,
+        map: PodcastChapterAlignment(offset: 0, scale: 1),
+        outputDuration: 90,
+        beside: audio,
+        originalSidecar: sidecar
+    )
+    #expect(try String(contentsOf: sidecar, encoding: .utf8) == "00:00:00 Cold open\n")
+}
+
 private struct ReadID3 {
     var version: Int
     var topLevelOrdered: Bool

@@ -117,16 +117,16 @@ struct ContentView: View {
                 .frame(minWidth: 280)
         }
         .confirmationDialog(
-            "Remove this empty strip?",
+            removeDialogTitle,
             isPresented: $confirmRemoveStrip,
             titleVisibility: .visible
         ) {
-            Button("Remove Track", role: .destructive) {
+            Button(removeDialogConfirm, role: .destructive) {
                 session.removeEmptyStrip(session.selectedChannelID)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Only empty speaker strips can be removed. This cannot be undone.")
+            Text(removeDialogMessage)
         }
         .sheet(isPresented: $showAbout) {
             AboutSupportPanel(
@@ -374,7 +374,9 @@ struct ContentView: View {
                 identifier: "decks.removeTrack",
                 label: ProducerTrackControls.removeTrackTitle,
                 enabled: !session.isRecording && session.canRemoveStrip(session.selectedChannelID),
-                help: "Removes the selected empty speaker strip. Strips that already have audio stay."
+                help: session.allowRemovingTracksWithAudio
+                    ? "Removes the selected track. Asks first if it has audio."
+                    : "Removes the selected empty speaker strip. Strips that already have audio stay."
             ) { removeStripFromMenu(Notification(name: .fixerMixerRemoveStrip)) }
             Button { toggleReorderFromMenu(Notification(name: .fixerMixerToggleReorder)) } label: {
                 Text("REORDER")
@@ -678,6 +680,8 @@ struct ContentView: View {
                 hardwareInputChannels: session.selectedInputChannelCount,
                 isRecording: session.isRecording,
                 canRemove: session.canRemoveStrip(id),
+                stripHasAudio: session.stripHasAudio(id),
+                allowsLoadedRemoval: session.allowRemovingTracksWithAudio,
                 onSelect: { focusChannel(id) },
                 onChange: {
                     session.syncParamsToEngine()
@@ -697,8 +701,12 @@ struct ContentView: View {
                 faderDb: $session.stereos[index].faderDb,
                 autoDriven: false,
                 isSelected: session.selectedChannelID == id,
+                canRemove: session.canRemoveStrip(id),
+                stripHasAudio: session.stripHasAudio(id),
+                allowsLoadedRemoval: session.allowRemovingTracksWithAudio,
                 onSelect: { focusChannel(id) },
                 onChange: { session.syncParamsToEngine() },
+                onRemove: { session.removeEmptyStrip(id) },
                 stripReorderable: reorderStrips,
                 isReorderDropTarget: reorderDropID == id,
                 onReorderDrop: { session.moveChannel(fromID: $0, toID: id) },
@@ -708,6 +716,28 @@ struct ContentView: View {
                 alignedFaderSectionHeight: voiceFaderSectionHeight
             )
         }
+    }
+
+    private var removeDialogHasAudio: Bool {
+        session.allowRemovingTracksWithAudio && session.stripHasAudio(session.selectedChannelID)
+    }
+
+    private var removeDialogTitle: String {
+        if removeDialogHasAudio {
+            return "Delete \(session.selectedChannelName)?"
+        }
+        return "Remove this empty strip?"
+    }
+
+    private var removeDialogConfirm: String {
+        removeDialogHasAudio ? "Delete Track" : "Remove Track"
+    }
+
+    private var removeDialogMessage: String {
+        if removeDialogHasAudio {
+            return "This removes the track and its audio from TheDecks. Your original file stays in TheValet. This can't be undone."
+        }
+        return "Only empty speaker strips can be removed. This cannot be undone."
     }
 
     private func focusChannel(_ id: Int) {

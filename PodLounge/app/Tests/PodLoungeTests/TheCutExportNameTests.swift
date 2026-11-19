@@ -6,14 +6,16 @@ import Testing
     var draft = TrimmerExportNaming.opened(episode: "Show")
     #expect(draft.scope == .fullMix)
     #expect(draft.customized == false)
-    #expect(draft.field == "Show \u{2013} Cut")
+    #expect(draft.field == "Show \u{2013} Cut.wav")
+    #expect(draft.choices.container == .wav)
+    #expect(draft.choices.bitDepth == .int24)
 
     draft = TrimmerExportNaming.choosing(.episodeMix, in: draft, episode: "Show")
-    #expect(draft.field == "Show \u{2013} Episode Mix Cut")
+    #expect(draft.field == "Show \u{2013} Episode Mix Cut.wav")
     draft = TrimmerExportNaming.choosing(.introsOutrosAds, in: draft, episode: "Show")
-    #expect(draft.field == "Show \u{2013} Intros · Outros · Ads Cut")
+    #expect(draft.field == "Show \u{2013} Intros · Outros · Ads Cut.wav")
     draft = TrimmerExportNaming.choosing(.musicBeds, in: draft, episode: "Show")
-    #expect(draft.field == "Show \u{2013} Music Beds Cut")
+    #expect(draft.field == "Show \u{2013} Music Beds Cut.wav")
     #expect(draft.customized == false)
 
     draft = TrimmerExportNaming.editing("  My Mix  ", in: draft, episode: "Show")
@@ -30,25 +32,25 @@ import Testing
     let typedDefault = TrimmerExportNaming.editing(opened.field, in: opened, episode: "Show")
     #expect(typedDefault.customized == false)
     let stillFollowing = TrimmerExportNaming.choosing(.episodeMix, in: typedDefault, episode: "Show")
-    #expect(stillFollowing.field == "Show \u{2013} Episode Mix Cut")
+    #expect(stillFollowing.field == "Show \u{2013} Episode Mix Cut.wav")
 }
 
 @Test func emptyExportNameFallsBackToTheChoiceDefault() {
     #expect(
         TrimmerExportNaming.resolvedDisplayName(field: "", episode: "Show", scope: .fullMix)
-            == "Show \u{2013} Cut"
+            == "Show \u{2013} Cut.wav"
     )
     #expect(
         TrimmerExportNaming.resolvedDisplayName(field: "   ", episode: "Show", scope: .episodeMix)
-            == "Show \u{2013} Episode Mix Cut"
+            == "Show \u{2013} Episode Mix Cut.wav"
     )
     #expect(
         TrimmerExportNaming.resolvedDisplayName(field: " \n\t ", episode: "Show", scope: .introsOutrosAds)
-            == "Show \u{2013} Intros · Outros · Ads Cut"
+            == "Show \u{2013} Intros · Outros · Ads Cut.wav"
     )
     #expect(
         TrimmerExportNaming.resolvedDisplayName(field: "", episode: "  ", scope: .musicBeds)
-            == "Episode \u{2013} Music Beds Cut"
+            == "Episode \u{2013} Music Beds Cut.wav"
     )
 
     var draft = TrimmerExportNaming.opened(episode: "Show")
@@ -56,11 +58,51 @@ import Testing
     draft = TrimmerExportNaming.editing("   ", in: draft, episode: "Show")
     #expect(draft.customized == false)
     draft = TrimmerExportNaming.choosing(.musicBeds, in: draft, episode: "Show")
-    #expect(draft.field == "Show \u{2013} Music Beds Cut")
+    #expect(draft.field == "Show \u{2013} Music Beds Cut.wav")
     #expect(
         TrimmerExportNaming.resolvedDisplayName(field: draft.field, episode: "Show", scope: draft.scope)
-            == "Show \u{2013} Music Beds Cut"
+            == "Show \u{2013} Music Beds Cut.wav"
     )
+}
+
+@Test func changingTheFileTypeKeepsATypedNameAndSwapsOnlyTheExtension() {
+    var draft = TrimmerExportNaming.opened(episode: "Show")
+    draft = TrimmerExportNaming.editing("  My Mix  ", in: draft, episode: "Show")
+    draft = TrimmerExportNaming.choosingContainer(.mp3, in: draft, episode: "Show")
+    #expect(draft.customized)
+    #expect(draft.field == "  My Mix.mp3  ")
+    #expect(draft.choices.container == .mp3)
+    draft = TrimmerExportNaming.choosing(.episodeMix, in: draft, episode: "Show")
+    #expect(draft.field == "  My Mix.mp3  ")
+    draft = TrimmerExportNaming.choosingContainer(.aiff, in: draft, episode: "Show")
+    #expect(draft.field == "  My Mix.aiff  ")
+
+    var fresh = TrimmerExportNaming.opened(episode: "Show")
+    fresh = TrimmerExportNaming.choosingContainer(.m4a, in: fresh, episode: "Show")
+    #expect(fresh.customized == false)
+    #expect(fresh.field == "Show \u{2013} Cut.m4a")
+    fresh = TrimmerExportNaming.choosingBitrate(128, in: fresh)
+    #expect(fresh.choices.mp3BitrateKbps == 128)
+    #expect(fresh.choices.bitrateFollowsWidth == false)
+    fresh = TrimmerExportNaming.choosing(.episodeMix, in: fresh, episode: "Show", mono: true)
+    #expect(fresh.choices.mp3BitrateKbps == 128)
+    #expect(fresh.field == "Show \u{2013} Episode Mix Cut.m4a")
+
+    let monoDefault = TrimmerExportNaming.opened(episode: "Show", mono: true)
+    #expect(monoDefault.choices.mp3BitrateKbps == 128)
+    let stereoDefault = TrimmerExportNaming.opened(episode: "Show")
+    #expect(stereoDefault.choices.mp3BitrateKbps == 192)
+    #expect(TrimmerExportPlan.deliveryRate(renderRate: 44_100, container: .mp3) == 44_100)
+    #expect(TrimmerExportPlan.deliveryRate(renderRate: 96_000, container: .m4a) == 48_000)
+    #expect(TrimmerExportPlan.deliveryRate(renderRate: 96_000, container: .wav) == 96_000)
+    let steered = TrimmerExportPlan.writtenDepth(chosen: .int24, container: .wav, peak: 1.2)
+    #expect(steered.depth == .float32)
+    #expect(steered.steeredToFloat)
+    let quiet = TrimmerExportPlan.writtenDepth(chosen: .int16, container: .aiff, peak: 0.5)
+    #expect(quiet.depth == .int16)
+    #expect(quiet.steeredToFloat == false)
+    let lossy = TrimmerExportPlan.writtenDepth(chosen: .int24, container: .mp3, peak: 1.4)
+    #expect(lossy.depth == .int24)
 }
 
 @Test func exportNameKeepsTheListNameAndNumbersTheFileAndSidecar() throws {

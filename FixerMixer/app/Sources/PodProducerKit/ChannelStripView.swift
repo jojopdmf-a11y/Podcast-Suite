@@ -878,6 +878,8 @@ struct ChannelStripView: View {
     var hardwareInputChannels: Int = 0
     var isRecording: Bool = false
     var canRemove: Bool = false
+    var stripHasAudio: Bool = false
+    var allowsLoadedRemoval: Bool = false
     var onSelect: () -> Void
     var onChange: () -> Void
     var onRemove: (() -> Void)? = nil
@@ -901,6 +903,7 @@ struct ChannelStripView: View {
     @State private var confirmRemove = false
     @FocusState private var nameFieldFocused: Bool
 
+    private var loadedRemoval: Bool { allowsLoadedRemoval && stripHasAudio }
     private var fxDimmed: Bool { channel.dspBypass }
     private var canReorderDSP: Bool { !channel.isStereo && channel.dspOrder.count > 1 && !stripReorderable }
     /// Speaker and stereo strips. Double-click the name. The session stores it.
@@ -1081,17 +1084,21 @@ struct ChannelStripView: View {
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .stroke(MixerTheme.danger.opacity(0.55), lineWidth: 1)
                     )
-                    .help("This strip has no audio. Remove it if you added it by mistake.")
+                    .help(loadedRemoval
+                        ? "Removes this track. Asks first."
+                        : "This strip has no audio. Remove it if you added it by mistake.")
                     .disabled(isRecording)
                     .confirmationDialog(
-                        "Remove \(channel.name)?",
+                        loadedRemoval ? "Delete \(channel.name)?" : "Remove \(channel.name)?",
                         isPresented: $confirmRemove,
                         titleVisibility: .visible
                     ) {
-                        Button("Remove Track", role: .destructive) { onRemove?() }
+                        Button(loadedRemoval ? "Delete Track" : "Remove Track", role: .destructive) { onRemove?() }
                         Button("Cancel", role: .cancel) {}
                     } message: {
-                        Text("Only empty speaker strips can be removed. This cannot be undone.")
+                        Text(loadedRemoval
+                            ? "This removes the track and its audio from TheDecks. Your original file stays in TheValet. This can't be undone."
+                            : "Only empty speaker strips can be removed. This cannot be undone.")
                     }
             }
         }

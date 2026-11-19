@@ -228,7 +228,9 @@ struct LimiterWorkspaceView: View {
 
     private func saveLeveledFile(url: URL, displayName: String) throws {
         let sourceURL = selectedSourceURL()
-        let chapters = sourceURL.flatMap { PodcastChapters.load(beside: $0) } ?? []
+        let chapters = PodcastChapters.withOpeningIntro(
+            sourceURL.flatMap { PodcastChapters.load(beside: $0) } ?? []
+        )
         if url.pathExtension.lowercased() == "mp3", chapters.isEmpty == false {
             let sourceDuration = sourceURL.flatMap(AudioFileClock.duration(of:)) ?? 0
             let outputDuration = AudioFileClock.duration(of: url) ?? sourceDuration
@@ -274,7 +276,7 @@ struct LimiterWorkspaceView: View {
             chapterDuration = 0
             return
         }
-        let chapters = PodcastChapters.load(beside: url) ?? []
+        let chapters = PodcastChapters.withOpeningIntro(PodcastChapters.load(beside: url) ?? [])
         chapterSidecar = chapters
         chapterDuration = AudioFileClock.duration(of: url) ?? chapters.map(\.start).max() ?? 0
     }

@@ -1,4 +1,5 @@
 import AppKit
+import LilLevelerKit
 import PodLoungeCore
 import SwiftUI
 
@@ -230,7 +231,12 @@ struct TrimmerWorkspaceView: View {
     private var exportControl: some View {
         let blocked = session.package == nil || shown.clips.isEmpty || session.trimmerExporting
         return Button("Export") {
-            exportDraft = TrimmerExportNaming.opened(episode: session.projectName)
+            exportDraft = TrimmerExportNaming.opened(
+                episode: session.projectName,
+                choices: session.trimmerExportChoices,
+                mono: exportIsMono(.fullMix),
+                mp3Available: LevelerContainer.mp3.isWritable
+            )
             exportSheetConfirming = false
             showExportSheet = true
         }
@@ -251,6 +257,73 @@ struct TrimmerWorkspaceView: View {
                 }
             }
             .accessibilityIdentifier("thecut.export.choices")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Format")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoungeTheme.textDim)
+                HStack(spacing: 6) {
+                    ForEach(exportContainers, id: \.self) { container in
+                        exportOption(
+                            container.title,
+                            selected: exportDraft.choices.container == container,
+                            identifier: "thecut.export.format.\(container.rawValue)"
+                        ) {
+                            exportDraft = TrimmerExportNaming.choosingContainer(
+                                container,
+                                in: exportDraft,
+                                episode: session.projectName
+                            )
+                            session.trimmerExportChoices = exportDraft.choices
+                        }
+                    }
+                }
+            }
+            .accessibilityIdentifier("thecut.export.formats")
+            if exportDraft.choices.container.usesBitDepth {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bit depth")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.textDim)
+                    HStack(spacing: 6) {
+                        ForEach(TrimmerExportDepth.allCases, id: \.self) { depth in
+                            exportOption(
+                                depth.title,
+                                selected: exportDraft.choices.bitDepth == depth,
+                                identifier: "thecut.export.depth.\(depth.rawValue)"
+                            ) {
+                                exportDraft = TrimmerExportNaming.choosingDepth(depth, in: exportDraft)
+                                session.trimmerExportChoices = exportDraft.choices
+                            }
+                        }
+                    }
+                }
+            }
+            if exportDraft.choices.container.usesBitrate {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bitrate")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.textDim)
+                    HStack(spacing: 6) {
+                        ForEach(TrimmerExportChoices.mp3Bitrates, id: \.self) { bitrate in
+                            exportOption(
+                                "\(bitrate)",
+                                selected: exportDraft.choices.mp3BitrateKbps == bitrate,
+                                identifier: "thecut.export.bitrate.\(bitrate)"
+                            ) {
+                                exportDraft = TrimmerExportNaming.choosingBitrate(bitrate, in: exportDraft)
+                                session.trimmerExportChoices = exportDraft.choices
+                            }
+                        }
+                    }
+                }
+            }
+            if exportDraft.choices.container.isLossy {
+                Text("MP3 and M4A are lossy. Pick WAV if this is going to TheRoof for leveling.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LoungeTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("thecut.export.lossy")
+            }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Name")
                     .font(.system(size: 12, weight: .semibold))
@@ -280,7 +353,7 @@ struct TrimmerWorkspaceView: View {
             }
         }
         .padding(20)
-        .frame(width: 440)
+        .frame(width: 480)
         .background(LoungeTheme.background)
         .preferredColorScheme(.dark)
         .onExitCommand { showExportSheet = false }
@@ -300,7 +373,13 @@ struct TrimmerWorkspaceView: View {
         let selected = exportDraft.scope == scope
         let enabled = exportChoiceDisabled(scope) == false
         return Button {
-            exportDraft = TrimmerExportNaming.choosing(scope, in: exportDraft, episode: session.projectName)
+            exportDraft = TrimmerExportNaming.choosing(
+                scope,
+                in: exportDraft,
+                episode: session.projectName,
+                mono: exportIsMono(scope)
+            )
+            session.trimmerExportChoices = exportDraft.choices
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
@@ -325,12 +404,50 @@ struct TrimmerWorkspaceView: View {
         exportSheetConfirming = true
         let episode = session.projectName
         showExportSheet = false
+        session.trimmerExportChoices = draft.choices
         let name = TrimmerExportNaming.resolvedDisplayName(
             field: draft.field,
             episode: episode,
-            scope: draft.scope
+            scope: draft.scope,
+            container: draft.choices.container
         )
-        exportCut(draft.scope, displayName: name)
+        exportCut(draft.scope, displayName: name, choices: draft.choices)
+    }
+
+    private var exportContainers: [TrimmerExportContainer] {
+        TrimmerExportContainer.allCases.filter { container in
+            if container == .mp3 { return LevelerContainer.mp3.isWritable }
+            return true
+        }
+    }
+
+    private func exportIsMono(_ scope: TrimmerExportScope) -> Bool {
+        TrimmerExportPlan.channelCount(scope: scope, document: shown, channelCounts: channelCounts) == 1
+    }
+
+    private func exportOption(
+        _ title: String,
+        selected: Bool,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .foregroundStyle(selected ? LoungeTheme.background : LoungeTheme.text)
+                .background(
+                    RoundedRectangle(cornerRadius: 8).fill(selected ? LoungeTheme.cyan : LoungeTheme.field)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8).stroke(LoungeTheme.cyan.opacity(selected ? 0 : 0.35), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     private var board: some View {
@@ -1148,7 +1265,7 @@ struct TrimmerWorkspaceView: View {
         editor.apply(label: label, next)
     }
 
-    private func exportCut(_ scope: TrimmerExportScope, displayName: String) {
+    private func exportCut(_ scope: TrimmerExportScope, displayName: String, choices: TrimmerExportChoices) {
         guard !session.fixerRecording else {
             transport.message = "TheDecks is recording. Stop the take before exporting."
             return
@@ -1187,7 +1304,10 @@ struct TrimmerWorkspaceView: View {
                 urls: urls,
                 names: names,
                 scope: scope,
-                channelCounts: counts
+                channelCounts: counts,
+                container: choices.container,
+                bitDepth: choices.bitDepth,
+                mp3BitrateKbps: choices.mp3BitrateKbps
             ) { box.set($0) }
         }
         let poll = Task { @MainActor in
@@ -1221,14 +1341,19 @@ struct TrimmerWorkspaceView: View {
                let package = session.package,
                let audioURL = try? package.resolvedURL(for: asset) {
                 let chaptersURL = PodcastChapters.sidecarURL(forAudio: audioURL)
-                let text = TrimmerChapters.text(markers: editor.document.markers)
+                let chapters = PodcastChapters.withOpeningIntro(
+                    editor.document.markers.map { PodcastChapter(start: $0.time, title: $0.title) }
+                )
+                let text = PodcastChapters.sidecarText(chapters)
                 try? Data(text.utf8).write(to: chaptersURL, options: .atomic)
             }
             try? FileManager.default.removeItem(at: outcome.fileURL)
             session.trimmerExporting = false
             exportProgress = nil
             exportNotice = "Saved to TheValet: \(asset.displayName)"
-            if outcome.peak > 1 {
+            if outcome.clipped {
+                session.alertMessage = "This cut peaks at \(TrimmerGain.peakDecibels(outcome.peak)), above 0 dB. MP3 and M4A clip that. Pick WAV if you need the peaks."
+            } else if outcome.wroteFloat, outcome.peak > 1 {
                 session.alertMessage = "This cut peaks at \(TrimmerGain.peakDecibels(outcome.peak)), above 0 dB. It was saved as a 32-bit float file so nothing was clipped. TheRoof sets the final level."
             }
             session.selectedAssetID = asset.id

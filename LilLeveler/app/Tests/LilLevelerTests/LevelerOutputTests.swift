@@ -82,6 +82,38 @@ private func wavPayload(_ url: URL) throws -> Data {
     return Data()
 }
 
+@Test func publicExportKeepsAMonoFileInEveryContainer() throws {
+    let folder = try scratchFolder()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let store = try makeStore(rate: 48_000, frames: 24_000, channels: 1) { frame, _ in
+        Float(sin(2 * Double.pi * 440 * Double(frame) / 48_000) * 0.2)
+    }
+    let source = folder.appendingPathComponent("mono.wav")
+    try LevelerOutputWriter.write(
+        store: store,
+        to: source,
+        settings: LevelerOutputSettings(container: .wav, bitDepth: .float32, rateMode: .explicit(48_000))
+    )
+    let containers: [LevelerContainer] = LevelerContainer.mp3.isWritable
+        ? [.wav, .aiff, .m4a, .mp3]
+        : [.wav, .aiff, .m4a]
+    for container in containers {
+        let url = folder.appendingPathComponent("out.\(container.fileExtension)")
+        try LevelerFileExport.write(
+            pcmWAV: source,
+            to: url,
+            settings: LevelerOutputSettings(
+                container: container,
+                bitDepth: .int24,
+                rateMode: .explicit(48_000),
+                mp3BitrateKbps: 128
+            )
+        )
+        let file = try AVAudioFile(forReading: url)
+        #expect(file.fileFormat.channelCount == 1)
+    }
+}
+
 @Test func outputFilesMatchTypeDepthAndRate() throws {
     let folder = try scratchFolder()
     defer { try? FileManager.default.removeItem(at: folder) }

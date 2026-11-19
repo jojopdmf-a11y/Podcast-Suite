@@ -1,4 +1,5 @@
 import Foundation
+import LilLevelerKit
 import PodLoungeCore
 
 enum TrimmerExportError: LocalizedError {
@@ -27,6 +28,7 @@ enum TrimmerExporter {
         var peak: Float
         var sampleRate: Double
         var wroteFloat: Bool
+        var clipped: Bool
     }
 
     final class ProgressBox: @unchecked Sendable {
@@ -52,6 +54,9 @@ enum TrimmerExporter {
         names: [String: String],
         scope: TrimmerExportScope = .fullMix,
         channelCounts: [String: Int] = [:],
+        container: TrimmerExportContainer = .wav,
+        bitDepth: TrimmerExportDepth = .int24,
+        mp3BitrateKbps: Int = 192,
         progress: @escaping @Sendable (Double) -> Void
     ) throws -> Outcome {
         let clips: [TrimmerClip]
@@ -118,18 +123,42 @@ enum TrimmerExporter {
             throw TrimmerExportError.failed("the mix file is empty")
         }
 
-        let wroteFloat = peak > 1
-        let staged = folder.appendingPathComponent(wroteFloat ? "mix-float-copy.wav" : "mix-24.wav")
-        if wroteFloat {
-            try FileManager.default.copyItem(at: floatURL, to: staged)
-        } else {
-            try TrimmerWAV.rewrite(from: floatURL, to: staged, depth: .int24)
+        let written = TrimmerExportPlan.writtenDepth(chosen: bitDepth, container: container, peak: peak)
+        let rate = TrimmerExportPlan.deliveryRate(renderRate: sampleRate, container: container)
+        let settings = LevelerOutputSettings(
+            container: LevelerContainer(rawValue: container.rawValue) ?? .wav,
+            bitDepth: levelerDepth(written.depth),
+            rateMode: .explicit(rate),
+            mp3BitrateKbps: mp3BitrateKbps
+        )
+        let staged = folder.appendingPathComponent("mix.\(container.fileExtension)")
+        do {
+            try LevelerFileExport.write(pcmWAV: floatURL, to: staged, settings: settings) { fraction in
+                progress(0.90 + 0.10 * fraction)
+            }
+        } catch {
+            throw TrimmerExportError.failed(error.localizedDescription)
         }
         progress(1)
         let stable = FileManager.default.temporaryDirectory
-            .appendingPathComponent("thecut-export-\(UUID().uuidString).wav")
+            .appendingPathComponent("thecut-export-\(UUID().uuidString).\(container.fileExtension)")
         try FileManager.default.copyItem(at: staged, to: stable)
-        return Outcome(fileURL: stable, peak: peak, sampleRate: sampleRate, wroteFloat: wroteFloat)
+        let lossy = container.isLossy
+        return Outcome(
+            fileURL: stable,
+            peak: peak,
+            sampleRate: rate,
+            wroteFloat: lossy == false && written.depth == .float32 && peak > 1,
+            clipped: lossy && peak > 1
+        )
+    }
+
+    private static func levelerDepth(_ depth: TrimmerExportDepth) -> LevelerBitDepth {
+        switch depth {
+        case .int16: .int16
+        case .int24: .int24
+        case .float32: .float32
+        }
     }
 
     private static func renderRate(

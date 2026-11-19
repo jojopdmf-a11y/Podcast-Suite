@@ -1,10 +1,10 @@
 import Foundation
 
-enum LevelerError: LocalizedError {
+public enum LevelerError: LocalizedError, Sendable {
     case loadFailed(String)
     case processFailed(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .loadFailed(let m), .processFailed(let m): return m
         }
