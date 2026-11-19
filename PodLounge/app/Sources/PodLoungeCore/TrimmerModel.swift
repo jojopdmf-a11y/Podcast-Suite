@@ -38,7 +38,7 @@ public struct TrimmerTrackState: Codable, Equatable, Sendable {
     }
 }
 
-public struct TrimmerClip: Codable, Equatable, Identifiable, Sendable {
+public struct TrimmerClip: Equatable, Identifiable, Sendable {
     public var id: UUID
     public var assetID: String
     public var track: TrimmerTrackID
@@ -49,6 +49,10 @@ public struct TrimmerClip: Codable, Equatable, Identifiable, Sendable {
     public var length: Double
     public var fadeIn: Double
     public var fadeOut: Double
+    /// Bend of the fade-in. 0 is a straight line, up to 1 rises fast, down to -1 rises slow.
+    public var fadeInCurve: Double
+    /// Bend of the fade-out. 0 is a straight line. Positive leaves full level longer, then drops.
+    public var fadeOutCurve: Double
     /// Clip gain. The track fader is separate. 0 is unity.
     public var gainDB: Double
     /// File length when the clip was placed, so a trim can stop at the file's end.
@@ -63,6 +67,8 @@ public struct TrimmerClip: Codable, Equatable, Identifiable, Sendable {
         length: Double,
         fadeIn: Double = 0,
         fadeOut: Double = 0,
+        fadeInCurve: Double = 0,
+        fadeOutCurve: Double = 0,
         gainDB: Double = 0,
         sourceDuration: Double? = nil
     ) {
@@ -74,6 +80,8 @@ public struct TrimmerClip: Codable, Equatable, Identifiable, Sendable {
         self.length = length
         self.fadeIn = fadeIn
         self.fadeOut = fadeOut
+        self.fadeInCurve = fadeInCurve
+        self.fadeOutCurve = fadeOutCurve
         self.gainDB = gainDB
         self.sourceDuration = sourceDuration
     }
@@ -82,6 +90,56 @@ public struct TrimmerClip: Codable, Equatable, Identifiable, Sendable {
 
     public func contains(_ time: Double, margin: Double = 0) -> Bool {
         time >= start + margin && time < end - margin
+    }
+}
+
+extension TrimmerClip: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case assetID
+        case track
+        case start
+        case inOffset
+        case length
+        case fadeIn
+        case fadeOut
+        case fadeInCurve
+        case fadeOutCurve
+        case gainDB
+        case sourceDuration
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        assetID = try container.decode(String.self, forKey: .assetID)
+        track = try container.decode(TrimmerTrackID.self, forKey: .track)
+        start = try container.decode(Double.self, forKey: .start)
+        inOffset = try container.decodeIfPresent(Double.self, forKey: .inOffset) ?? 0
+        length = try container.decode(Double.self, forKey: .length)
+        fadeIn = try container.decodeIfPresent(Double.self, forKey: .fadeIn) ?? 0
+        fadeOut = try container.decodeIfPresent(Double.self, forKey: .fadeOut) ?? 0
+        // Older cuts have no bend. A missing field is a straight line.
+        fadeInCurve = try container.decodeIfPresent(Double.self, forKey: .fadeInCurve) ?? 0
+        fadeOutCurve = try container.decodeIfPresent(Double.self, forKey: .fadeOutCurve) ?? 0
+        gainDB = try container.decodeIfPresent(Double.self, forKey: .gainDB) ?? 0
+        sourceDuration = try container.decodeIfPresent(Double.self, forKey: .sourceDuration)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(assetID, forKey: .assetID)
+        try container.encode(track, forKey: .track)
+        try container.encode(start, forKey: .start)
+        try container.encode(inOffset, forKey: .inOffset)
+        try container.encode(length, forKey: .length)
+        try container.encode(fadeIn, forKey: .fadeIn)
+        try container.encode(fadeOut, forKey: .fadeOut)
+        try container.encode(fadeInCurve, forKey: .fadeInCurve)
+        try container.encode(fadeOutCurve, forKey: .fadeOutCurve)
+        try container.encode(gainDB, forKey: .gainDB)
+        try container.encode(sourceDuration, forKey: .sourceDuration)
     }
 }
 
@@ -233,6 +291,8 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
             clip.inOffset = max(0, clip.inOffset)
             clip.fadeIn = min(max(0, clip.fadeIn), clip.length)
             clip.fadeOut = min(max(0, clip.fadeOut), clip.length)
+            clip.fadeInCurve = TrimmerFadeCurve.clamped(clip.fadeInCurve)
+            clip.fadeOutCurve = TrimmerFadeCurve.clamped(clip.fadeOutCurve)
             return clip
         }
         copy.markers = markers.map { marker in
@@ -266,12 +326,14 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
         left.length = leftLength
         left.fadeIn = min(clip.fadeIn, leftLength)
         left.fadeOut = 0
+        left.fadeOutCurve = 0
         var right = clip
         right.id = UUID()
         right.start = time
         right.inOffset = clip.inOffset + leftLength
         right.length = rightLength
         right.fadeIn = 0
+        right.fadeInCurve = 0
         right.fadeOut = min(clip.fadeOut, rightLength)
         var copy = self
         copy.clips[index] = left
@@ -331,7 +393,8 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
     }
 
     /// Keeps fade-in and fade-out from crossing. A fade already stored that way (an older edit) is left alone until the next fade drag.
-    public func settingFade(clipID: UUID, edge: TrimmerFadeEdge, seconds: Double) -> TrimmerDocument {
+    /// `curve` replaces that edge's bend. Leave it nil to keep the bend already stored.
+    public func settingFade(clipID: UUID, edge: TrimmerFadeEdge, seconds: Double, curve: Double? = nil) -> TrimmerDocument {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return self }
         var copy = self
         var clip = copy.clips[index]
@@ -339,10 +402,25 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
         switch edge {
         case .fadeIn:
             clip.fadeIn = min(asked, max(0, clip.length - max(0, clip.fadeOut)))
+            if let curve { clip.fadeInCurve = TrimmerFadeCurve.clamped(curve) }
         case .fadeOut:
             clip.fadeOut = min(asked, max(0, clip.length - max(0, clip.fadeIn)))
+            if let curve { clip.fadeOutCurve = TrimmerFadeCurve.clamped(curve) }
         }
         copy.clips[index] = clip
+        return copy
+    }
+
+    /// Puts the bend back to a straight line and leaves the fade length alone.
+    public func resettingFadeCurve(clipID: UUID, edge: TrimmerFadeEdge) -> TrimmerDocument {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return self }
+        var copy = self
+        switch edge {
+        case .fadeIn:
+            copy.clips[index].fadeInCurve = 0
+        case .fadeOut:
+            copy.clips[index].fadeOutCurve = 0
+        }
         return copy
     }
 
@@ -443,6 +521,7 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
                 var left = clip
                 left.length = range.start - clip.start
                 left.fadeOut = 0
+                left.fadeOutCurve = 0
                 left.fadeIn = min(left.fadeIn, left.length)
                 if left.length >= Self.minimumLength {
                     kept.append(left)
@@ -455,6 +534,7 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
                 right.length = clip.end - range.end
                 right.start = mode == .closeGap ? range.start : range.end
                 right.fadeIn = 0
+                right.fadeInCurve = 0
                 right.fadeOut = min(clip.fadeOut, right.length)
                 if right.length >= Self.minimumLength {
                     kept.append(right)
@@ -634,6 +714,33 @@ public enum TrimmerViewport: Sendable {
             return max(floor, next)
         }
         return min(maximumPixelsPerSecond, max(floor, next))
+    }
+
+    /// Scroll offset that keeps the playhead at the same on-screen position.
+    /// When the playhead is outside the viewport, the middle of what is visible stays put.
+    public static func zoomedScroll(
+        scrollX: Double,
+        viewportWidth: Double,
+        pixelsPerSecond: Double,
+        nextPixelsPerSecond: Double,
+        playhead: Double,
+        contentSpan: Double
+    ) -> Double {
+        let oldPPS = pixelsPerSecond.isFinite ? max(pixelsPerSecond, 0.000_1) : 0.000_1
+        let newPPS = nextPixelsPerSecond.isFinite ? max(nextPixelsPerSecond, 0.000_1) : 0.000_1
+        let view = viewportWidth.isFinite ? max(viewportWidth, 1) : 1
+        let scroll = scrollX.isFinite ? max(0, scrollX) : 0
+        let head = playhead.isFinite ? max(0, playhead) : 0
+        let screen = head * oldPPS - scroll
+        let onScreen = screen >= -0.5 && screen <= view + 0.5
+        let anchorScreen = onScreen ? min(max(0, screen), view) : view / 2
+        let anchorTime = onScreen ? head : (scroll + view / 2) / oldPPS
+        let raw = anchorTime * newPPS - anchorScreen
+        let span = contentSpan.isFinite ? max(0, contentSpan) : 0
+        let contentWidth = max(view, span * newPPS)
+        let maxScroll = max(0, contentWidth - view)
+        guard raw.isFinite else { return 0 }
+        return min(max(0, raw), maxScroll)
     }
 }
 

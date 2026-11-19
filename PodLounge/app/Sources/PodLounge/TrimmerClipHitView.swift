@@ -21,6 +21,7 @@ struct CutClipHitView: NSViewRepresentable {
     var onClick: (CGFloat) -> Void
     var onChanged: (CutHitKind, CGFloat, CGFloat) -> Void
     var onEnded: (CutHitKind, CGFloat, CGFloat) -> Void
+    var onResetCurve: (CutHitKind) -> Void
 
     func makeNSView(context: Context) -> CutClipHitNSView {
         let view = CutClipHitNSView()
@@ -28,6 +29,7 @@ struct CutClipHitView: NSViewRepresentable {
         view.onClick = onClick
         view.onChanged = onChanged
         view.onEnded = onEnded
+        view.onResetCurve = onResetCurve
         view.fadeInBoundary = fadeInBoundary
         view.fadeOutBoundary = fadeOutBoundary
         return view
@@ -38,6 +40,7 @@ struct CutClipHitView: NSViewRepresentable {
         nsView.onClick = onClick
         nsView.onChanged = onChanged
         nsView.onEnded = onEnded
+        nsView.onResetCurve = onResetCurve
         if !nsView.tracking {
             nsView.fadeInBoundary = fadeInBoundary
             nsView.fadeOutBoundary = fadeOutBoundary
@@ -54,11 +57,13 @@ final class CutClipHitNSView: NSView {
     var onClick: (CGFloat) -> Void = { _ in }
     var onChanged: (CutHitKind, CGFloat, CGFloat) -> Void = { _, _, _ in }
     var onEnded: (CutHitKind, CGFloat, CGFloat) -> Void = { _, _, _ in }
+    var onResetCurve: (CutHitKind) -> Void = { _ in }
     var tracking = false
 
     private var down = NSPoint.zero
     private var zone: CutHitKind = .body
     private var pushedCursor = false
+    private var resetClick = false
 
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { false }
@@ -80,6 +85,13 @@ final class CutClipHitNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         down = convert(event.locationInWindow, from: nil)
         zone = zone(at: down)
+        if event.clickCount >= 2, zone == .fadeIn || zone == .fadeOut {
+            resetClick = true
+            tracking = false
+            onResetCurve(zone)
+            return
+        }
+        resetClick = false
         tracking = true
         onDown()
         if zone != .body {
@@ -89,6 +101,7 @@ final class CutClipHitNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if resetClick { return }
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - down.x
         let dy = down.y - point.y
@@ -97,6 +110,11 @@ final class CutClipHitNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if resetClick {
+            resetClick = false
+            tracking = false
+            return
+        }
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - down.x
         let dy = down.y - point.y

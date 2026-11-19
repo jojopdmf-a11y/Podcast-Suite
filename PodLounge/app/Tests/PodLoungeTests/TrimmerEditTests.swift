@@ -168,7 +168,7 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
     #expect(abs(Float(TrimmerGain.fadeIn(0.5)) - expected) < 0.000_1)
 }
 
-@Test func fadeInFollowsEqualPowerCurve() {
+@Test func fadeInDefaultsToAStraightLine() {
     var document = TrimmerDocument.empty
     document.clips = [clip(start: 0, length: 1, fadeIn: 1, sourceDuration: 1)]
     let result = TrimmerRenderer.render(
@@ -177,8 +177,7 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
         sources: ["mix": .constant(frames: 48_000, amplitude: 1, sampleRate: rate)]
     )
     let frame = TrimmerClock.frames(seconds: 0.5, sampleRate: rate)
-    let expected = TrimmerGain.fadeIn(0.5)
-    #expect(abs(sample(result, frame: frame) - expected) < 0.002)
+    #expect(abs(sample(result, frame: frame) - 0.5) < 0.002)
     #expect(abs(sample(result, frame: 0)) < 0.002)
     let nearEnd = TrimmerClock.frames(seconds: 0.999, sampleRate: rate)
     #expect(sample(result, frame: nearEnd) > 0.99)
@@ -407,11 +406,11 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
         sources: ["mix": .constant(frames: 48_000, amplitude: 1, sampleRate: rate)]
     )
     let early = TrimmerClock.frames(seconds: 0.2, sampleRate: rate)
-    #expect(abs(sample(result, frame: early) - TrimmerGain.fadeIn(0.5)) < 0.002)
+    #expect(abs(sample(result, frame: early) - 0.5) < 0.002)
     let middle = TrimmerClock.frames(seconds: 0.5, sampleRate: rate)
     #expect(abs(sample(result, frame: middle) - 1) < 0.002)
     let late = TrimmerClock.frames(seconds: 0.875, sampleRate: rate)
-    #expect(abs(sample(result, frame: late) - TrimmerGain.fadeOut(0.5)) < 0.002)
+    #expect(abs(sample(result, frame: late) - 0.5) < 0.002)
     #expect(abs(sample(result, frame: 0)) < 0.002)
 }
 
@@ -522,4 +521,273 @@ private func sample(_ result: TrimmerRenderResult, frame: Int, channel: Int = 0)
         #expect(file.fileFormat.channelCount == 2)
         #expect(abs(file.fileFormat.sampleRate - rate) < 0.1)
     }
+}
+
+@Test func zoomKeepsThePlayheadAtTheSameScreenPosition() {
+    let scroll = 120.0
+    let view = 800.0
+    let pps = 20.0
+    let playhead = 26.0
+    let span = 3_600.0
+    let oldScreen = playhead * pps - scroll
+    #expect(oldScreen > 0 && oldScreen < view)
+
+    let zoomedIn = pps * TrimmerViewport.zoomFactor
+    let inScroll = TrimmerViewport.zoomedScroll(
+        scrollX: scroll,
+        viewportWidth: view,
+        pixelsPerSecond: pps,
+        nextPixelsPerSecond: zoomedIn,
+        playhead: playhead,
+        contentSpan: span
+    )
+    #expect(abs((playhead * zoomedIn - inScroll) - oldScreen) < 0.01)
+
+    let zoomedOut = pps / TrimmerViewport.zoomFactor
+    let outScroll = TrimmerViewport.zoomedScroll(
+        scrollX: scroll,
+        viewportWidth: view,
+        pixelsPerSecond: pps,
+        nextPixelsPerSecond: zoomedOut,
+        playhead: playhead,
+        contentSpan: span
+    )
+    #expect(abs((playhead * zoomedOut - outScroll) - oldScreen) < 0.01)
+
+    var screen = oldScreen
+    var currentScroll = scroll
+    var current = pps
+    for _ in 0..<4 {
+        let next = current * TrimmerViewport.zoomFactor
+        currentScroll = TrimmerViewport.zoomedScroll(
+            scrollX: currentScroll,
+            viewportWidth: view,
+            pixelsPerSecond: current,
+            nextPixelsPerSecond: next,
+            playhead: playhead,
+            contentSpan: span
+        )
+        let landed = playhead * next - currentScroll
+        #expect(abs(landed - screen) < 0.01)
+        screen = landed
+        current = next
+    }
+}
+
+@Test func zoomOffScreenCentersTheMiddleOfTheView() {
+    let scroll = 40.0
+    let view = 900.0
+    let pps = 10.0
+    let playhead = 800.0
+    let screen = playhead * pps - scroll
+    #expect(screen > view)
+    let next = pps * 2
+    let newScroll = TrimmerViewport.zoomedScroll(
+        scrollX: scroll,
+        viewportWidth: view,
+        pixelsPerSecond: pps,
+        nextPixelsPerSecond: next,
+        playhead: playhead,
+        contentSpan: 3_600
+    )
+    let midTime = (scroll + view / 2) / pps
+    #expect(abs((midTime * next - newScroll) - view / 2) < 0.01)
+
+    let beforeStart = TrimmerViewport.zoomedScroll(
+        scrollX: 0,
+        viewportWidth: view,
+        pixelsPerSecond: pps,
+        nextPixelsPerSecond: next,
+        playhead: 0,
+        contentSpan: 30
+    )
+    #expect(abs(beforeStart) < 0.001)
+}
+
+@Test func fadeCurveGainIsLinearAtZeroAndBendsUpOrDown() {
+    for curve in [-1.0, -0.4, 0, 0.4, 1] {
+        #expect(TrimmerFadeCurve.fadeInGain(0, curve: curve) == 0)
+        #expect(abs(TrimmerFadeCurve.fadeInGain(1, curve: curve) - 1) < 0.000_1)
+        #expect(TrimmerFadeCurve.fadeOutGain(0, curve: curve) == 1)
+        #expect(TrimmerFadeCurve.fadeOutGain(1, curve: curve) == 0)
+        var previous: Float = -0.01
+        for step in 0...24 {
+            let gain = TrimmerFadeCurve.fadeInGain(Double(step) / 24, curve: curve)
+            #expect(gain + 0.000_01 >= previous)
+            previous = gain
+        }
+    }
+    let linear = TrimmerFadeCurve.fadeInGain(0.25, curve: 0)
+    #expect(abs(linear - 0.25) < 0.000_1)
+    let fast = TrimmerFadeCurve.fadeInGain(0.25, curve: 1)
+    let slow = TrimmerFadeCurve.fadeInGain(0.25, curve: -1)
+    #expect(fast > linear)
+    #expect(slow < linear)
+    #expect(abs(TrimmerFadeCurve.fadeOutGain(0.25, curve: 1) - TrimmerFadeCurve.fadeInGain(0.75, curve: 1)) < 0.000_1)
+    #expect(TrimmerFadeCurve.clamped(4) == 1)
+    #expect(TrimmerFadeCurve.clamped(-3) == -1)
+    #expect(TrimmerFadeCurve.bent(0, upPoints: TrimmerFadeCurve.pointsPerFullBend) == 1)
+    #expect(TrimmerFadeCurve.bent(0, upPoints: -TrimmerFadeCurve.pointsPerFullBend) == -1)
+}
+
+@Test func fadeCurveRoundTripsAndOldFilesStayLinear() throws {
+    var document = TrimmerDocument.empty
+    var episode = clip(start: 0, length: 2, fadeIn: 0.4, fadeOut: 0.3, sourceDuration: 2)
+    episode.fadeInCurve = 0.55
+    episode.fadeOutCurve = -0.4
+    document.clips = [episode]
+    let loaded = try TrimmerDocument.decode(try document.encoded())
+    #expect(abs(loaded.clips[0].fadeInCurve - 0.55) < 0.000_1)
+    #expect(abs(loaded.clips[0].fadeOutCurve - (-0.4)) < 0.000_1)
+    #expect(abs(loaded.clips[0].fadeIn - 0.4) < 0.000_1)
+    let text = String(decoding: try document.encoded(), as: UTF8.self)
+    #expect(text.contains("fadeInCurve"))
+
+    let id = UUID()
+    let old = """
+    {
+      "clips" : [
+        {
+          "assetID" : "mix",
+          "fadeIn" : 0.4,
+          "fadeOut" : 0.25,
+          "gainDB" : 0,
+          "id" : "\(id.uuidString)",
+          "inOffset" : 0,
+          "length" : 1,
+          "sourceDuration" : 1,
+          "start" : 0,
+          "track" : "episodeMix"
+        }
+      ],
+      "formatVersion" : 1,
+      "markers" : [],
+      "tracks" : []
+    }
+    """
+    let legacy = try TrimmerDocument.decode(Data(old.utf8))
+    #expect(abs(legacy.clips[0].fadeIn - 0.4) < 0.000_1)
+    #expect(abs(legacy.clips[0].fadeOut - 0.25) < 0.000_1)
+    #expect(legacy.clips[0].fadeInCurve == 0)
+    #expect(legacy.clips[0].fadeOutCurve == 0)
+
+    let clamped = document.settingFade(clipID: episode.id, edge: .fadeIn, seconds: 0.4, curve: 8)
+    #expect((clamped.clip(episode.id)?.fadeInCurve ?? 0) == 1)
+    let reset = clamped.resettingFadeCurve(clipID: episode.id, edge: .fadeIn)
+    #expect((reset.clip(episode.id)?.fadeInCurve ?? 1) == 0)
+    #expect(abs((reset.clip(episode.id)?.fadeIn ?? 0) - 0.4) < 0.000_1)
+}
+
+@Test @MainActor func fadeCurveUndoRestoresTheBend() {
+    var episode = clip(start: 0, length: 2, fadeIn: 0.2, sourceDuration: 2)
+    let editor = TrimmerEditor()
+    editor.edit("Place") { $0.clips = [episode] }
+    editor.edit("Fade") { document in
+        document = document.settingFade(clipID: episode.id, edge: .fadeIn, seconds: 0.5, curve: 0.7)
+    }
+    #expect(abs((editor.document.clip(episode.id)?.fadeInCurve ?? 0) - 0.7) < 0.000_1)
+    #expect(abs((editor.document.clip(episode.id)?.fadeIn ?? 0) - 0.5) < 0.000_1)
+    editor.undoManager.undo()
+    #expect((editor.document.clip(episode.id)?.fadeInCurve ?? 1) == 0)
+    #expect(abs((editor.document.clip(episode.id)?.fadeIn ?? 0) - 0.2) < 0.000_1)
+    editor.undoManager.redo()
+    #expect(abs((editor.document.clip(episode.id)?.fadeInCurve ?? 0) - 0.7) < 0.000_1)
+    editor.edit("Straighten") { document in
+        document = document.resettingFadeCurve(clipID: episode.id, edge: .fadeIn)
+    }
+    #expect((editor.document.clip(episode.id)?.fadeInCurve ?? 1) == 0)
+    #expect(abs((editor.document.clip(episode.id)?.fadeIn ?? 0) - 0.5) < 0.000_1)
+}
+
+@Test func renderAppliesTheFadeCurveAndCrossfadesStayEqualPower() {
+    var fast = TrimmerDocument.empty
+    var rising = clip(start: 0, length: 1, fadeIn: 1, sourceDuration: 1)
+    rising.fadeInCurve = 1
+    fast.clips = [rising]
+    let fastMix = TrimmerRenderer.render(
+        document: fast,
+        sampleRate: rate,
+        sources: ["mix": .constant(frames: 48_000, amplitude: 1, sampleRate: rate)]
+    )
+    var slow = fast
+    slow.clips[0].fadeInCurve = -1
+    let slowMix = TrimmerRenderer.render(
+        document: slow,
+        sampleRate: rate,
+        sources: ["mix": .constant(frames: 48_000, amplitude: 1, sampleRate: rate)]
+    )
+    let frame = TrimmerClock.frames(seconds: 0.25, sampleRate: rate)
+    let fastGain = sample(fastMix, frame: frame)
+    let slowGain = sample(slowMix, frame: frame)
+    #expect(abs(fastGain - TrimmerFadeCurve.fadeInGain(0.25, curve: 1)) < 0.01)
+    #expect(abs(slowGain - TrimmerFadeCurve.fadeInGain(0.25, curve: -1)) < 0.01)
+    #expect(fastGain > 0.25)
+    #expect(slowGain < 0.25)
+    #expect(abs(sample(fastMix, frame: 0)) < 0.002)
+    let nearEnd = TrimmerClock.frames(seconds: 0.999, sampleRate: rate)
+    #expect(sample(fastMix, frame: nearEnd) > 0.99)
+
+    var overlap = TrimmerDocument.empty
+    var first = clip(asset: "a", start: 0, length: 1, sourceDuration: 1)
+    var second = clip(asset: "b", start: 0.5, length: 1, sourceDuration: 1)
+    first.fadeOutCurve = 1
+    second.fadeInCurve = -1
+    overlap.clips = [first, second]
+    let mixed = TrimmerRenderer.render(
+        document: overlap,
+        sampleRate: rate,
+        sources: [
+            "a": .constant(frames: 48_000, amplitude: 1, sampleRate: rate),
+            "b": .constant(frames: 48_000, amplitude: 0, sampleRate: rate),
+        ]
+    )
+    let midpoint = TrimmerClock.frames(seconds: 0.75, sampleRate: rate)
+    let expected = TrimmerGain.crossfade(at: 0.5).outgoing
+    #expect(abs(sample(mixed, frame: midpoint) - expected) < 0.002)
+}
+
+@Test func peakLevelOfDetailNeverExceedsOnePairPerPixel() {
+    let total = 48_000 * 3_600
+    var bucket = 128
+    var count = (total + bucket - 1) / bucket
+    var framesPerBucket: [Int] = []
+    var levels: [TrimmerPeakLevel] = []
+    while framesPerBucket.count < 16 {
+        framesPerBucket.append(bucket)
+        levels.append(TrimmerPeakLevel(
+            framesPerBucket: bucket,
+            minima: [Float](repeating: -0.2, count: count),
+            maxima: [Float](repeating: 0.4, count: count)
+        ))
+        if count <= 256 { break }
+        count = (count + 1) / 2
+        bucket *= 2
+    }
+
+    for pixels in [1, 8, 100, 1_400, 4_000] {
+        let choice = TrimmerPeakLOD.choose(framesPerBucket: framesPerBucket, frameCount: total, pixels: pixels)
+        #expect(choice.pairCount(frameCount: total) <= pixels)
+        let pairs = TrimmerPeakLOD.pairs(levels: levels, startFrame: 0, frameCount: total, pixels: pixels)
+        #expect(pairs.count <= pixels)
+        #expect(pairs.count >= 1)
+    }
+
+    let closest = TrimmerPeakLOD.choose(framesPerBucket: [64, 128, 512], frameCount: 10_000, pixels: 100)
+    #expect(closest.levelIndex == 1)
+    #expect(closest.pairCount(frameCount: 10_000) <= 100)
+    // 96 buckets across 10,000 frames is a little more than one pair per pixel, so the next coarser level is used.
+    let notFiner = TrimmerPeakLOD.choose(framesPerBucket: [64, 96, 256], frameCount: 10_000, pixels: 100)
+    #expect(notFiner.levelIndex == 2)
+    #expect(notFiner.pairCount(frameCount: 10_000) <= 100)
+
+    let widened = TrimmerPeakLOD.choose(framesPerBucket: [32], frameCount: 10_000, pixels: 100)
+    #expect(widened.framesPerPair >= 100)
+    #expect(widened.pairCount(frameCount: 10_000) <= 100)
+
+    let clock = ContinuousClock()
+    let elapsed = clock.measure {
+        _ = TrimmerPeakLOD.pairs(levels: levels, startFrame: 1_000_000, frameCount: 400_000, pixels: 1_600)
+        _ = TrimmerPeakLOD.pairs(levels: levels, startFrame: 0, frameCount: total, pixels: 1_400)
+    }
+    #expect(elapsed < .milliseconds(50))
 }

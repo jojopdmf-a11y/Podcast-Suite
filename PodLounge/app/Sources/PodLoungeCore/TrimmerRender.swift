@@ -93,6 +93,42 @@ public enum TrimmerGain {
     }
 }
 
+/// Bend of one fade. 0 is a straight line. Positive is a fast start. Negative is a slow start.
+public enum TrimmerFadeCurve {
+    public static let minimum = -1.0
+    public static let maximum = 1.0
+    /// Dragging this many points up or down runs the bend from straight to either end.
+    public static let pointsPerFullBend = 80.0
+
+    public static func clamped(_ curve: Double) -> Double {
+        guard curve.isFinite else { return 0 }
+        return min(maximum, max(minimum, curve))
+    }
+
+    /// `upPoints` is positive when the pointer moves up.
+    public static func bent(_ curve: Double, upPoints: Double) -> Double {
+        guard upPoints.isFinite else { return clamped(curve) }
+        return clamped(curve + upPoints / pointsPerFullBend)
+    }
+
+    /// Fade-in gain. `t` is 0 at silence and 1 at full level.
+    public static func fadeInGain(_ t: Double, curve: Double) -> Float {
+        let u = min(1, max(0, t.isFinite ? t : 0))
+        if u <= 0 { return 0 }
+        if u >= 1 { return 1 }
+        let amount = clamped(curve)
+        if abs(amount) < 0.000_001 { return Float(u) }
+        let exponent = pow(2, -2 * amount)
+        return Float(pow(u, exponent))
+    }
+
+    /// Fade-out gain. `t` is 0 at full level and 1 at silence. Same bend, mirrored.
+    public static func fadeOutGain(_ t: Double, curve: Double) -> Float {
+        let u = min(1, max(0, t.isFinite ? t : 0))
+        return fadeInGain(1 - u, curve: curve)
+    }
+}
+
 public enum TrimmerEnvelope {
     /// Gain for one clip at `time`, including an equal-power crossfade when it overlaps one other clip on the same track.
     public static func gain(of clip: TrimmerClip, among mates: [TrimmerClip], at time: Double) -> Float {
@@ -120,13 +156,13 @@ public enum TrimmerEnvelope {
         var gain: Float = 1
         if clip.fadeIn > 0 {
             let position = (time - clip.start) / clip.fadeIn
-            if position < 1 { gain *= TrimmerGain.fadeIn(position) }
+            if position < 1 { gain *= TrimmerFadeCurve.fadeInGain(position, curve: clip.fadeInCurve) }
         }
         if clip.fadeOut > 0 {
             let fadeStart = clip.end - clip.fadeOut
             if time >= fadeStart {
                 let position = (time - fadeStart) / clip.fadeOut
-                gain *= TrimmerGain.fadeOut(position)
+                gain *= TrimmerFadeCurve.fadeOutGain(position, curve: clip.fadeOutCurve)
             }
         }
         return gain

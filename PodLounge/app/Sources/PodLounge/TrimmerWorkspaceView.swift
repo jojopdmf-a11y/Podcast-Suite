@@ -24,6 +24,7 @@ struct TrimmerWorkspaceView: View {
     @State private var clipDrag: ClipDragPreview?
     @State private var userAdjustedZoom = false
     @State private var didFitContent = false
+    @State private var scrollBridge = CutScrollBridge()
 
     private static let trackHeaderWidth: CGFloat = 198
 
@@ -45,6 +46,13 @@ struct TrimmerWorkspaceView: View {
             editor.replace(session.trimmerDocument, clearUndo: true)
             session.endTrimmerPlayback = { transport.stop() }
         }
+        .background(
+            CutZoomKeyHost(
+                editingMarker: editingMarkerID != nil,
+                onZoomIn: { zoom(by: TrimmerViewport.zoomFactor) },
+                onZoomOut: { zoom(by: 1 / TrimmerViewport.zoomFactor) }
+            )
+        )
         .onDisappear {
             transport.shutdown()
             session.endTrimmerPlayback = nil
@@ -223,6 +231,7 @@ struct TrimmerWorkspaceView: View {
                         laneHeight: laneHeight
                     )
                     .frame(width: timelineWidth, height: rulerHeight + markerHeight + laneHeight * 3)
+                    .background(CutScrollSpy(bridge: scrollBridge))
                 }
             }
             .onAppear {
@@ -398,13 +407,12 @@ struct TrimmerWorkspaceView: View {
     }
 
     private func timeline(width: CGFloat, rulerHeight: CGFloat, markerHeight: CGFloat, laneHeight: CGFloat) -> some View {
-        let step = tickStep()
-        return ZStack(alignment: .topLeading) {
+        ZStack(alignment: .topLeading) {
             VStack(spacing: 0) {
-                ruler(width: width, height: rulerHeight, step: step)
+                ruler(width: width, height: rulerHeight)
                 markerLane(width: width, height: markerHeight)
                 ForEach(TrimmerTrackID.allCases) { track in
-                    lane(track, width: width, height: laneHeight, step: step, laneHeight: laneHeight)
+                    lane(track, width: width, height: laneHeight, laneHeight: laneHeight)
                 }
             }
             playhead(height: rulerHeight + markerHeight + laneHeight * 3)
@@ -418,22 +426,12 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
-    private func ruler(width: CGFloat, height: CGFloat, step: Double) -> some View {
+    private func ruler(width: CGFloat, height: CGFloat) -> some View {
         ZStack(alignment: .topLeading) {
             LoungeTheme.backgroundRaised
-            ForEach(tickTimes(step: step, through: width), id: \.self) { time in
-                let major = abs(time.truncatingRemainder(dividingBy: step)) < 0.001
-                Rectangle()
-                    .fill(LoungeTheme.textDim.opacity(major ? 0.55 : 0.25))
-                    .frame(width: 1, height: major ? height : 8)
-                    .offset(x: CGFloat(time) * pixelsPerSecond, y: major ? 0 : height - 8)
-                if major {
-                    Text(clock(time, tenths: false))
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(LoungeTheme.textDim)
-                        .offset(x: CGFloat(time) * pixelsPerSecond + 4, y: 3)
-                }
-            }
+            CutRulerMarks(pixelsPerSecond: pixelsPerSecond)
+                .frame(width: width, height: height)
+                .allowsHitTesting(false)
         }
         .frame(width: width, height: height)
         .contentShape(Rectangle())
@@ -518,16 +516,13 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
-    private func lane(_ track: TrimmerTrackID, width: CGFloat, height: CGFloat, step: Double, laneHeight: CGFloat) -> some View {
+    private func lane(_ track: TrimmerTrackID, width: CGFloat, height: CGFloat, laneHeight: CGFloat) -> some View {
         let clips = shown.clips.filter { $0.track == track }.sorted { $0.start < $1.start }
         return ZStack(alignment: .topLeading) {
             Color(red: 0.03, green: 0.055, blue: 0.075)
-            ForEach(tickTimes(step: step, through: width), id: \.self) { time in
-                Rectangle()
-                    .fill(Color.white.opacity(0.04))
-                    .frame(width: 1, height: height)
-                    .offset(x: CGFloat(time) * pixelsPerSecond)
-            }
+            CutLaneGrid(pixelsPerSecond: pixelsPerSecond)
+                .frame(width: width, height: height)
+                .allowsHitTesting(false)
             ForEach(Array(clips.enumerated()), id: \.element.id) { index, clip in
                 if index + 1 < clips.count {
                     let gap = clips[index + 1].start - clip.end
@@ -658,6 +653,12 @@ struct TrimmerWorkspaceView: View {
                 onEnded: { kind, dx, dy in
                     clipDrag = nil
                     finishClipDrag(clip, kind: kind, dx: dx, dy: dy, laneHeight: laneHeight)
+                },
+                onResetCurve: { kind in
+                    guard kind == .fadeIn || kind == .fadeOut else { return }
+                    let edge: TrimmerFadeEdge = kind == .fadeIn ? .fadeIn : .fadeOut
+                    clipDrag = nil
+                    commit("Fade") { $0 = $0.resettingFadeCurve(clipID: clip.id, edge: edge) }
                 }
             )
             .frame(width: width, height: height - 20)
@@ -678,11 +679,21 @@ struct TrimmerWorkspaceView: View {
         return ZStack(alignment: .topLeading) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(color.opacity(0.22))
-            waveform(clip)
-                .padding(.top, 14)
-                .padding(.horizontal, 2)
-                .padding(.bottom, 4)
-            CutFadeOverlay(fadeIn: clip.fadeIn, fadeOut: clip.fadeOut, length: clip.length, tint: color)
+            CutClipCanvas(
+                assetID: clip.assetID,
+                url: url(for: clip.assetID),
+                track: clip.track,
+                inOffset: clip.inOffset,
+                length: clip.length,
+                sourceDuration: clip.sourceDuration,
+                pixelsPerSecond: pixelsPerSecond,
+                fadeIn: clip.fadeIn,
+                fadeOut: clip.fadeOut,
+                fadeInCurve: clip.fadeInCurve,
+                fadeOutCurve: clip.fadeOutCurve
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .allowsHitTesting(false)
             Text(name(for: clip.assetID))
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(color)
@@ -709,10 +720,6 @@ struct TrimmerWorkspaceView: View {
             .frame(width: 8, height: 8)
             .overlay(RoundedRectangle(cornerRadius: 1).stroke(Color.black.opacity(0.7), lineWidth: 1))
             .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
-    }
-
-    private func waveform(_ clip: TrimmerClip) -> some View {
-        CutWaveform(assetID: clip.assetID, url: url(for: clip.assetID), color: trackColor(clip.track), inOffset: clip.inOffset, length: clip.length, sourceDuration: clip.sourceDuration)
     }
 
     private func gapMark(start: Double, length: Double, height: CGFloat) -> some View {
@@ -858,10 +865,12 @@ struct TrimmerWorkspaceView: View {
             return shown.trimming(clipID: clip.id, edge: .end, to: time).clip(clip.id) ?? clip
         case .fadeIn:
             let seconds = clip.fadeIn + Double(drag.dx / pixelsPerSecond)
-            return shown.settingFade(clipID: clip.id, edge: .fadeIn, seconds: seconds).clip(clip.id) ?? clip
+            let curve = TrimmerFadeCurve.bent(clip.fadeInCurve, upPoints: -Double(drag.dy))
+            return shown.settingFade(clipID: clip.id, edge: .fadeIn, seconds: seconds, curve: curve).clip(clip.id) ?? clip
         case .fadeOut:
             let seconds = clip.fadeOut - Double(drag.dx / pixelsPerSecond)
-            return shown.settingFade(clipID: clip.id, edge: .fadeOut, seconds: seconds).clip(clip.id) ?? clip
+            let curve = TrimmerFadeCurve.bent(clip.fadeOutCurve, upPoints: -Double(drag.dy))
+            return shown.settingFade(clipID: clip.id, edge: .fadeOut, seconds: seconds, curve: curve).clip(clip.id) ?? clip
         }
     }
 
@@ -1009,9 +1018,12 @@ struct TrimmerWorkspaceView: View {
             next = shown.trimming(clipID: clip.id, edge: edge, to: time)
         case let .fade(edge):
             let current = edge == .fadeIn ? clip.fadeIn : clip.fadeOut
+            let currentCurve = edge == .fadeIn ? clip.fadeInCurve : clip.fadeOutCurve
             let delta = edge == .fadeIn ? seconds : -seconds
+            // dy is positive when the pointer moves down. Up bends the fade toward a fast start.
+            let curve = TrimmerFadeCurve.bent(currentCurve, upPoints: -Double(translation.height))
             label = "Fade"
-            next = shown.settingFade(clipID: clip.id, edge: edge, seconds: current + delta)
+            next = shown.settingFade(clipID: clip.id, edge: edge, seconds: current + delta, curve: curve)
         }
         bindUndo()
         transport.stop()
@@ -1093,9 +1105,14 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
+    private func contentSpan() -> Double {
+        max(TrimmerViewport.fitEnd(of: shown), shown.timelineEnd, transport.playhead)
+    }
+
     private func fit(width: CGFloat) {
         let pps = TrimmerViewport.fitPixelsPerSecond(of: shown, width: Double(max(1, width)))
         pixelsPerSecond = CGFloat(pps)
+        scrollBridge.pin(to: 0)
     }
 
     private func zoom(by factor: CGFloat) {
@@ -1106,7 +1123,18 @@ struct TrimmerWorkspaceView: View {
             by: Double(factor),
             fitPixelsPerSecond: fitPPS
         )
-        pixelsPerSecond = CGFloat(next)
+        let newPPS = CGFloat(next)
+        guard abs(newPPS - pixelsPerSecond) > 0.000_1 else { return }
+        let target = TrimmerViewport.zoomedScroll(
+            scrollX: Double(scrollBridge.x),
+            viewportWidth: Double(max(1, viewportWidth)),
+            pixelsPerSecond: Double(pixelsPerSecond),
+            nextPixelsPerSecond: Double(newPPS),
+            playhead: transport.playhead,
+            contentSpan: contentSpan()
+        )
+        pixelsPerSecond = newPPS
+        scrollBridge.pin(to: CGFloat(target))
     }
 
     private func url(for assetID: String) -> URL? {
@@ -1152,26 +1180,6 @@ struct TrimmerWorkspaceView: View {
         }
         if tenths { return String(format: "%d:%04.1f", minutes, secs) }
         return String(format: "%d:%02d", minutes, Int(secs.rounded(.down)))
-    }
-
-    private func tickStep() -> Double {
-        let raw = Double(80 / max(pixelsPerSecond, 1))
-        let steps = [1.0, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800]
-        return steps.first { $0 >= raw } ?? 1800
-    }
-
-    private func tickTimes(step: Double, through width: CGFloat) -> [Double] {
-        guard step > 0, pixelsPerSecond > 0 else { return [0] }
-        let end = Double(width / pixelsPerSecond)
-        var times: [Double] = []
-        var time = 0.0
-        let minor = step / 2
-        while time <= end + 0.001 {
-            times.append(time)
-            time += minor
-            if times.count > 4_000 { break }
-        }
-        return times
     }
 
     private func overlapPairs(_ clips: [TrimmerClip]) -> [OverlapPair] {
@@ -1253,100 +1261,6 @@ private struct ClipDragPreview: Equatable {
     var kind: CutHitKind
     var dx: CGFloat
     var dy: CGFloat
-}
-
-private struct CutWaveform: View {
-    var assetID: String
-    var url: URL?
-    var color: Color
-    var inOffset: Double
-    var length: Double
-    var sourceDuration: Double?
-    @State private var pyramid = WaveformPyramid.empty
-    @Environment(\.displayScale) private var displayScale
-
-    var body: some View {
-        Canvas { context, size in
-            guard size.width > 1, size.height > 1 else { return }
-            let mid = size.height / 2
-            let columns = max(1, Int((size.width * max(1, displayScale)).rounded(.up)))
-            let pairs = columnPairs(columns: columns)
-            guard pairs.contains(where: { $0.0 != 0 || $0.1 != 0 }) else {
-                var line = Path()
-                line.move(to: CGPoint(x: 0, y: mid))
-                line.addLine(to: CGPoint(x: size.width, y: mid))
-                context.stroke(line, with: .color(color.opacity(0.35)), lineWidth: 1)
-                return
-            }
-            let step = size.width / CGFloat(pairs.count)
-            var path = Path()
-            path.move(to: CGPoint(x: step * 0.5, y: mid - CGFloat(pairs[0].1) * mid))
-            for (index, pair) in pairs.enumerated() where index > 0 {
-                path.addLine(to: CGPoint(x: (CGFloat(index) + 0.5) * step, y: mid - CGFloat(pair.1) * mid))
-            }
-            for (index, pair) in pairs.enumerated().reversed() {
-                path.addLine(to: CGPoint(x: (CGFloat(index) + 0.5) * step, y: mid - CGFloat(pair.0) * mid))
-            }
-            path.closeSubpath()
-            context.fill(path, with: .color(color.opacity(0.92)))
-        }
-        .task(id: assetID) {
-            guard let url else { return }
-            pyramid = await TrimmerWaveformCache.shared.pyramid(assetID: assetID, url: url)
-        }
-    }
-
-    private func columnPairs(columns: Int) -> [(Float, Float)] {
-        guard pyramid.sampleRate > 0, pyramid.totalFrames > 0 else { return [] }
-        let start = Int((inOffset * pyramid.sampleRate).rounded(.down))
-        var end = Int(((inOffset + length) * pyramid.sampleRate).rounded(.down))
-        if let sourceDuration, sourceDuration > 0 {
-            end = min(end, Int((sourceDuration * pyramid.sampleRate).rounded(.down)))
-        }
-        let span = max(1, end - start)
-        return pyramid.columns(startFrame: start, frameCount: span, count: columns)
-    }
-}
-
-/// Straight fade, the way Ableton draws one: a line from the corner box down to the clip's bottom corner.
-private struct CutFadeOverlay: View {
-    var fadeIn: Double
-    var fadeOut: Double
-    var length: Double
-    var tint: Color
-
-    var body: some View {
-        Canvas { context, size in
-            guard length > 0.000_1, size.width > 1, size.height > 1 else { return }
-            let inX = CGFloat(fadeIn / length) * size.width
-            let outX = size.width - CGFloat(fadeOut / length) * size.width
-            draw(context: context, size: size, boundary: inX, leading: true)
-            draw(context: context, size: size, boundary: outX, leading: false)
-        }
-        .allowsHitTesting(false)
-    }
-
-    private func draw(context: GraphicsContext, size: CGSize, boundary: CGFloat, leading: Bool) {
-        let span = leading ? boundary : size.width - boundary
-        guard span > 0.5 else { return }
-        var shade = Path()
-        if leading {
-            shade.move(to: CGPoint(x: 0, y: 0))
-            shade.addLine(to: CGPoint(x: boundary, y: 0))
-            shade.addLine(to: CGPoint(x: 0, y: size.height))
-        } else {
-            shade.move(to: CGPoint(x: size.width, y: 0))
-            shade.addLine(to: CGPoint(x: boundary, y: 0))
-            shade.addLine(to: CGPoint(x: size.width, y: size.height))
-        }
-        shade.closeSubpath()
-        context.fill(shade, with: .color(tint.opacity(0.50)))
-        context.fill(shade, with: .color(Color.black.opacity(0.30)))
-        var line = Path()
-        line.move(to: CGPoint(x: boundary, y: 0))
-        line.addLine(to: CGPoint(x: leading ? 0 : size.width, y: size.height))
-        context.stroke(line, with: .color(.white.opacity(0.92)), lineWidth: 1.25)
-    }
 }
 
 /// Colors copied from TheDecks' channel strip. TheDecks itself is left alone.
