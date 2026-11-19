@@ -12,12 +12,10 @@ struct DepotSidebar: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("DEPOT")
-                            .font(.system(size: 11, weight: .semibold))
-                            .tracking(1.2)
-                            .foregroundStyle(LoungeTheme.textDim)
+                        ValetTitleText(size: 16)
                         Text("Project audio")
-                            .font(.system(size: 16, weight: .semibold))
+                            .font(.system(size: 11))
+                            .foregroundStyle(LoungeTheme.textDim)
                     }
                     Spacer(minLength: 8)
                     Button("Import Audio") { session.importAudio() }
@@ -29,7 +27,7 @@ struct DepotSidebar: View {
                     Text("Exporting…")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LoungeTheme.amber)
-                    Text("The depot stays locked until the file is written.")
+                    Text("TheValet stays locked until the file is written.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -37,7 +35,7 @@ struct DepotSidebar: View {
                     Text("Exporting…")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LoungeTheme.amber)
-                    Text("The depot stays locked until the cut is written.")
+                    Text("TheValet stays locked until the cut is written.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -45,7 +43,7 @@ struct DepotSidebar: View {
                     Text("Splitting…")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(LoungeTheme.amber)
-                    Text("The depot stays locked until the split finishes or you press Cancel.")
+                    Text("TheValet stays locked until the split finishes or you press Cancel.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
@@ -156,7 +154,7 @@ struct DepotSidebar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .loungePanel(radius: 10)
             } else {
-                Text("Select a depot file.")
+                Text("Select a TheValet file.")
                     .font(.system(size: 12))
                     .foregroundStyle(LoungeTheme.textDim)
             }
@@ -167,14 +165,14 @@ struct DepotSidebar: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("How saving works")
                 .font(.system(size: 12, weight: .semibold))
-            Text("Save Project updates the manifest and settings atomically. It does not rewrite depot audio or add another copy.")
+            Text("Save Project updates the manifest and settings atomically. It does not rewrite TheValet audio or add another copy.")
                 .font(.system(size: 11))
                 .foregroundStyle(LoungeTheme.textDim)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Save Result") {}
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(true)
-            Text("In TheRoof, Export File to Depot adds a new file under depot/results. The original is not changed.")
+            Text("In TheRoof, Export File to TheValet adds a new file under depot/results. The original is not changed.")
                 .font(.system(size: 11))
                 .foregroundStyle(LoungeTheme.textDim)
                 .fixedSize(horizontal: false, vertical: true)

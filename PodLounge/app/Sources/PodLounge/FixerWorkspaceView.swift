@@ -16,7 +16,7 @@ struct FixerWorkspaceView: View {
                     .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
                     RoomTitleText(workspace: .fixer, size: 18)
-                    Text("Add a depot file, mix, and record. Stay here until Stop. Back to Lounge does not stop a take.")
+                    Text("Add a TheValet file, mix, and record. Stay here until Stop. Back to Lounge does not stop a take.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .lineLimit(2)

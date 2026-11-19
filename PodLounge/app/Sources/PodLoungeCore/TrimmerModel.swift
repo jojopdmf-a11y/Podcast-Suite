@@ -589,12 +589,12 @@ public struct TrimmerDocument: Codable, Equatable, Sendable {
 
     public func suggestedChapterTitle() -> String {
         let existing = Set(markers.map { $0.title.trimmingCharacters(in: .whitespacesAndNewlines) })
-        if !existing.contains("Chapter") { return "Chapter" }
+        if !existing.contains("Marker") { return "Marker" }
         var number = 2
-        while existing.contains("Chapter \(number)") {
+        while existing.contains("Marker \(number)") {
             number += 1
         }
-        return "Chapter \(number)"
+        return "Marker \(number)"
     }
 }
 
@@ -741,6 +741,78 @@ public enum TrimmerViewport: Sendable {
         let maxScroll = max(0, contentWidth - view)
         guard raw.isFinite else { return 0 }
         return min(max(0, raw), maxScroll)
+    }
+}
+
+/// Pinch and scroll-wheel zoom. The factor is proportional to the gesture, then clamped by `TrimmerViewport.zoom`.
+public enum TrimmerGestureZoom: Sendable {
+    /// Trackpad points that equal one plus/minus button step.
+    public static let pointsPerStep = 80.0
+    /// A mouse notch is reported in lines. This many points keeps a notch smaller than one button step.
+    public static let linePoints = 16.0
+
+    /// macOS magnify events report the change since the last event. 0.2 becomes 1.2.
+    public static func factor(magnification: Double) -> Double {
+        guard magnification.isFinite else { return 1 }
+        let next = 1 + magnification
+        guard next.isFinite, next > 0 else { return 1 }
+        return next
+    }
+
+    /// Positive delta zooms in. Precise deltas are points. A mouse wheel's lines are scaled first.
+    public static func factor(verticalDelta: Double, precise: Bool) -> Double {
+        guard verticalDelta.isFinite, verticalDelta != 0 else { return 1 }
+        let points = precise ? verticalDelta : verticalDelta * linePoints
+        let next = pow(TrimmerViewport.zoomFactor, points / pointsPerStep)
+        guard next.isFinite, next > 0 else { return 1 }
+        return next
+    }
+}
+
+/// Accumulates a drag so Option can slow the next movement without jumping the value.
+public struct TrimmerFineDrag: Equatable, Sendable {
+    public static let fineScale = 0.1
+    public var lastRawX: Double
+    public var lastRawY: Double
+    public var x: Double
+    public var y: Double
+
+    public init(lastRawX: Double = 0, lastRawY: Double = 0, x: Double = 0, y: Double = 0) {
+        self.lastRawX = lastRawX
+        self.lastRawY = lastRawY
+        self.x = x
+        self.y = y
+    }
+
+    /// `rawX` and `rawY` are the total pointer travel since the drag began, not a single event.
+    public mutating func advance(rawX: Double, rawY: Double, fine: Bool) {
+        let rawX = rawX.isFinite ? rawX : lastRawX
+        let rawY = rawY.isFinite ? rawY : lastRawY
+        let scale = fine ? Self.fineScale : 1
+        x += (rawX - lastRawX) * scale
+        y += (rawY - lastRawY) * scale
+        lastRawX = rawX
+        lastRawY = rawY
+    }
+}
+
+/// TheCut's fader uses the same range the slider used. Saved values outside it still load.
+public enum TrimmerFaderDrag: Sendable {
+    public static let minimumDB = -24.0
+    public static let maximumDB = 12.0
+    public static let unityDB = 0.0
+
+    public static func clamped(_ decibels: Double) -> Double {
+        guard decibels.isFinite else { return unityDB }
+        return min(maximumDB, max(minimumDB, decibels))
+    }
+
+    /// `upwardPoints` is positive when the pointer has moved up. A full slot of travel covers the whole range.
+    public static func decibels(from start: Double, upwardPoints: Double, travel: Double) -> Double {
+        let span = maximumDB - minimumDB
+        let points = travel.isFinite ? max(travel, 1) : 1
+        let moved = upwardPoints.isFinite ? upwardPoints : 0
+        return clamped(clamped(start) + moved / points * span)
     }
 }
 

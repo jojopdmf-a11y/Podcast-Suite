@@ -124,7 +124,7 @@ final class ProjectSession: ObservableObject {
               let url = try? package.resolvedURL(for: asset)
         else {
             stopDepotPlayback()
-            alertMessage = "That depot file can't be played."
+            alertMessage = "That TheValet file can't be played."
             return
         }
         endTrimmerPlayback?()
@@ -326,7 +326,7 @@ final class ProjectSession: ObservableObject {
             fixer.followDepotDisplayName(assetID: id, from: previous, to: outcome.displayName)
             objectWillChange.send()
             if outcome.warnsDuplicate {
-                alertMessage = "Another depot item is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
+                alertMessage = "Another TheValet item is already named \u{201C}\(outcome.displayName).\u{201D} Both names are kept."
             }
         } catch DepotRenameError.emptyName {
             alertMessage = "Enter a name. The old name was kept."
@@ -448,7 +448,7 @@ final class ProjectSession: ObservableObject {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.canCreateDirectories = true
-        panel.message = "Tracks are always added to the project depot. This folder also gets a copy."
+        panel.message = "Tracks are always added to TheValet. This folder also gets a copy."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         model.outsideFolder = url
     }
@@ -757,11 +757,11 @@ final class ProjectSession: ObservableObject {
             return
         }
         guard let id = selectedAssetID, let asset = assets.first(where: { $0.id == id }) else {
-            alertMessage = "Select a depot file to add."
+            alertMessage = "Select a TheValet file to add."
             return
         }
         guard health(of: asset) == .present, let url = try? package.resolvedURL(for: asset) else {
-            alertMessage = "That depot file is missing."
+            alertMessage = "That TheValet file is missing."
             return
         }
         fixer.importDepotFiles(

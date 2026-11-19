@@ -363,7 +363,7 @@ final class QuickCheckUITests: XCTestCase {
         let saved = poll(120) {
             let text = statusText(statusRaw(app))
             if text.contains("Analyzing") || text.contains("Leveling to") { rescanned = true }
-            return text.contains("Saved result to the depot")
+            return text.contains("Saved result to TheValet")
         }
         let after = files(in: config.project.appendingPathComponent("depot/results"))
         let added = after.filter { before.contains($0.path) == false }

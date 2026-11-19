@@ -301,7 +301,7 @@ struct ContentView: View {
                         "ADD SELECTED",
                         identifier: "fixer.addSelected",
                         enabled: !session.isRecording,
-                        help: "Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
+                        help: "Add the TheValet file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip."
                     ) { onAddSelectedDepot?() }
                 }
                 deskButton("BACK TO TOP", help: "Jump to the start of the timeline") {
@@ -337,7 +337,7 @@ struct ContentView: View {
                         .fixedSize(horizontal: true, vertical: false)
                         .disabled(session.isBouncing)
                         .help(chrome == .lounge
-                            ? "Stop recording. The take is renamed into the project depot. Back to Lounge does not stop a take."
+                            ? "Stop recording. The take is renamed into TheValet. Back to Lounge does not stop a take."
                             : "Stop recording. TheDecks writes WAV takes into the session folder on the Desktop.")
                 } else {
                     deskButton(
@@ -450,7 +450,7 @@ struct ContentView: View {
                     Button("ADD SELECTED") { onAddSelectedDepot() }
                         .buttonStyle(MixerPrimaryButtonStyle())
                         .accessibilityIdentifier("fixer.addSelected")
-                        .help("Add the depot file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
+                        .help("Add the TheValet file selected in the list. A mono file becomes a speaker strip. A stereo file becomes a music strip.")
                 }
                 if chrome == .application {
                     Button("CHOOSE FOLDER…") { pickFolder() }

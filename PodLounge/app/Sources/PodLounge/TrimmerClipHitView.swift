@@ -1,4 +1,5 @@
 import AppKit
+import PodLoungeCore
 import SwiftUI
 
 /// Which part of a clip received the mouse-down. The zone is chosen once, so a drag cannot jump to the neighbor.
@@ -64,6 +65,7 @@ final class CutClipHitNSView: NSView {
     private var zone: CutHitKind = .body
     private var pushedCursor = false
     private var resetClick = false
+    private var fine = TrimmerFineDrag()
 
     override var isOpaque: Bool { false }
     override var acceptsFirstResponder: Bool { false }
@@ -93,6 +95,7 @@ final class CutClipHitNSView: NSView {
         }
         resetClick = false
         tracking = true
+        fine = TrimmerFineDrag()
         onDown()
         if zone != .body {
             NSCursor.resizeLeftRight.push()
@@ -105,8 +108,9 @@ final class CutClipHitNSView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - down.x
         let dy = down.y - point.y
+        let scaled = scaledTravel(dx: dx, dy: dy, event: event)
         guard hypot(dx, dy) >= 4 else { return }
-        onChanged(zone, dx, dy)
+        onChanged(zone, scaled.width, scaled.height)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -118,6 +122,7 @@ final class CutClipHitNSView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - down.x
         let dy = down.y - point.y
+        let scaled = scaledTravel(dx: dx, dy: dy, event: event)
         tracking = false
         if pushedCursor {
             NSCursor.pop()
@@ -127,8 +132,19 @@ final class CutClipHitNSView: NSView {
         if hypot(dx, dy) < 4 {
             onClick(down.x)
         } else {
-            onEnded(zone, dx, dy)
+            onEnded(zone, scaled.width, scaled.height)
         }
+    }
+
+    /// Trim and fade follow a slowed pointer while Option is held. Moving the clip does not.
+    private func scaledTravel(dx: CGFloat, dy: CGFloat, event: NSEvent) -> CGSize {
+        guard zone != .body else { return CGSize(width: dx, height: dy) }
+        fine.advance(
+            rawX: Double(dx),
+            rawY: Double(dy),
+            fine: event.modifierFlags.contains(.option)
+        )
+        return CGSize(width: fine.x, height: fine.y)
     }
 
     /// Just inside the clip. Narrow clips split the width so the two ends never cover the same point.

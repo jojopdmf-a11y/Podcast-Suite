@@ -241,6 +241,17 @@ final class CutScrollBridge: NSObject {
         setOrigin(clamped(desired, clip: clip), clip: clip)
     }
 
+    /// Shift plus the wheel. Positive delta moves the timeline the same way a rightward swipe does.
+    func nudge(by deltaX: CGFloat) {
+        guard deltaX.isFinite, deltaX != 0, let clip = scrollView?.contentView else { return }
+        desired = nil
+        pinUntil = 0
+        let next = clamped(clip.bounds.origin.x - deltaX, clip: clip)
+        x = next
+        clip.scroll(to: NSPoint(x: next, y: clip.bounds.origin.y))
+        scrollView?.reflectScrolledClipView(clip)
+    }
+
     private func setOrigin(_ originX: CGFloat, clip: NSClipView) {
         x = originX
         guard abs(clip.bounds.origin.x - originX) > 0.25 else { return }
@@ -307,6 +318,75 @@ final class CutZoomKeyView: NSView {
         if responder is NSTextView { return true }
         if responder is NSTextField { return true }
         return false
+    }
+
+    deinit {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+        }
+    }
+}
+
+struct CutTimelineGestureHost: NSViewRepresentable {
+    var onZoom: (Double) -> Void
+    var onNudge: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> CutTimelineGestureView {
+        let view = CutTimelineGestureView()
+        view.onZoom = onZoom
+        view.onNudge = onNudge
+        view.install()
+        return view
+    }
+
+    func updateNSView(_ view: CutTimelineGestureView, context: Context) {
+        view.onZoom = onZoom
+        view.onNudge = onNudge
+    }
+}
+
+final class CutTimelineGestureView: NSView {
+    var onZoom: (Double) -> Void = { _ in }
+    var onNudge: (CGFloat) -> Void = { _ in }
+    nonisolated(unsafe) private var monitor: Any?
+
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { [weak self] event in
+            guard let self else { return event }
+            return self.handle(event)
+        }
+    }
+
+    private func handle(_ event: NSEvent) -> NSEvent? {
+        guard let window = self.window, event.window === window else { return event }
+        let local = convert(event.locationInWindow, from: nil)
+        guard bounds.contains(local) else { return event }
+        if event.type == .magnify {
+            let factor = TrimmerGestureZoom.factor(magnification: Double(event.magnification))
+            if abs(factor - 1) > 0.000_000_1 { onZoom(factor) }
+            return nil
+        }
+        let shift = event.modifierFlags.contains(.shift)
+        let dx = event.scrollingDeltaX
+        let dy = event.scrollingDeltaY
+        if shift {
+            let delta = abs(dx) >= abs(dy) ? dx : dy
+            if delta != 0 { onNudge(delta) }
+            return nil
+        }
+        if event.hasPreciseScrollingDeltas, abs(dx) > abs(dy) {
+            return event
+        }
+        let factor = TrimmerGestureZoom.factor(
+            verticalDelta: Double(dy),
+            precise: event.hasPreciseScrollingDeltas
+        )
+        if abs(factor - 1) > 0.000_000_1 { onZoom(factor) }
+        return nil
     }
 
     deinit {
