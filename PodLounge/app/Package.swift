@@ -38,7 +38,10 @@ let package = Package(
         ),
         .testTarget(
             name: "PodLoungeTests",
-            dependencies: ["PodLoungeCore"],
+            dependencies: [
+                "PodLoungeCore",
+                .product(name: "LilLevelerKit", package: "LilLevelerKit"),
+            ],
             path: "Tests/PodLoungeTests"
         ),
     ]

@@ -38,6 +38,8 @@ final class ProjectSession: ObservableObject {
     @Published var trimmerDocument = TrimmerDocument.empty
     /// True while TheCut is writing a mix. Depot clicks wait.
     @Published var trimmerExporting = false
+    /// Last format, bit depth, and MP3 bitrate chosen on TheCut's export sheet.
+    var trimmerExportChoices = TrimmerExportChoices.standard
     /// Bumps when the mixer settings change so Save can light up.
     @Published private(set) var fixerRevision = 0
     let fixer = ProducerLoungeModel()
@@ -68,6 +70,9 @@ final class ProjectSession: ObservableObject {
         }
         fixer.onParametersSynced = { [weak self] in
             self?.fixerRevision += 1
+        }
+        fixer.onStructureChanged = { [weak self] in
+            self?.persistFixerSession()
         }
         fixer.onTakesReady = { [weak self] urls in
             self?.absorbFixerTakes(urls)
@@ -399,19 +404,21 @@ final class ProjectSession: ObservableObject {
     /// Renders nothing itself. The Limiter workspace passes a finished file.
     /// The original depot bytes are not rewritten, and the selection stays on
     /// the file that was leveled.
-    func importLimiterResult(from url: URL, displayName: String) throws {
+    @discardableResult
+    func importLimiterResult(from url: URL, displayName: String) throws -> DepotAsset {
         guard let package else {
             throw PackageError.operationFailed("Create or open a project before saving a result.")
         }
         applyMetadata(to: package)
         try writeSideFiles(to: package)
-        _ = try package.importResult(
+        let asset = try package.importResult(
             from: url,
             producedBy: "limiter",
             displayName: displayName,
             select: false
         )
         adopt(package, keepWorkspace: true)
+        return asset
     }
 
     /// Drop or choose on the Stripper screen. An outside file is copied in as an
@@ -742,6 +749,14 @@ final class ProjectSession: ObservableObject {
         savedTrimmer = trimmerDocument
         savedFixerJSON = fixer.encodedDocument()
         savedAssetNames = assetDisplayNames
+    }
+
+    /// Writes TheDecks now, so a removed track does not come back when the project is opened again.
+    private func persistFixerSession() {
+        guard let package else { return }
+        let data = fixer.encodedDocument()
+        guard (try? package.writeProducerSession(data)) != nil else { return }
+        savedFixerJSON = data
     }
 
     private func writeSideFiles(to package: ProjectPackage) throws {

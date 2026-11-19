@@ -260,6 +260,10 @@ public final class ProducerLoungeModel: ObservableObject {
     public var onParametersSynced: (() -> Void)?
     public var onAddSelected: (() -> Void)?
     public var onImportURLs: (([URL]) -> Void)?
+    public var onStructureChanged: (() -> Void)? {
+        get { session.onStructureChanged }
+        set { session.onStructureChanged = newValue }
+    }
 
     @Published public private(set) var statusLine = ""
     @Published public private(set) var busyProgress: Double?
@@ -273,6 +277,7 @@ public final class ProducerLoungeModel: ObservableObject {
         session.permissionAppName = "Lounge"
         session.protectTakeUntilStop = true
         session.suppressExportReveal = true
+        session.allowRemovingTracksWithAudio = true
         session.onRecordingFlagChanged = { [weak self] recording in
             self?.isRecording = recording
             self?.onRecordingChange?(recording)

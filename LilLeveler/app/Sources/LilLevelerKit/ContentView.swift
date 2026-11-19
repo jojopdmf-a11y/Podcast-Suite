@@ -44,6 +44,8 @@ public struct LevelerRootView: View {
     var onControlsChanged: (() -> Void)?
     /// Lounge calls this before PLAY so depot preview stops first.
     var onPlaybackWillStart: (() -> Void)?
+    /// Lounge-only card under the export panel. The standalone app leaves this empty.
+    var belowOutput: AnyView?
 
     @State private var isDropTargeted = false
     @State private var showAbout = false
@@ -68,7 +70,8 @@ public struct LevelerRootView: View {
         resultNameFollowsSource: Binding<Bool> = .constant(true),
         onSaveToDepot: ((URL, String) async throws -> Void)? = nil,
         onControlsChanged: (() -> Void)? = nil,
-        onPlaybackWillStart: (() -> Void)? = nil
+        onPlaybackWillStart: (() -> Void)? = nil,
+        belowOutput: AnyView? = nil
     ) {
         self.session = session
         self.mode = mode
@@ -78,6 +81,7 @@ public struct LevelerRootView: View {
         self.onSaveToDepot = onSaveToDepot
         self.onControlsChanged = onControlsChanged
         self.onPlaybackWillStart = onPlaybackWillStart
+        self.belowOutput = belowOutput
     }
 
     public var body: some View {
@@ -280,6 +284,13 @@ public struct LevelerRootView: View {
                 fillsColumn: false,
                 includesPrimaryButton: true
             )
+            if let belowOutput {
+                belowOutput
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .levelerPanel()
+                    .padding(.top, 8)
+            }
             Spacer(minLength: 0)
         }
     }

@@ -1,8 +1,10 @@
 import Foundation
+import LilLevelerKit
 import PodLoungeCore
 
 enum TrimmerExportError: LocalizedError {
     case noAudio
+    case emptyTrack(String)
     case missing(String)
     case failed(String)
 
@@ -10,6 +12,8 @@ enum TrimmerExportError: LocalizedError {
         switch self {
         case .noAudio:
             "Add a clip to the timeline before exporting."
+        case let .emptyTrack(name):
+            "\(name) has no clips to export."
         case let .missing(name):
             "\(name) is missing from the project, so the cut was not written."
         case let .failed(detail):
@@ -24,6 +28,7 @@ enum TrimmerExporter {
         var peak: Float
         var sampleRate: Double
         var wroteFloat: Bool
+        var clipped: Bool
     }
 
     final class ProgressBox: @unchecked Sendable {
@@ -47,11 +52,27 @@ enum TrimmerExporter {
         document: TrimmerDocument,
         urls: [String: URL],
         names: [String: String],
+        scope: TrimmerExportScope = .fullMix,
+        channelCounts: [String: Int] = [:],
+        container: TrimmerExportContainer = .wav,
+        bitDepth: TrimmerExportDepth = .int24,
+        mp3BitrateKbps: Int = 192,
         progress: @escaping @Sendable (Double) -> Void
     ) throws -> Outcome {
-        let clips = document.clips
-        guard !clips.isEmpty else { throw TrimmerExportError.noAudio }
-        let sampleRate = renderRate(document: document, urls: urls)
+        let clips: [TrimmerClip]
+        if let track = scope.track {
+            clips = document.clips.filter { $0.track == track }
+            guard clips.isEmpty == false else { throw TrimmerExportError.emptyTrack(track.title) }
+        } else {
+            clips = document.clips
+            guard clips.isEmpty == false else { throw TrimmerExportError.noAudio }
+        }
+        let sampleRate = renderRate(document: document, urls: urls, scope: scope)
+        let channels = TrimmerExportPlan.channelCount(
+            scope: scope,
+            document: document,
+            channelCounts: channelCounts
+        )
         let folder = FileManager.default.temporaryDirectory
             .appendingPathComponent("thecut-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -75,7 +96,7 @@ enum TrimmerExporter {
         }
 
         let floatURL = folder.appendingPathComponent("mix-float.wav")
-        let writer = try TrimmerWAV.Writer(url: floatURL, sampleRate: sampleRate, depth: .float32)
+        let writer = try TrimmerWAV.Writer(url: floatURL, sampleRate: sampleRate, depth: .float32, channels: channels)
         let failure = FailureBox()
         let peak = TrimmerRenderer.renderStreaming(
             document: document,
@@ -83,12 +104,14 @@ enum TrimmerExporter {
             read: { id, frame, count in
                 readers[id]?.read(frame: frame, count: count) ?? [Float](repeating: 0, count: max(0, count) * 2)
             },
+            scope: scope,
             progress: { fraction in
                 progress(0.35 + 0.55 * fraction)
             },
             consume: { block in
                 do {
-                    try writer.append(block)
+                    let samples = channels == 1 ? TrimmerExportPlan.leftChannel(block) : block
+                    try writer.append(samples)
                 } catch {
                     failure.set(error)
                 }
@@ -100,23 +123,57 @@ enum TrimmerExporter {
             throw TrimmerExportError.failed("the mix file is empty")
         }
 
-        let wroteFloat = peak > 1
-        let staged = folder.appendingPathComponent(wroteFloat ? "mix-float-copy.wav" : "mix-24.wav")
-        if wroteFloat {
-            try FileManager.default.copyItem(at: floatURL, to: staged)
-        } else {
-            try TrimmerWAV.rewrite(from: floatURL, to: staged, depth: .int24)
+        let written = TrimmerExportPlan.writtenDepth(chosen: bitDepth, container: container, peak: peak)
+        let rate = TrimmerExportPlan.deliveryRate(renderRate: sampleRate, container: container)
+        let settings = LevelerOutputSettings(
+            container: LevelerContainer(rawValue: container.rawValue) ?? .wav,
+            bitDepth: levelerDepth(written.depth),
+            rateMode: .explicit(rate),
+            mp3BitrateKbps: mp3BitrateKbps
+        )
+        let staged = folder.appendingPathComponent("mix.\(container.fileExtension)")
+        do {
+            try LevelerFileExport.write(pcmWAV: floatURL, to: staged, settings: settings) { fraction in
+                progress(0.90 + 0.10 * fraction)
+            }
+        } catch {
+            throw TrimmerExportError.failed(error.localizedDescription)
         }
         progress(1)
         let stable = FileManager.default.temporaryDirectory
-            .appendingPathComponent("thecut-export-\(UUID().uuidString).wav")
+            .appendingPathComponent("thecut-export-\(UUID().uuidString).\(container.fileExtension)")
         try FileManager.default.copyItem(at: staged, to: stable)
-        return Outcome(fileURL: stable, peak: peak, sampleRate: sampleRate, wroteFloat: wroteFloat)
+        let lossy = container.isLossy
+        return Outcome(
+            fileURL: stable,
+            peak: peak,
+            sampleRate: rate,
+            wroteFloat: lossy == false && written.depth == .float32 && peak > 1,
+            clipped: lossy && peak > 1
+        )
     }
 
-    private static func renderRate(document: TrimmerDocument, urls: [String: URL]) -> Double {
-        let mix = document.clips.filter { $0.track == .episodeMix }.sorted { $0.start < $1.start }
-        let source = mix.first ?? document.clips.sorted { $0.start < $1.start }.first
+    private static func levelerDepth(_ depth: TrimmerExportDepth) -> LevelerBitDepth {
+        switch depth {
+        case .int16: .int16
+        case .int24: .int24
+        case .float32: .float32
+        }
+    }
+
+    private static func renderRate(
+        document: TrimmerDocument,
+        urls: [String: URL],
+        scope: TrimmerExportScope
+    ) -> Double {
+        let pool: [TrimmerClip]
+        if let track = scope.track {
+            pool = document.clips.filter { $0.track == track }.sorted { $0.start < $1.start }
+        } else {
+            let mix = document.clips.filter { $0.track == .episodeMix }.sorted { $0.start < $1.start }
+            pool = mix.isEmpty ? document.clips.sorted { $0.start < $1.start } : mix
+        }
+        let source = pool.first
         if let id = source?.assetID, let url = urls[id], let rate = TrimmerDecoder.sampleRate(of: url), rate >= 8_000 {
             return rate
         }

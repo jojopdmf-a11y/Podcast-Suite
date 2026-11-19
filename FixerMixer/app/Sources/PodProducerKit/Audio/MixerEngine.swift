@@ -486,6 +486,13 @@ final class MixerEngine: @unchecked Sendable {
         return voiceBuffers[index].contains { abs($0) > 1e-4 }
     }
 
+    func stereoHasAudio(at index: Int) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard stereoBuffers.indices.contains(index) else { return false }
+        return stereoBuffers[index].contains { abs($0) > 1e-4 }
+    }
+
     func removeVoice(at index: Int) {
         lock.lock()
         guard voiceBuffers.indices.contains(index) else {
@@ -505,6 +512,23 @@ final class MixerEngine: @unchecked Sendable {
         recordMap = nextMap
         autoBalancer.resize(to: voiceCount)
         autoBalancer.reset()
+        meterPre = Array(repeating: 0, count: meterSlotCount)
+        meterPost = Array(repeating: 0, count: meterSlotCount)
+        lock.unlock()
+        rebuildWaveformCache()
+    }
+
+    /// Drops one music or SFX buffer. Does not delete the file it was loaded from.
+    func removeStereo(at index: Int) {
+        lock.lock()
+        guard stereoBuffers.indices.contains(index) else {
+            lock.unlock()
+            return
+        }
+        stereoBuffers.remove(at: index)
+        if stereoChannelCounts.indices.contains(index) { stereoChannelCounts.remove(at: index) }
+        if stereoProcessors.indices.contains(index) { stereoProcessors.remove(at: index) }
+        if stereoMuteSpans.indices.contains(index) { stereoMuteSpans.remove(at: index) }
         meterPre = Array(repeating: 0, count: meterSlotCount)
         meterPost = Array(repeating: 0, count: meterSlotCount)
         lock.unlock()

@@ -9,13 +9,14 @@ public enum TrimmerWAVError: Error, Equatable, LocalizedError {
         case .unreadable:
             "The audio file could not be read."
         case let .unsupported(detail):
-            "The audio file is not a stereo WAV this cut can write (\(detail))."
+            "The audio file is not a WAV this cut can write (\(detail))."
         }
     }
 }
 
-/// Stereo WAV files for TheCut's export. 24-bit integer stays at or under full scale.
-/// 32-bit float keeps samples that peak above 0 dBFS.
+/// WAV files for TheCut's export. Stereo is the full mix and any track that is not all mono.
+/// A one-channel file is a real mono WAV, so TheDecks treats it as a speaker strip.
+/// 24-bit integer stays at or under full scale. 32-bit float keeps samples that peak above 0 dBFS.
 public enum TrimmerWAV {
     public enum Depth: Equatable, Sendable {
         case int24
@@ -23,79 +24,106 @@ public enum TrimmerWAV {
     }
 
     public static func write(stereo: [Float], sampleRate: Double, depth: Depth, to url: URL) throws {
-        let writer = try Writer(url: url, sampleRate: sampleRate, depth: depth)
-        try writer.append(stereo)
+        try write(interleaved: stereo, channels: 2, sampleRate: sampleRate, depth: depth, to: url)
+    }
+
+    public static func write(
+        interleaved: [Float],
+        channels: Int,
+        sampleRate: Double,
+        depth: Depth,
+        to url: URL
+    ) throws {
+        let writer = try Writer(url: url, sampleRate: sampleRate, depth: depth, channels: channels)
+        try writer.append(interleaved)
         try writer.close()
     }
 
-    /// Rewrites a stereo WAV this type can read into another bit depth, streaming so a long episode is not held in memory.
+    /// Rewrites a mono or stereo WAV this type can read into another bit depth, streaming so a long episode is not held in memory.
     public static func rewrite(from source: URL, to destination: URL, depth: Depth) throws {
         let input = try FileHandle(forReadingFrom: source)
         defer { try? input.close() }
         let header = try parseHeader(input)
-        let writer = try Writer(url: destination, sampleRate: header.sampleRate, depth: depth)
+        let writer = try Writer(url: destination, sampleRate: header.sampleRate, depth: depth, channels: header.channels)
         var remaining = header.dataBytes
         let framesPerRead = 8192
         while remaining >= header.blockAlign {
             let bytes = min(remaining, framesPerRead * header.blockAlign)
             let aligned = bytes - (bytes % header.blockAlign)
             guard aligned > 0, let data = try input.read(upToCount: aligned), data.count >= header.blockAlign else { break }
-            var stereo: [Float] = []
-            stereo.reserveCapacity((data.count / header.blockAlign) * 2)
+            var interleaved: [Float] = []
+            interleaved.reserveCapacity((data.count / header.blockAlign) * header.channels)
             var offset = 0
             while offset + header.blockAlign <= data.count {
-                switch header.depth {
-                case .int24:
-                    stereo.append(decodeInt24(data, offset))
-                    stereo.append(decodeInt24(data, offset + 3))
-                case .float32:
-                    stereo.append(decodeFloat(data, offset))
-                    stereo.append(decodeFloat(data, offset + 4))
-                }
+                appendDecoded(data, offset: offset, header: header, into: &interleaved)
                 offset += header.blockAlign
             }
-            try writer.append(stereo)
+            try writer.append(interleaved)
             remaining -= offset
         }
         try writer.close()
     }
 
+    public struct Contents: Equatable, Sendable {
+        public var sampleRate: Double
+        public var channels: Int
+        public var interleaved: [Float]
+    }
+
     public static func read(from url: URL) throws -> (sampleRate: Double, stereo: [Float]) {
+        let contents = try readContents(from: url)
+        guard contents.channels == 2 else {
+            throw TrimmerWAVError.unsupported("expected stereo PCM")
+        }
+        return (contents.sampleRate, contents.interleaved)
+    }
+
+    public static func readContents(from url: URL) throws -> Contents {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let header = try parseHeader(handle)
         let bytes = try handle.readToEnd() ?? Data()
         let available = min(bytes.count, header.dataBytes)
-        var stereo: [Float] = []
-        stereo.reserveCapacity((available / header.blockAlign) * 2)
+        var interleaved: [Float] = []
+        interleaved.reserveCapacity((available / header.blockAlign) * header.channels)
         var offset = 0
         while offset + header.blockAlign <= available {
-            switch header.depth {
-            case .int24:
-                stereo.append(decodeInt24(bytes, offset))
-                stereo.append(decodeInt24(bytes, offset + 3))
-            case .float32:
-                stereo.append(decodeFloat(bytes, offset))
-                stereo.append(decodeFloat(bytes, offset + 4))
-            }
+            appendDecoded(bytes, offset: offset, header: header, into: &interleaved)
             offset += header.blockAlign
         }
-        return (header.sampleRate, stereo)
+        return Contents(sampleRate: header.sampleRate, channels: header.channels, interleaved: interleaved)
+    }
+
+    private static func appendDecoded(_ data: Data, offset: Int, header: Header, into samples: inout [Float]) {
+        var cursor = offset
+        for _ in 0..<header.channels {
+            switch header.depth {
+            case .int24:
+                samples.append(decodeInt24(data, cursor))
+                cursor += 3
+            case .float32:
+                samples.append(decodeFloat(data, cursor))
+                cursor += 4
+            }
+        }
     }
 
     public final class Writer {
         private let handle: FileHandle
         private let depth: Depth
+        private let channels: Int
         private let blockAlign: Int
         private var dataBytes = 0
         private var closed = false
 
-        public init(url: URL, sampleRate: Double, depth: Depth) throws {
+        public init(url: URL, sampleRate: Double, depth: Depth, channels: Int = 2) throws {
             let rate = max(1, Int(sampleRate.rounded()))
+            let count = channels == 1 ? 1 : 2
             self.depth = depth
+            self.channels = count
             switch depth {
-            case .int24: blockAlign = 6
-            case .float32: blockAlign = 8
+            case .int24: blockAlign = 3 * count
+            case .float32: blockAlign = 4 * count
             }
             FileManager.default.createFile(atPath: url.path, contents: nil)
             handle = try FileHandle(forWritingTo: url)
@@ -112,7 +140,7 @@ public enum TrimmerWAV {
                 writeUInt16(3, into: &header, at: 20)
                 writeUInt16(32, into: &header, at: 34)
             }
-            writeUInt16(2, into: &header, at: 22)
+            writeUInt16(UInt16(count), into: &header, at: 22)
             writeUInt32(UInt32(rate), into: &header, at: 24)
             writeUInt32(UInt32(rate * blockAlign), into: &header, at: 28)
             writeUInt16(UInt16(blockAlign), into: &header, at: 32)
@@ -120,21 +148,21 @@ public enum TrimmerWAV {
             try handle.write(contentsOf: header)
         }
 
-        public func append(_ stereo: [Float]) throws {
+        public func append(_ interleaved: [Float]) throws {
             guard !closed else { return }
             var payload = Data()
-            payload.reserveCapacity((stereo.count / 2) * blockAlign)
+            payload.reserveCapacity((interleaved.count / channels) * blockAlign)
             var index = 0
-            while index + 1 < stereo.count {
-                switch depth {
-                case .int24:
-                    appendInt24(stereo[index], to: &payload)
-                    appendInt24(stereo[index + 1], to: &payload)
-                case .float32:
-                    appendFloat(stereo[index], to: &payload)
-                    appendFloat(stereo[index + 1], to: &payload)
+            while index + channels <= interleaved.count {
+                for channel in 0..<channels {
+                    switch depth {
+                    case .int24:
+                        appendInt24(interleaved[index + channel], to: &payload)
+                    case .float32:
+                        appendFloat(interleaved[index + channel], to: &payload)
+                    }
                 }
-                index += 2
+                index += channels
                 dataBytes += blockAlign
             }
             try handle.write(contentsOf: payload)
@@ -174,6 +202,7 @@ public enum TrimmerWAV {
     private struct Header {
         var sampleRate: Double
         var depth: Depth
+        var channels: Int
         var blockAlign: Int
         var dataBytes: Int
     }
@@ -212,18 +241,30 @@ public enum TrimmerWAV {
                 try handle.seek(toOffset: handle.offset() + UInt64(skip))
             }
         }
-        guard foundData, channels == 2, sampleRate > 0 else {
-            throw TrimmerWAVError.unsupported("expected stereo PCM")
+        guard foundData, sampleRate > 0, channels == 1 || channels == 2 else {
+            throw TrimmerWAVError.unsupported("expected mono or stereo PCM")
         }
         let depth: Depth
-        if formatTag == 1, bits == 24, blockAlign == 6 {
+        let bytesPerSample: Int
+        if formatTag == 1, bits == 24 {
             depth = .int24
-        } else if formatTag == 3, bits == 32, blockAlign == 8 {
+            bytesPerSample = 3
+        } else if formatTag == 3, bits == 32 {
             depth = .float32
+            bytesPerSample = 4
         } else {
             throw TrimmerWAVError.unsupported("format \(formatTag) bits \(bits)")
         }
-        return Header(sampleRate: Double(sampleRate), depth: depth, blockAlign: blockAlign, dataBytes: dataBytes)
+        guard blockAlign == bytesPerSample * Int(channels) else {
+            throw TrimmerWAVError.unsupported("format \(formatTag) bits \(bits)")
+        }
+        return Header(
+            sampleRate: Double(sampleRate),
+            depth: depth,
+            channels: Int(channels),
+            blockAlign: blockAlign,
+            dataBytes: dataBytes
+        )
     }
 
     private static func decodeInt24(_ data: Data, _ offset: Int) -> Float {

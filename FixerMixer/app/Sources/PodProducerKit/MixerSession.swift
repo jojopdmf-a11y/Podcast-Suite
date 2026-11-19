@@ -474,6 +474,10 @@ final class MixerSession: ObservableObject {
     var protectTakeUntilStop = false
     /// Lounge imports the bounce itself and does not open Finder.
     var suppressExportReveal = false
+    /// Lounge can delete any selected track. Standalone still removes only an empty speaker strip.
+    var allowRemovingTracksWithAudio = false
+    /// Fires after a strip leaves the session so the Lounge can save TheDecks.
+    var onStructureChanged: (() -> Void)?
     /// Name in the microphone-denied status. Standalone is TheDecks. Lounge sets its own.
     var permissionAppName = "TheDecks"
     var microphoneAccess = MicrophoneAccess.live
@@ -727,17 +731,42 @@ final class MixerSession: ObservableObject {
     }
 
     func canRemoveStrip(_ id: Int) -> Bool {
-        guard !isRecording, let index = voices.firstIndex(where: { $0.id == id }) else { return false }
-        if voices[index].fileURL != nil { return false }
-        return !engine.voiceHasAudio(at: index)
+        guard !isRecording, id != ChannelStripState.masterID else { return false }
+        if let index = voices.firstIndex(where: { $0.id == id }) {
+            if allowRemovingTracksWithAudio { return true }
+            if voices[index].fileURL != nil { return false }
+            return !engine.voiceHasAudio(at: index)
+        }
+        if allowRemovingTracksWithAudio, stereos.contains(where: { $0.id == id }) {
+            return true
+        }
+        return false
+    }
+
+    /// A loaded file, or samples already in the engine, counts as audio. An unused strip does not.
+    func stripHasAudio(_ id: Int) -> Bool {
+        if let index = voices.firstIndex(where: { $0.id == id }) {
+            if voices[index].fileURL != nil { return true }
+            return engine.voiceHasAudio(at: index)
+        }
+        if let index = stereos.firstIndex(where: { $0.id == id }) {
+            if stereos[index].fileURL != nil { return true }
+            return engine.stereoHasAudio(at: index)
+        }
+        return false
     }
 
     func removeEmptyStrip(_ id: Int) {
-        guard canRemoveStrip(id), let index = voices.firstIndex(where: { $0.id == id }) else { return }
+        guard canRemoveStrip(id) else { return }
         if isPlaying {
             engine.stop()
             isPlaying = false
         }
+        if let index = stereos.firstIndex(where: { $0.id == id }) {
+            removeStereoStrip(at: index)
+            return
+        }
+        guard let index = voices.firstIndex(where: { $0.id == id }) else { return }
         let name = voices[index].name
         let removedID = voices[index].id
         if let peerID = voices[index].linkedPeerID,
@@ -775,6 +804,39 @@ final class MixerSession: ObservableObject {
         syncRTASource()
         syncParamsToEngine()
         persistMixIfPossible()
+        onStructureChanged?()
+        status = "Removed \(name)."
+    }
+
+    /// Drops a music or SFX strip from the session. The file on disk stays.
+    private func removeStereoStrip(at index: Int) {
+        let name = stereos[index].name
+        let removedID = stereos[index].id
+        stereos.remove(at: index)
+        engine.removeStereo(at: index)
+        var remap: [Int: Int] = [:]
+        for newIdx in stereos.indices {
+            let newID = ChannelStripState.musicID + newIdx
+            remap[stereos[newIdx].id] = newID
+            stereos[newIdx].id = newID
+        }
+        channelOrder = channelOrder.compactMap { existing in
+            if existing == removedID { return nil }
+            return remap[existing] ?? existing
+        }
+        syncChannelOrder()
+        if selectedChannelID == removedID {
+            selectedChannelID = voices.first?.id ?? stereos.first?.id ?? ChannelStripState.masterID
+        } else if let mapped = remap[selectedChannelID] {
+            selectedChannelID = mapped
+        }
+        sampleRate = engine.sampleRate
+        frameCount = engine.frameCount
+        refreshWaveform()
+        syncRTASource()
+        syncParamsToEngine()
+        persistMixIfPossible()
+        onStructureChanged?()
         status = "Removed \(name)."
     }
 

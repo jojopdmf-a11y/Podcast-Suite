@@ -1,4 +1,5 @@
 import AppKit
+import LilLevelerKit
 import PodLoungeCore
 import SwiftUI
 
@@ -17,6 +18,8 @@ struct TrimmerWorkspaceView: View {
     @State private var pendingDelete: PendingCut?
     @State private var faderDraft: [TrimmerTrackID: Double] = [:]
     @State private var exportProgress: Double?
+    @State private var exportNotice: String?
+    @State private var channelCounts: [String: Int] = [:]
     @State private var viewportWidth: CGFloat = 640
     @State private var dropHoverTrack: TrimmerTrackID?
     @State private var pendingDrop: PendingDepotDrop?
@@ -26,8 +29,11 @@ struct TrimmerWorkspaceView: View {
     @State private var userAdjustedZoom = false
     @State private var didFitContent = false
     @State private var scrollBridge = CutScrollBridge()
+    @State private var showExportSheet = false
+    @State private var exportSheetConfirming = false
+    @State private var exportDraft = TrimmerExportDraft(scope: .fullMix, field: "", customized: false)
 
-    private static let trackHeaderWidth: CGFloat = 198
+    private static let trackHeaderWidth: CGFloat = 112
 
     private var shown: TrimmerDocument { editor.document }
 
@@ -42,10 +48,17 @@ struct TrimmerWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(LoungeTheme.background)
+        .sheet(isPresented: $showExportSheet) {
+            exportSheet
+        }
         .onAppear {
             bindUndo()
             editor.replace(session.trimmerDocument, clearUndo: true)
             session.endTrimmerPlayback = { transport.stop() }
+            refreshChannelCounts()
+        }
+        .onChange(of: clipAssetKey) { _, _ in
+            refreshChannelCounts()
         }
         .background(
             CutZoomKeyHost(
@@ -199,15 +212,242 @@ struct TrimmerWorkspaceView: View {
     }
 
     private var exportRow: some View {
-        HStack {
-            Spacer()
-            Button("Export → TheValet & open TheRoof") { exportCut() }
-                .buttonStyle(LoungeButtonStyle(prominent: true))
-                .disabled(session.package == nil || shown.clips.isEmpty || session.trimmerExporting)
-                .accessibilityIdentifier("thecut.export")
+        HStack(spacing: 8) {
+            if let exportNotice {
+                Text(exportNotice)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoungeTheme.result)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityIdentifier("thecut.saved")
+            }
+            Spacer(minLength: 8)
+            exportControl
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+    }
+
+    private var exportControl: some View {
+        let blocked = session.package == nil || shown.clips.isEmpty || session.trimmerExporting
+        return Button("Export") {
+            exportDraft = TrimmerExportNaming.opened(
+                episode: session.projectName,
+                choices: session.trimmerExportChoices,
+                mono: exportIsMono(.fullMix),
+                mp3Available: LevelerContainer.mp3.isWritable
+            )
+            exportSheetConfirming = false
+            showExportSheet = true
+        }
+        .buttonStyle(LoungeButtonStyle(prominent: true))
+        .disabled(blocked)
+        .help("Choose the mix and name the file")
+        .accessibilityIdentifier("thecut.export")
+    }
+
+    private var exportSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Export")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(LoungeTheme.text)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(TrimmerExportScope.allCases, id: \.self) { scope in
+                    exportChoiceRow(scope)
+                }
+            }
+            .accessibilityIdentifier("thecut.export.choices")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Format")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoungeTheme.textDim)
+                HStack(spacing: 6) {
+                    ForEach(exportContainers, id: \.self) { container in
+                        exportOption(
+                            container.title,
+                            selected: exportDraft.choices.container == container,
+                            identifier: "thecut.export.format.\(container.rawValue)"
+                        ) {
+                            exportDraft = TrimmerExportNaming.choosingContainer(
+                                container,
+                                in: exportDraft,
+                                episode: session.projectName
+                            )
+                            session.trimmerExportChoices = exportDraft.choices
+                        }
+                    }
+                }
+            }
+            .accessibilityIdentifier("thecut.export.formats")
+            if exportDraft.choices.container.usesBitDepth {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bit depth")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.textDim)
+                    HStack(spacing: 6) {
+                        ForEach(TrimmerExportDepth.allCases, id: \.self) { depth in
+                            exportOption(
+                                depth.title,
+                                selected: exportDraft.choices.bitDepth == depth,
+                                identifier: "thecut.export.depth.\(depth.rawValue)"
+                            ) {
+                                exportDraft = TrimmerExportNaming.choosingDepth(depth, in: exportDraft)
+                                session.trimmerExportChoices = exportDraft.choices
+                            }
+                        }
+                    }
+                }
+            }
+            if exportDraft.choices.container.usesBitrate {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Bitrate")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.textDim)
+                    HStack(spacing: 6) {
+                        ForEach(TrimmerExportChoices.mp3Bitrates, id: \.self) { bitrate in
+                            exportOption(
+                                "\(bitrate)",
+                                selected: exportDraft.choices.mp3BitrateKbps == bitrate,
+                                identifier: "thecut.export.bitrate.\(bitrate)"
+                            ) {
+                                exportDraft = TrimmerExportNaming.choosingBitrate(bitrate, in: exportDraft)
+                                session.trimmerExportChoices = exportDraft.choices
+                            }
+                        }
+                    }
+                }
+            }
+            if exportDraft.choices.container.isLossy {
+                Text("MP3 and M4A are lossy. Pick WAV if this is going to TheRoof for leveling.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(LoungeTheme.textDim)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("thecut.export.lossy")
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoungeTheme.textDim)
+                TextField("Name", text: exportNameBinding)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LoungeTheme.text)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(LoungeTheme.field))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(LoungeTheme.cyan.opacity(0.45), lineWidth: 1))
+                    .onSubmit { confirmExportSheet() }
+                    .accessibilityIdentifier("thecut.export.name")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { showExportSheet = false }
+                    .buttonStyle(LoungeButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("thecut.export.cancel")
+                Button("Export") { confirmExportSheet() }
+                    .buttonStyle(LoungeButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(exportChoiceDisabled(exportDraft.scope))
+                    .accessibilityIdentifier("thecut.export.confirm")
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .background(LoungeTheme.background)
+        .preferredColorScheme(.dark)
+        .onExitCommand { showExportSheet = false }
+        .accessibilityIdentifier("thecut.export.sheet")
+    }
+
+    private var exportNameBinding: Binding<String> {
+        Binding(
+            get: { exportDraft.field },
+            set: { newValue in
+                exportDraft = TrimmerExportNaming.editing(newValue, in: exportDraft, episode: session.projectName)
+            }
+        )
+    }
+
+    private func exportChoiceRow(_ scope: TrimmerExportScope) -> some View {
+        let selected = exportDraft.scope == scope
+        let enabled = exportChoiceDisabled(scope) == false
+        return Button {
+            exportDraft = TrimmerExportNaming.choosing(
+                scope,
+                in: exportDraft,
+                episode: session.projectName,
+                mono: exportIsMono(scope)
+            )
+            session.trimmerExportChoices = exportDraft.choices
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(enabled ? LoungeTheme.cyan : LoungeTheme.textDim)
+                Text(scope.menuTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(enabled ? LoungeTheme.text : LoungeTheme.textDim)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier("thecut.export.scope.\(scope.rawValue)")
+    }
+
+    private func confirmExportSheet() {
+        guard showExportSheet, exportSheetConfirming == false else { return }
+        let draft = exportDraft
+        guard exportChoiceDisabled(draft.scope) == false else { return }
+        exportSheetConfirming = true
+        let episode = session.projectName
+        showExportSheet = false
+        session.trimmerExportChoices = draft.choices
+        let name = TrimmerExportNaming.resolvedDisplayName(
+            field: draft.field,
+            episode: episode,
+            scope: draft.scope,
+            container: draft.choices.container
+        )
+        exportCut(draft.scope, displayName: name, choices: draft.choices)
+    }
+
+    private var exportContainers: [TrimmerExportContainer] {
+        TrimmerExportContainer.allCases.filter { container in
+            if container == .mp3 { return LevelerContainer.mp3.isWritable }
+            return true
+        }
+    }
+
+    private func exportIsMono(_ scope: TrimmerExportScope) -> Bool {
+        TrimmerExportPlan.channelCount(scope: scope, document: shown, channelCounts: channelCounts) == 1
+    }
+
+    private func exportOption(
+        _ title: String,
+        selected: Bool,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .foregroundStyle(selected ? LoungeTheme.background : LoungeTheme.text)
+                .background(
+                    RoundedRectangle(cornerRadius: 8).fill(selected ? LoungeTheme.cyan : LoungeTheme.field)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8).stroke(LoungeTheme.cyan.opacity(selected ? 0 : 0.35), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     private var board: some View {
@@ -294,16 +534,18 @@ struct TrimmerWorkspaceView: View {
             VStack(alignment: .leading, spacing: 0) {
                 Text(track.title)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
-                    .tracking(0.4)
+                    .tracking(0.2)
                     .foregroundStyle(selected ? CutStripChrome.lime : CutStripChrome.cyan)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                Text("STEREO")
+                    .truncationMode(.tail)
+                    .help(track.title)
+                Text(channelLabel(track))
                     .font(.system(size: 8, weight: .bold, design: .rounded))
-                    .tracking(0.7)
+                    .tracking(0.6)
                     .foregroundStyle(CutStripChrome.cyanDim)
+                    .lineLimit(1)
             }
-            HStack(alignment: .top, spacing: 6) {
+            HStack(alignment: .top, spacing: 4) {
                 CutConsoleFader(
                     value: gain,
                     enabled: session.trimmerExporting == false,
@@ -337,20 +579,20 @@ struct TrimmerWorkspaceView: View {
                 .accessibilityIdentifier("thecut.meter.\(track.rawValue)")
                 VStack(spacing: 3) {
                     Color.clear.frame(height: CutConsoleFader.readoutHeight)
-                    msButton("M", lit: state.muted, kind: .mute) {
+                    mixButton("Mute", lit: state.muted, kind: .mute) {
                         commitMix("Mute") { $0 = $0.settingTrack(track, muted: !state.muted) }
                     }
                     .help("Mute")
-                    msButton("S", lit: state.solo, kind: .solo) {
+                    mixButton("Solo", lit: state.solo, kind: .solo) {
                         commitMix("Solo") { $0 = $0.settingTrack(track, solo: !state.solo) }
                     }
                     .help("Solo")
-                    Spacer(minLength: 0)
                 }
+                .frame(width: 40)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, 6)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
@@ -375,28 +617,34 @@ struct TrimmerWorkspaceView: View {
         .clipped()
     }
 
-    private func msButton(_ title: String, lit: Bool, kind: CutBevelKind, action: @escaping () -> Void) -> some View {
+    private func mixButton(_ title: String, lit: Bool, kind: CutBevelKind, action: @escaping () -> Void) -> some View {
         let plate = lit ? kind : CutBevelKind.off
         return Button(action: action) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .tracking(0.4)
+                .font(.system(size: 8, weight: .bold, design: .rounded))
+                .tracking(0.2)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .foregroundStyle(plate.text)
-                .frame(width: 22, height: 18)
+                .frame(maxWidth: .infinity)
+                .frame(height: 16)
                 .background {
-                    Capsule()
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(
                             LinearGradient(colors: [plate.top, plate.bottom], startPoint: .top, endPoint: .bottom)
                         )
                         .overlay(alignment: .top) {
-                            Capsule()
-                                .fill(Color.white.opacity(lit ? 0.70 : 0.22))
+                            RoundedRectangle(cornerRadius: 2, style: .continuous)
+                                .fill(Color.white.opacity(lit ? 0.55 : 0.18))
                                 .frame(height: 1)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 3)
                                 .padding(.top, 1)
                         }
-                        .overlay(Capsule().stroke(Color.black.opacity(0.30), lineWidth: 0.6))
-                        .shadow(color: lit ? plate.glow.opacity(0.50) : Color.black.opacity(0.35), radius: lit ? 2.5 : 1, y: 1)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .stroke(Color.black.opacity(0.35), lineWidth: 0.6)
+                        )
+                        .shadow(color: lit ? plate.glow.opacity(0.85) : Color.black.opacity(0.35), radius: lit ? 3 : 1, y: 1)
                 }
         }
         .buttonStyle(.plain)
@@ -1017,7 +1265,7 @@ struct TrimmerWorkspaceView: View {
         editor.apply(label: label, next)
     }
 
-    private func exportCut() {
+    private func exportCut(_ scope: TrimmerExportScope, displayName: String, choices: TrimmerExportChoices) {
         guard !session.fixerRecording else {
             transport.message = "TheDecks is recording. Stop the take before exporting."
             return
@@ -1027,22 +1275,40 @@ struct TrimmerWorkspaceView: View {
             return
         }
         guard !shown.clips.isEmpty else { return }
+        if let track = scope.track, shown.clips.contains(where: { $0.track == track }) == false {
+            session.alertMessage = "\(track.title) has no clips to export."
+            return
+        }
         transport.stop()
         session.trimmerDocument = editor.document
         session.trimmerExporting = true
         exportProgress = 0
+        exportNotice = nil
         let document = editor.document
         var urls: [String: URL] = [:]
         var names: [String: String] = [:]
+        var counts: [String: Int] = [:]
         for clip in document.clips {
             names[clip.assetID] = name(for: clip.assetID)
             if let fileURL = url(for: clip.assetID) {
                 urls[clip.assetID] = fileURL
+                if let count = TrimmerDecoder.channelCount(of: fileURL) {
+                    counts[clip.assetID] = count
+                }
             }
         }
         let box = TrimmerExporter.ProgressBox()
         let job = Task.detached {
-            try TrimmerExporter.export(document: document, urls: urls, names: names) { box.set($0) }
+            try TrimmerExporter.export(
+                document: document,
+                urls: urls,
+                names: names,
+                scope: scope,
+                channelCounts: counts,
+                container: choices.container,
+                bitDepth: choices.bitDepth,
+                mp3BitrateKbps: choices.mp3BitrateKbps
+            ) { box.set($0) }
         }
         let poll = Task { @MainActor in
             while !Task.isCancelled {
@@ -1054,7 +1320,7 @@ struct TrimmerWorkspaceView: View {
             do {
                 let outcome = try await job.value
                 poll.cancel()
-                finishExport(outcome)
+                finishExport(outcome, scope: scope, displayName: displayName)
             } catch {
                 poll.cancel()
                 session.trimmerExporting = false
@@ -1064,32 +1330,67 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
-    private func finishExport(_ outcome: TrimmerExporter.Outcome) {
-        let episode = session.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = (episode.isEmpty ? "Episode" : episode) + " – Cut"
+    private func finishExport(
+        _ outcome: TrimmerExporter.Outcome,
+        scope: TrimmerExportScope,
+        displayName: String
+    ) {
         do {
-            let asset = try session.importTrimmerResult(from: outcome.fileURL, displayName: title)
-            if let package = session.package, let audioURL = try? package.resolvedURL(for: asset) {
-                let chaptersURL = audioURL.deletingLastPathComponent().appendingPathComponent(
-                    audioURL.deletingPathExtension().lastPathComponent + " chapters.txt"
+            let asset = try session.importTrimmerResult(from: outcome.fileURL, displayName: displayName)
+            if TrimmerExportPlan.includesChapters(scope),
+               let package = session.package,
+               let audioURL = try? package.resolvedURL(for: asset) {
+                let chaptersURL = PodcastChapters.sidecarURL(forAudio: audioURL)
+                let chapters = PodcastChapters.withOpeningIntro(
+                    editor.document.markers.map { PodcastChapter(start: $0.time, title: $0.title) }
                 )
-                let text = TrimmerChapters.text(markers: editor.document.markers)
+                let text = PodcastChapters.sidecarText(chapters)
                 try? Data(text.utf8).write(to: chaptersURL, options: .atomic)
             }
             try? FileManager.default.removeItem(at: outcome.fileURL)
             session.trimmerExporting = false
             exportProgress = nil
-            if outcome.peak > 1 {
+            exportNotice = "Saved to TheValet: \(asset.displayName)"
+            if outcome.clipped {
+                session.alertMessage = "This cut peaks at \(TrimmerGain.peakDecibels(outcome.peak)), above 0 dB. MP3 and M4A clip that. Pick WAV if you need the peaks."
+            } else if outcome.wroteFloat, outcome.peak > 1 {
                 session.alertMessage = "This cut peaks at \(TrimmerGain.peakDecibels(outcome.peak)), above 0 dB. It was saved as a 32-bit float file so nothing was clipped. TheRoof sets the final level."
             }
             session.selectedAssetID = asset.id
-            session.openWorkspace(.limiter)
         } catch {
             session.trimmerExporting = false
             exportProgress = nil
             try? FileManager.default.removeItem(at: outcome.fileURL)
             session.alertMessage = error.localizedDescription
         }
+    }
+
+    private func exportChoiceDisabled(_ scope: TrimmerExportScope) -> Bool {
+        if session.trimmerExporting || session.package == nil { return true }
+        if scope == .fullMix { return shown.clips.isEmpty }
+        guard let track = scope.track else { return true }
+        return shown.clips.contains { $0.track == track } == false
+    }
+
+    private var clipAssetKey: String {
+        Set(shown.clips.map(\.assetID)).sorted().joined(separator: "\n")
+    }
+
+    private func refreshChannelCounts() {
+        var next: [String: Int] = [:]
+        for id in Set(shown.clips.map(\.assetID)) {
+            if let fileURL = url(for: id), let count = TrimmerDecoder.channelCount(of: fileURL) {
+                next[id] = count
+            }
+        }
+        channelCounts = next
+    }
+
+    private func channelLabel(_ track: TrimmerTrackID) -> String {
+        let clips = shown.clips.filter { $0.track == track }
+        guard clips.isEmpty == false else { return "STEREO" }
+        let mono = clips.allSatisfy { channelCounts[$0.assetID] == 1 }
+        return mono ? "MONO" : "STEREO"
     }
 
     private func contentSpan() -> Double {
