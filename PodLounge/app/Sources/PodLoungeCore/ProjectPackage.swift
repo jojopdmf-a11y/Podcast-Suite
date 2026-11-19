@@ -315,6 +315,26 @@ public final class ProjectPackage {
         Self.appending("workspaces/limiter.json", to: rootURL)
     }
 
+    public var trimmerDocumentURL: URL {
+        Self.appending("workspaces/trimmer.json", to: rootURL)
+    }
+
+    /// `{}` and a missing file are an empty cut, so projects saved before TheCut still open.
+    public func readTrimmerDocument() -> TrimmerDocument {
+        TrimmerDocument.load(from: trimmerDocumentURL)
+    }
+
+    public func writeTrimmerDocument(_ document: TrimmerDocument) throws {
+        try rejectNestedWrite()
+        do {
+            try AtomicFile.write(try document.encoded(), to: trimmerDocumentURL)
+        } catch let error as PackageError {
+            throw error
+        } catch {
+            throw PackageError.atomicWriteFailed(error.localizedDescription)
+        }
+    }
+
     /// `{}` and unreadable files become defaults. Opening a project never fails on this file.
     public func readLimiterSettings() -> LimiterWorkspaceSettings {
         guard let data = try? Data(contentsOf: limiterSettingsURL), !data.isEmpty else {

@@ -33,6 +33,14 @@ struct DepotSidebar: View {
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .fixedSize(horizontal: false, vertical: true)
+                } else if session.trimmerExporting {
+                    Text("Exporting…")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(LoungeTheme.amber)
+                    Text("The depot stays locked until the cut is written.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else if session.stripperRunning {
                     Text("Splitting…")
                         .font(.system(size: 13, weight: .semibold))
@@ -226,33 +234,47 @@ private struct DepotRow: View {
                 .accessibilityLabel(playing ? "Stop \(asset.displayName)" : "Play \(asset.displayName)")
                 .accessibilityIdentifier("depot.play.\(asset.displayName)")
 
-                Button {
-                    session.select(asset)
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(asset.displayName)
-                            .font(.system(size: 12, weight: selected ? .semibold : .regular))
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .simultaneousGesture(
-                                TapGesture(count: 2).onEnded {
-                                    session.promptRename(asset)
-                                }
-                            )
-                        Text(asset.kind.label)
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(asset.kind == .original ? LoungeTheme.original : LoungeTheme.result)
-                            .frame(width: 72, alignment: .leading)
-                        Text(length)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(LoungeTheme.textDim)
-                            .frame(width: 52, alignment: .trailing)
-                    }
-                    .contentShape(Rectangle())
+                // Not a Button. On macOS a Button takes the mouse-down, so a drag
+                // from the name never starts. A tap selects; a drag uses onDrag.
+                HStack(spacing: 6) {
+                    Text(asset.displayName)
+                        .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                session.promptRename(asset)
+                            }
+                        )
+                    Text(asset.kind.label)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(asset.kind == .original ? LoungeTheme.original : LoungeTheme.result)
+                        .frame(width: 72, alignment: .leading)
+                    Text(length)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(LoungeTheme.textDim)
+                        .frame(width: 52, alignment: .trailing)
                 }
-                .buttonStyle(.plain)
-                .disabled(session.navigationLocked)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .simultaneousGesture(
+                    TapGesture().onEnded {
+                        session.select(asset)
+                    }
+                )
+                .onDrag {
+                    DepotAssetDrag(assetID: asset.id).itemProvider()
+                } preview: {
+                    Text(asset.displayName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityLabel(asset.displayName)
                 .accessibilityIdentifier("depot.file.\(asset.displayName)")
+                .accessibilityAction { session.select(asset) }
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
