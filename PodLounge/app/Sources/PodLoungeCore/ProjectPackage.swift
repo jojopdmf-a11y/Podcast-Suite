@@ -207,7 +207,7 @@ public final class ProjectPackage {
         }
         let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
         if Self.isInsideOrEqual(resolvedSource, root: root) {
-            throw PackageError.importFailed("Choose a file outside this project. Depot files are already inside the package.")
+            throw PackageError.importFailed("Choose a file outside this project. Files in TheValet are already inside the package.")
         }
 
         let id = UUID().uuidString.lowercased()
@@ -217,7 +217,7 @@ public final class ProjectPackage {
         let relativePath = "\(kind.depotDirectory)/\(fileName)"
         let destination = try Self.locate(relativePath: relativePath, kind: kind, in: rootURL)
         if fm.fileExists(atPath: destination.path) {
-            throw PackageError.importFailed("A depot file already uses that name.")
+            throw PackageError.importFailed("A file in TheValet already uses that name.")
         }
         let partial = destination.appendingPathExtension("partial")
         if fm.fileExists(atPath: partial.path) {
@@ -411,17 +411,17 @@ public final class ProjectPackage {
         let relativePath = "\(AssetKind.result.depotDirectory)/\(fileName)"
         let destination = try Self.locate(relativePath: relativePath, kind: .result, in: rootURL)
         if fm.fileExists(atPath: destination.path) {
-            throw PackageError.operationFailed("A depot file already uses that name.")
+            throw PackageError.operationFailed("A file in TheValet already uses that name.")
         }
         let selected = manifest.selectedAssetID
         do {
             try fm.moveItem(at: resolved, to: destination)
         } catch {
-            throw PackageError.operationFailed("Could not move the take into the depot.")
+            throw PackageError.operationFailed("Could not move the take into TheValet.")
         }
         if (try? fm.destinationOfSymbolicLink(atPath: destination.path)) != nil {
             try? fm.removeItem(at: destination)
-            throw PackageError.operationFailed("The depot refused to store a symlink.")
+            throw PackageError.operationFailed("TheValet refused to store a symlink.")
         }
         let asset = DepotAsset(
             id: UUID().uuidString.lowercased(),
@@ -471,7 +471,7 @@ public final class ProjectPackage {
     /// nothing changes on disk or in memory.
     public func removeAsset(id: String) throws {
         guard let index = manifest.assets.firstIndex(where: { $0.id == id }) else {
-            throw PackageError.operationFailed("That file is not in this project's depot.")
+            throw PackageError.operationFailed("That file is not in this project's TheValet.")
         }
         let asset = manifest.assets[index]
         let fileURL = try? resolvedURL(for: asset)
@@ -660,7 +660,7 @@ public final class ProjectPackage {
         }
         let fileName = parts[2]
         guard isSafeDepotFileName(fileName) else {
-            throw PackageError.malformedManifest("Unsafe depot filename.")
+            throw PackageError.malformedManifest("That file name is not allowed.")
         }
         return parts.joined(separator: "/")
     }
@@ -801,7 +801,7 @@ public final class ProjectPackage {
             }
             suffix = (suffix ?? 1) + 1
         }
-        throw PackageError.importFailed("Could not find a free file name in the depot.")
+        throw PackageError.importFailed("Could not find a free file name in TheValet.")
     }
 
     private func depotFileNameIsTaken(_ fileName: String, kind: AssetKind) -> Bool {

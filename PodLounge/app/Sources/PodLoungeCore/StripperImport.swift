@@ -63,7 +63,7 @@ extension ProjectPackage {
             }
             for index in staged.indices {
                 if fm.fileExists(atPath: staged[index].destination.path) {
-                    throw PackageError.importFailed("A depot file already uses that name.")
+                    throw PackageError.importFailed("A file in TheValet already uses that name.")
                 }
                 try fm.moveItem(at: staged[index].partial, to: staged[index].destination)
                 created.removeAll { $0 == staged[index].partial }
@@ -218,7 +218,7 @@ extension ProjectPackage {
         let folder = directory.standardizedFileURL
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return "The tracks are in the depot. The extra folder could not be used."
+            return "The tracks are in TheValet. The extra folder could not be used."
         }
         var failures: [String] = []
         for item in staged {
@@ -235,7 +235,7 @@ extension ProjectPackage {
             }
         }
         guard !failures.isEmpty else { return nil }
-        return "The tracks are in the depot. The extra copy could not write \(failures.joined(separator: ", "))."
+        return "The tracks are in TheValet. The extra copy could not write \(failures.joined(separator: ", "))."
     }
 
     private func uniqueOutsideFile(stem: String, ext: String, in folder: URL) -> URL {

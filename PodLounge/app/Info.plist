@@ -34,7 +34,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.cougarcalc.podlounge.depot-asset</string>
 			<key>UTTypeDescription</key>
-			<string>Pod Lounge depot asset</string>
+			<string>Pod Lounge TheValet audio</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

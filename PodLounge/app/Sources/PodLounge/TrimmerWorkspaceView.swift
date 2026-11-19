@@ -1,3 +1,4 @@
+import AppKit
 import PodLoungeCore
 import SwiftUI
 
@@ -163,9 +164,6 @@ struct TrimmerWorkspaceView: View {
             Button("Split") { split() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.trimmerExporting)
-            Button("Trim") { trimToPlayhead() }
-                .buttonStyle(LoungeButtonStyle())
-                .disabled(session.trimmerExporting)
             Button("Delete") { performDelete() }
                 .buttonStyle(LoungeButtonStyle(prominent: pendingDelete != nil))
                 .disabled(session.trimmerExporting)
@@ -178,7 +176,7 @@ struct TrimmerWorkspaceView: View {
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(!editor.undoManager.canRedo)
                 .help("Redo (⇧⌘Z)")
-            Button("Add Chapter") { addChapter() }
+            Button("Add Marker") { addMarker() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.trimmerExporting)
             Spacer(minLength: 8)
@@ -203,7 +201,7 @@ struct TrimmerWorkspaceView: View {
     private var exportRow: some View {
         HStack {
             Spacer()
-            Button("Export → Depot & open TheRoof") { exportCut() }
+            Button("Export → TheValet & open TheRoof") { exportCut() }
                 .buttonStyle(LoungeButtonStyle(prominent: true))
                 .disabled(session.package == nil || shown.clips.isEmpty || session.trimmerExporting)
                 .accessibilityIdentifier("thecut.export")
@@ -252,6 +250,12 @@ struct TrimmerWorkspaceView: View {
             }
         }
         .background(Color(red: 0.04, green: 0.07, blue: 0.10))
+        .background {
+            CutTimelineGestureHost(
+                onZoom: { zoom(by: CGFloat($0)) },
+                onNudge: { scrollBridge.nudge(by: $0) }
+            )
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -284,62 +288,67 @@ struct TrimmerWorkspaceView: View {
         let gain = faderDraft[track] ?? state.gainDB
         let reading = transport.meters[track] ?? TrimmerMeterReading()
         let selected = selectedTrack == track
-        return VStack(alignment: .leading, spacing: 4) {
-            VStack(alignment: .leading, spacing: 1) {
+        let level = max(reading.left, reading.right)
+        let hold = max(reading.holdLeft, reading.holdRight)
+        return VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text(track.title)
                     .font(.system(size: 12, weight: .bold, design: .rounded))
                     .tracking(0.4)
                     .foregroundStyle(selected ? CutStripChrome.lime : CutStripChrome.cyan)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.7)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
                 Text("STEREO")
                     .font(.system(size: 8, weight: .bold, design: .rounded))
                     .tracking(0.7)
                     .foregroundStyle(CutStripChrome.cyanDim)
             }
-            HStack(spacing: 5) {
-                msButton("M", lit: state.muted, kind: .mute) {
-                    commitMix("Mute") { $0 = $0.settingTrack(track, muted: !state.muted) }
-                }
-                .help("Mute")
-                msButton("S", lit: state.solo, kind: .solo) {
-                    commitMix("Solo") { $0 = $0.settingTrack(track, solo: !state.solo) }
-                }
-                .help("Solo")
-                Slider(
-                    value: Binding(
-                        get: { gain },
-                        set: { newValue in
-                            faderDraft[track] = newValue
-                            var live = shown
-                            live = live.settingTrack(track, gainDB: newValue)
-                            transport.applyMix(live)
-                        }
-                    ),
-                    in: -24...12,
-                    onEditingChanged: { editing in
-                        if editing {
-                            faderDraft[track] = shown.trackState(track).gainDB
-                        } else if let value = faderDraft[track] {
-                            faderDraft[track] = nil
-                            commitMix("Track Level") { $0 = $0.settingTrack(track, gainDB: value) }
-                        }
+            HStack(alignment: .top, spacing: 6) {
+                CutConsoleFader(
+                    value: gain,
+                    enabled: session.trimmerExporting == false,
+                    onLive: { newValue in
+                        faderDraft[track] = newValue
+                        var live = shown
+                        live = live.settingTrack(track, gainDB: newValue)
+                        transport.applyMix(live)
+                    },
+                    onCommit: { value in
+                        faderDraft[track] = nil
+                        commitMix("Track Level") { $0 = $0.settingTrack(track, gainDB: value) }
+                    },
+                    onReset: {
+                        guard abs(shown.trackState(track).gainDB) > 0.05 else { return }
+                        faderDraft[track] = nil
+                        commitMix("Track Level") { $0 = $0.settingTrack(track, gainDB: TrimmerFaderDrag.unityDB) }
                     }
                 )
-                .controlSize(.small)
-                .tint(CutStripChrome.cyan)
-                Text(dbLabel(gain))
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(CutStripChrome.cyan)
-                    .frame(width: 46, alignment: .trailing)
+                .frame(maxHeight: .infinity)
+                .accessibilityIdentifier("thecut.fader.\(track.rawValue)")
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: CutConsoleFader.readoutHeight)
+                    CutVerticalLEDMeter(level: level, hold: hold)
+                        .frame(maxHeight: .infinity)
+                }
+                .frame(width: 8)
+                .frame(maxHeight: .infinity)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Level")
+                .accessibilityIdentifier("thecut.meter.\(track.rawValue)")
+                VStack(spacing: 3) {
+                    Color.clear.frame(height: CutConsoleFader.readoutHeight)
+                    msButton("M", lit: state.muted, kind: .mute) {
+                        commitMix("Mute") { $0 = $0.settingTrack(track, muted: !state.muted) }
+                    }
+                    .help("Mute")
+                    msButton("S", lit: state.solo, kind: .solo) {
+                        commitMix("Solo") { $0 = $0.settingTrack(track, solo: !state.solo) }
+                    }
+                    .help("Solo")
+                    Spacer(minLength: 0)
+                }
             }
-            VStack(spacing: 2) {
-                meterRow("L", level: reading.left, hold: reading.holdLeft)
-                meterRow("R", level: reading.right, hold: reading.holdRight)
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Level")
-            .accessibilityIdentifier("thecut.meter.\(track.rawValue)")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -364,18 +373,6 @@ struct TrimmerWorkspaceView: View {
         .contentShape(Rectangle())
         .onTapGesture { selectedTrack = track }
         .clipped()
-    }
-
-    private func meterRow(_ label: String, level: Float, hold: Float) -> some View {
-        HStack(spacing: 4) {
-            Text(label)
-                .font(.system(size: 8, weight: .bold, design: .rounded))
-                .tracking(0.7)
-                .foregroundStyle(CutStripChrome.cyanDim)
-                .frame(width: 10, alignment: .leading)
-            CutLEDMeter(level: level, hold: hold)
-                .frame(height: 8)
-        }
     }
 
     private func msButton(_ title: String, lit: Bool, kind: CutBevelKind, action: @escaping () -> Void) -> some View {
@@ -417,7 +414,7 @@ struct TrimmerWorkspaceView: View {
             }
             playhead(height: rulerHeight + markerHeight + laneHeight * 3)
             if shown.clips.isEmpty {
-                Text("Drag a depot item onto a track.")
+                Text("Drag an item from TheValet onto a track.")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(LoungeTheme.textDim)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -477,12 +474,12 @@ struct TrimmerWorkspaceView: View {
                 .font(.system(size: 9))
                 .foregroundStyle(LoungeTheme.cyan)
             if editingMarkerID == marker.id {
-                TextField("Chapter", text: $editingTitle, onCommit: commitMarkerTitle)
+                TextField("Marker", text: $editingTitle, onCommit: commitMarkerTitle)
                     .textFieldStyle(.plain)
                     .font(.system(size: 10, weight: .semibold))
                     .frame(width: 90)
             } else {
-                Text(marker.title.isEmpty ? "Chapter" : marker.title)
+                Text(marker.title.isEmpty ? "Marker" : marker.title)
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(LoungeTheme.text)
                     .lineLimit(1)
@@ -501,7 +498,7 @@ struct TrimmerWorkspaceView: View {
         .offset(y: 5)
         .modifier(FollowDrag(minimum: 3) { translation in
             let time = max(0, marker.time + Double(translation.width / pixelsPerSecond))
-            commit("Move Chapter") { $0 = $0.movingMarker(id: marker.id, to: time) }
+            commit("Move Marker") { $0 = $0.movingMarker(id: marker.id, to: time) }
         })
         .onTapGesture(count: 2) {
             editingMarkerID = marker.id
@@ -770,7 +767,7 @@ struct TrimmerWorkspaceView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Delete selection")
                     .font(.system(size: 14, weight: .semibold))
-                Text("Close the gap pulls everything later on this track forward, and moves clips on the other tracks that start after the cut, so ads and outros stay in sync with the mix. Chapter markers after the cut move too. Leave a gap keeps the silence.")
+                Text("Close the gap pulls everything later on this track forward, and moves clips on the other tracks that start after the cut, so ads and outros stay in sync with the mix. Markers after the cut move too. Leave a gap keeps the silence.")
                     .font(.system(size: 12))
                     .foregroundStyle(LoungeTheme.textDim)
                     .fixedSize(horizontal: false, vertical: true)
@@ -912,16 +909,6 @@ struct TrimmerWorkspaceView: View {
         commit("Split") { $0 = $0.splitting(clipID: chosen.id, at: time) }
     }
 
-    private func trimToPlayhead() {
-        guard let id = selectedClipID, let clip = shown.clip(id), clip.contains(transport.playhead) else {
-            transport.message = "Select a clip and put the playhead inside it to trim."
-            return
-        }
-        let edge: TrimmerEdge = (transport.playhead - clip.start) <= (clip.end - transport.playhead) ? .start : .end
-        transport.message = nil
-        commit("Trim") { $0 = $0.trimming(clipID: id, edge: edge, to: transport.playhead) }
-    }
-
     private func performDelete() {
         if let range = rangeSelection, range.range.length > TrimmerDocument.epsilon {
             switch shown.planDelete(range: range.range, on: range.track) {
@@ -948,7 +935,7 @@ struct TrimmerWorkspaceView: View {
             return
         }
         if let id = selectedMarkerID {
-            commit("Delete Chapter") { $0 = $0.removingMarkers(ids: [id]) }
+            commit("Delete Marker") { $0 = $0.removingMarkers(ids: [id]) }
             selectedMarkerID = nil
         }
     }
@@ -960,22 +947,22 @@ struct TrimmerWorkspaceView: View {
         selectedClipID = nil
     }
 
-    private func addChapter() {
+    private func addMarker() {
         let title = shown.suggestedChapterTitle()
-        commit("Add Chapter") { $0 = $0.addingMarker(at: transport.playhead, title: title) }
+        commit("Add Marker") { $0 = $0.addingMarker(at: transport.playhead, title: title) }
     }
 
     private func commitMarkerTitle() {
         guard let id = editingMarkerID else { return }
         let title = editingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        commit("Rename Chapter") { $0 = $0.renamingMarker(id: id, title: title.isEmpty ? "Chapter" : title) }
+        commit("Rename Marker") { $0 = $0.renamingMarker(id: id, title: title.isEmpty ? "Marker" : title) }
         editingMarkerID = nil
     }
 
     private func place(assetID: String, on track: TrimmerTrackID, at time: Double) {
         guard let asset = session.assets.first(where: { $0.id == assetID }) else { return }
         guard session.health(of: asset) == .present, let fileURL = url(for: assetID) else {
-            session.alertMessage = "That depot file is missing."
+            session.alertMessage = "That file is missing from TheValet."
             return
         }
         guard let duration = AudioDuration.seconds(for: fileURL), duration >= TrimmerDocument.minimumLength else {
@@ -1157,17 +1144,6 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
-    private func dbLabel(_ value: Double) -> String {
-        if abs(value) < 0.05 { return "0 dB" }
-        let rounded = value.rounded()
-        if abs(value - rounded) < 0.05 {
-            let number = Int(rounded)
-            if number < 0 { return "−\(abs(number)) dB" }
-            return "\(number) dB"
-        }
-        return String(format: "%+.1f dB", value)
-    }
-
     private func clock(_ seconds: Double, tenths: Bool) -> String {
         let clamped = max(0, seconds)
         let whole = Int(clamped)
@@ -1310,8 +1286,8 @@ private enum CutBevelKind {
     }
 }
 
-/// Horizontal L/R meter. Same thresholds as TheDecks' strip LEDs: red at 0 dB, yellow above −12 dB, green below.
-private struct CutLEDMeter: View {
+/// One stereo meter for a track. Same thresholds as TheDecks' strip LEDs: red at 0 dB, yellow above −12 dB, green below.
+private struct CutVerticalLEDMeter: View {
     var level: Float
     var hold: Float
 
@@ -1320,25 +1296,25 @@ private struct CutLEDMeter: View {
             let fraction = Self.fraction(level)
             let holdFraction = Self.fraction(hold)
             let inset: CGFloat = 1
-            let innerW = max(4, geo.size.width - inset * 2)
-            let count = max(8, Int((innerW / 3.2).rounded()))
+            let innerH = max(4, geo.size.height - inset * 2)
+            let count = max(6, Int((innerH / 3.2).rounded()))
             let gap: CGFloat = 1
-            let segW = max(1, (innerW - gap * CGFloat(count - 1)) / CGFloat(count))
+            let segH = max(1, (innerH - gap * CGFloat(count - 1)) / CGFloat(count))
             ZStack {
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .fill(Color.black.opacity(0.78))
                 RoundedRectangle(cornerRadius: 2, style: .continuous)
                     .stroke(Color.white.opacity(0.08), lineWidth: 0.7)
-                HStack(spacing: gap) {
+                VStack(spacing: gap) {
                     ForEach(0..<count, id: \.self) { index in
-                        let start = CGFloat(index) / CGFloat(count)
-                        let end = CGFloat(index + 1) / CGFloat(count)
-                        let on = fraction > start + 0.000_1
-                        let held = holdFraction >= start && holdFraction < end
-                        let color = Self.segmentColor(end)
+                        let top = CGFloat(count - index) / CGFloat(count)
+                        let bottom = CGFloat(count - 1 - index) / CGFloat(count)
+                        let on = fraction > bottom + 0.000_1
+                        let held = holdFraction >= bottom && holdFraction < top
+                        let color = Self.segmentColor(top)
                         RoundedRectangle(cornerRadius: 0.4, style: .continuous)
                             .fill(on || held ? color : Color(white: 0.09))
-                            .frame(width: segW)
+                            .frame(height: segH)
                             .shadow(color: (on || held) ? color.opacity(0.65) : .clear, radius: (on || held) ? 1.1 : 0)
                     }
                 }
@@ -1357,5 +1333,230 @@ private struct CutLEDMeter: View {
         if endNorm >= 1 { return CutStripChrome.meterRed }
         if endNorm > 0.8 { return CutStripChrome.meterYellow }
         return CutStripChrome.meterGreen
+    }
+}
+
+/// Short TheDecks-style fader. The range matches the slider it replaces. Option slows the drag.
+private struct CutConsoleFader: View {
+    static let readoutHeight: CGFloat = 12
+    var value: Double
+    var enabled: Bool
+    var onLive: (Double) -> Void
+    var onCommit: (Double) -> Void
+    var onReset: () -> Void
+
+    private var shown: Double { TrimmerFaderDrag.clamped(value) }
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(readout(value))
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(CutStripChrome.cyan)
+                .frame(height: Self.readoutHeight)
+                .frame(maxWidth: .infinity)
+            GeometryReader { geo in
+                let slot = geo.size.height
+                ZStack {
+                    slotWell(height: slot)
+                    ticks(height: slot)
+                    cap
+                        .frame(width: 22, height: capHeight(slot))
+                        .position(x: geo.size.width / 2, y: capCenter(slot: slot))
+                        .allowsHitTesting(false)
+                    CutFaderHit(
+                        enabled: enabled,
+                        origin: shown,
+                        onLive: onLive,
+                        onCommit: onCommit,
+                        onReset: onReset
+                    )
+                }
+            }
+        }
+        .frame(width: 34)
+        .help("Drag to set the level. Hold Option to move slowly. Double-click for 0 dB.")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Level")
+        .accessibilityValue(readout(value))
+    }
+
+    private func readout(_ decibels: Double) -> String {
+        let shown = decibels.isFinite ? decibels : 0
+        return String(format: "%+.0f", shown.rounded())
+    }
+
+    private func capHeight(_ slot: CGFloat) -> CGFloat {
+        min(16, max(8, slot * 0.32))
+    }
+
+    private func capCenter(slot: CGFloat) -> CGFloat {
+        let span = TrimmerFaderDrag.maximumDB - TrimmerFaderDrag.minimumDB
+        let fraction = (shown - TrimmerFaderDrag.minimumDB) / span
+        let cap = capHeight(slot)
+        let travel = max(1, slot - cap)
+        return (1 - fraction) * travel + cap / 2
+    }
+
+    private func slotWell(height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 3, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [Color(white: 0.05), Color(white: 0.015), Color(white: 0.06)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(Color.black.opacity(0.92))
+                    .frame(width: 4, height: max(4, height - 6))
+            }
+            .allowsHitTesting(false)
+    }
+
+    private func ticks(height: CGFloat) -> some View {
+        let marks: [Double] = [12, 0, -12, -24]
+        return ZStack {
+            ForEach(marks, id: \.self) { mark in
+                let y = tickY(mark, slot: height)
+                Capsule()
+                    .fill(Color.white.opacity(mark == 0 ? 0.40 : 0.16))
+                    .frame(width: 3, height: 1)
+                    .position(x: 3, y: y)
+                Capsule()
+                    .fill(Color.white.opacity(mark == 0 ? 0.40 : 0.16))
+                    .frame(width: 3, height: 1)
+                    .position(x: 31, y: y)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func tickY(_ decibels: Double, slot: CGFloat) -> CGFloat {
+        let span = TrimmerFaderDrag.maximumDB - TrimmerFaderDrag.minimumDB
+        let fraction = (decibels - TrimmerFaderDrag.minimumDB) / span
+        let cap = capHeight(slot)
+        let travel = max(1, slot - cap)
+        return (1 - fraction) * travel + cap / 2
+    }
+
+    private var cap: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(white: 0.84),
+                            Color(white: 0.64),
+                            Color(white: 0.42),
+                            Color(white: 0.56),
+                            Color(white: 0.34),
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2.5, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.75), Color.black.opacity(0.45)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.7
+                        )
+                )
+            Rectangle()
+                .fill(CutStripChrome.cyan.opacity(0.95))
+                .frame(height: 1.3)
+                .padding(.horizontal, 3)
+        }
+        .shadow(color: .black.opacity(0.55), radius: 1.5, y: 1)
+    }
+}
+
+private struct CutFaderHit: NSViewRepresentable {
+    var enabled: Bool
+    var origin: Double
+    var onLive: (Double) -> Void
+    var onCommit: (Double) -> Void
+    var onReset: () -> Void
+
+    func makeNSView(context: Context) -> CutFaderNSView {
+        let view = CutFaderNSView()
+        view.enabled = enabled
+        view.origin = origin
+        view.onLive = onLive
+        view.onCommit = onCommit
+        view.onReset = onReset
+        return view
+    }
+
+    func updateNSView(_ view: CutFaderNSView, context: Context) {
+        view.enabled = enabled
+        view.onLive = onLive
+        view.onCommit = onCommit
+        view.onReset = onReset
+        if view.tracking == false {
+            view.origin = origin
+        }
+    }
+}
+
+private final class CutFaderNSView: NSView {
+    var enabled = true
+    var origin = 0.0
+    var onLive: (Double) -> Void = { _ in }
+    var onCommit: (Double) -> Void = { _ in }
+    var onReset: () -> Void = {}
+    var tracking = false
+
+    private var down = NSPoint.zero
+    private var drag = TrimmerFineDrag()
+    private var moved = false
+
+    override var isOpaque: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard enabled else { return }
+        if event.clickCount >= 2 {
+            tracking = false
+            onReset()
+            return
+        }
+        down = convert(event.locationInWindow, from: nil)
+        drag = TrimmerFineDrag()
+        moved = false
+        tracking = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard enabled, tracking else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let rawUp = point.y - down.y
+        drag.advance(rawX: 0, rawY: Double(rawUp), fine: event.modifierFlags.contains(.option))
+        guard abs(rawUp) >= 1 || moved else { return }
+        moved = true
+        onLive(level)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard tracking else { return }
+        tracking = false
+        guard enabled, moved else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let rawUp = point.y - down.y
+        drag.advance(rawX: 0, rawY: Double(rawUp), fine: event.modifierFlags.contains(.option))
+        onCommit(level)
+    }
+
+    private var level: Double {
+        TrimmerFaderDrag.decibels(from: origin, upwardPoints: drag.y, travel: Double(max(bounds.height, 1)))
     }
 }

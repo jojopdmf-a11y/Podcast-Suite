@@ -107,7 +107,7 @@ struct ContentView: View {
             Button("Third-Party Notices") { session.showThirdPartyNotices = true }
             Button("OK", role: .cancel) {}
         } message: {
-            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the selected depot file into speaker tracks and music. TheDecks records and mixes. TheCut edits the finished episode and can save a new mix for TheRoof. TheRoof levels the selected depot file and can save a new result. The first time TheDecks records, macOS asks Lounge for the microphone.")
+            Text("\(ClubPodNaming.product). Lounge is the hub for TheStrip, TheDecks, TheCut, and TheRoof. TheStrip splits the file selected in TheValet into speaker tracks and music. TheDecks records and mixes. TheCut edits the finished episode and can save a new mix for TheRoof. TheRoof levels the file selected in TheValet and can save a new result. The first time TheDecks records, macOS asks Lounge for the microphone.")
         }
         .alert("Third-Party Notices", isPresented: noticesIsPresented) {
             Button("Show LGPL Text") { LAMENotice.openCopying() }
@@ -125,7 +125,7 @@ struct ContentView: View {
             Button("Discard Changes", role: .destructive) { session.discardAndContinue() }
             Button("Cancel", role: .cancel) { session.cancelPending() }
         } message: {
-            Text("Save Project writes the manifest, TheCut edits, TheRoof settings, and the TheDecks session. It does not rewrite depot audio.")
+            Text("Save Project writes the manifest, TheCut edits, TheRoof settings, and the TheDecks session. It does not rewrite TheValet audio.")
         }
     }
 
@@ -222,13 +222,13 @@ struct ContentView: View {
             Button("Save As") { session.saveAs() }
                 .buttonStyle(LoungeButtonStyle())
                 .disabled(session.package == nil || session.navigationLocked)
-            Button(depotHidden ? "Show Depot" : "Hide Depot") {
+            Button(depotHidden ? "Show TheValet" : "Hide TheValet") {
                 withAnimation(.easeInOut(duration: 0.18)) {
                     depotHidden.toggle()
                 }
             }
             .buttonStyle(LoungeButtonStyle())
-            .help(depotHidden ? "Show the project depot" : "Hide the project depot")
+            .help(depotHidden ? "Show TheValet" : "Hide TheValet")
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 10)
@@ -246,7 +246,7 @@ struct ContentView: View {
     private func depotResizeHandle(current: CGFloat, maximum: CGFloat, onLeft: Bool) -> some View {
         LevelerPaneDivider(
             axis: .vertical,
-            help: "Drag to resize the depot. Double-click to reset."
+            help: "Drag to resize TheValet. Double-click to reset."
         ) { delta in
             if depotDragStart == nil { depotDragStart = current }
             let signed = onLeft ? delta : -delta

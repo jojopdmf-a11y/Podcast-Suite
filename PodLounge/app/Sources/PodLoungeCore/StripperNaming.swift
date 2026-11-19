@@ -148,7 +148,7 @@ public enum StripperNaming {
         }
         let existing = Set(existingDisplayNames.map(fold))
         if let clash = cleaned.first(where: { existing.contains(fold($0)) }) {
-            return "“\(clash)” is already in the depot. Change it so nothing is overwritten."
+            return "“\(clash)” is already in TheValet. Change it so nothing is overwritten."
         }
         return nil
     }

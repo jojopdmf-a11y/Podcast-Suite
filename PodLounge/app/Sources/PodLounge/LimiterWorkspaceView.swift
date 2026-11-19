@@ -17,7 +17,7 @@ struct LimiterWorkspaceView: View {
                     .accessibilityIdentifier("lounge.back")
                 VStack(alignment: .leading, spacing: 1) {
                     RoomTitleText(workspace: .limiter, size: 18)
-                    Text("The selected depot file is the source. Pick another in the list without leaving. Back to Lounge stops playback.")
+                    Text("The file selected in TheValet is the source. Pick another in the list without leaving. Back to Lounge stops playback.")
                         .font(.system(size: 11))
                         .foregroundStyle(LoungeTheme.textDim)
                         .lineLimit(1)
@@ -163,19 +163,19 @@ struct LimiterWorkspaceView: View {
     private func loadSelected() {
         guard let package = session.package else {
             if leveler.sourceURL != nil { leveler.teardown() }
-            leveler.status = "Open a project, then pick a depot file."
+            leveler.status = "Open a project, then pick a file in TheValet."
             return
         }
         guard let id = session.selectedAssetID,
               let asset = session.assets.first(where: { $0.id == id })
         else {
             if leveler.sourceURL != nil { leveler.teardown() }
-            leveler.status = "Select a depot file to level."
+            leveler.status = "Select a file in TheValet to level."
             return
         }
         guard session.health(of: asset) == .present, let url = try? package.resolvedURL(for: asset) else {
             leveler.teardown()
-            leveler.status = "That depot file is missing. Save will not recreate it."
+            leveler.status = "That file is missing from TheValet. Save will not recreate it."
             return
         }
         if leveler.sourceURL?.standardizedFileURL == url.standardizedFileURL { return }

@@ -1005,7 +1005,7 @@ final class MixerSession: ObservableObject {
                 lastMixURL = mixURL
                 engine.deleteRecordingFiles()
                 onWorkingTakesWritten?(written.values.map { $0 })
-                let place = recordDirectoryOverride == nil ? folder.lastPathComponent : "the project depot"
+                let place = recordDirectoryOverride == nil ? folder.lastPathComponent : "TheValet"
                 let dropouts = engine.recordDropoutCount
                 if !engine.recordKeptFiles.isEmpty {
                     status = "Recorded to \(place) · could not load \(engine.recordKeptFiles.joined(separator: ", ")) — kept in the folder; drag it in to use it."
@@ -1014,7 +1014,7 @@ final class MixerSession: ObservableObject {
                 } else if dropouts > 0 {
                     status = "Recorded to \(place) · \(dropouts) dropout(s) logged in record-log.json — check take vs interface backup. Tape is dry (no EQ on record)."
                 } else if recordDirectoryOverride != nil {
-                    status = "Recorded to the project depot. The take is a new result. Original files were left as they are."
+                    status = "Recorded to TheValet. The take is a new result. Original files were left as they are."
                 } else {
                     status = "Recorded to \(place). Shift-drag the waveform to mute a cough (silence — the show stays this long). Monitor mics on your interface, not through TheDecks."
                 }
@@ -1866,7 +1866,7 @@ final class MixerSession: ObservableObject {
                     self.busyProgress = nil
                     self.busyProgressLabel = nil
                     if self.suppressExportReveal {
-                        self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") into the project depot."
+                        self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") into TheValet."
                         self.onBounceFinished?(result.folder)
                     } else {
                         self.status = "Exported \(result.fileCount) file\(result.fileCount == 1 ? "" : "s") → \(result.folder.lastPathComponent)"

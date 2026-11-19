@@ -23,3 +23,22 @@ struct RoomTitleText: View {
         .accessibilityLabel(label.joined)
     }
 }
+
+/// Sidebar title. "The" is quieter, the same way the room names are written.
+struct ValetTitleText: View {
+    var size: CGFloat
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 0) {
+            Text("The")
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(LoungeTheme.text.opacity(0.55))
+            Text("Valet")
+                .font(.system(size: size, weight: .semibold))
+                .foregroundStyle(LoungeTheme.text)
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(LoungeCopy.valet)
+    }
+}

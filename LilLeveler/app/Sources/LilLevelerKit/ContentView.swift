@@ -273,8 +273,8 @@ public struct LevelerRootView: View {
                 settings: $output,
                 resultName: resultName,
                 followsSource: resultNameFollowsSource,
-                primaryTitle: session.isBusy ? "WORKING…" : "Export File to Depot",
-                primaryHelp: "Render the leveled file into the project. The original is not changed, and the depot selection stays on this file.",
+                primaryTitle: session.isBusy ? "WORKING…" : "Export File to TheValet",
+                primaryHelp: "Render the leveled file into the project. The original is not changed, and TheValet selection stays on this file.",
                 primaryDisabled: !session.canExportLeveled || onSaveToDepot == nil,
                 primaryAction: saveToDepot,
                 fillsColumn: false,
@@ -488,11 +488,11 @@ public struct LevelerRootView: View {
                 Image(systemName: "waveform.badge.mic")
                     .font(.system(size: 40, weight: .light))
                     .foregroundStyle(LevelerTheme.cyan)
-                Text("SELECT A DEPOT FILE")
+                Text("SELECT A FILE IN THEVALET")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .tracking(1)
                     .foregroundStyle(LevelerTheme.textPrimary)
-                Text("Pick one in the depot list. The original stays where it is.")
+                Text("Pick one in TheValet. The original stays where it is.")
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(LevelerTheme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -962,7 +962,7 @@ public struct LevelerRootView: View {
                 try await onSaveToDepot(temp, display)
                 try? FileManager.default.removeItem(at: temp)
                 session.isBusy = false
-                session.status = "Saved result to the depot"
+                session.status = "Saved result to TheValet"
             } catch {
                 try? FileManager.default.removeItem(at: temp)
                 session.isBusy = false

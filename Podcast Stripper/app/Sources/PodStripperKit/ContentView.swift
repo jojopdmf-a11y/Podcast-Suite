@@ -96,7 +96,7 @@ public struct StripperRootView: View {
             .accessibilityIdentifier("stripper.confirmDiscard")
             Button("Keep Naming", role: .cancel) {}
         } message: {
-            Text("The new tracks are not in the depot yet. Closing removes this split.")
+            Text("The new tracks are not in TheValet yet. Closing removes this split.")
         }
         .sheet(isPresented: $showSettings) {
             SettingsView {
@@ -179,7 +179,7 @@ public struct StripperRootView: View {
                     .shadow(color: StripperTheme.cyan.opacity(0.5), radius: 8)
                 if lounge {
                     if model.inputTitle.isEmpty {
-                        Text("SELECT A DEPOT FILE")
+                        Text("SELECT A FILE IN THEVALET")
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .tracking(1.2)
                             .foregroundStyle(StripperTheme.textPrimary)
@@ -193,7 +193,7 @@ public struct StripperRootView: View {
                             .foregroundStyle(StripperTheme.textPrimary)
                             .lineLimit(1)
                             .accessibilityIdentifier("stripper.input")
-                        Text(model.inputDetail.isEmpty ? "Selected depot file" : model.inputDetail)
+                        Text(model.inputDetail.isEmpty ? "File selected in TheValet" : model.inputDetail)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(StripperTheme.textSecondary)
                             .lineLimit(1)
@@ -331,7 +331,7 @@ public struct StripperRootView: View {
                     .accessibilityIdentifier("stripper.saveTo")
                 Spacer(minLength: 8)
                 if lounge, model.outsideFolder != nil {
-                    Button("USE DEPOT") { model.onUseDepot?() }
+                    Button("Use TheValet") { model.onUseDepot?() }
                         .buttonStyle(StripperGhostButtonStyle())
                         .accessibilityIdentifier("stripper.useDepot")
                 }
@@ -596,7 +596,7 @@ public struct StripperRootView: View {
                     .accessibilityIdentifier("stripper.namingMessage")
             }
             HStack(spacing: 8) {
-                Button("Add to Depot") { model.onAddToDepot?() }
+                Button("Add to TheValet") { model.onAddToDepot?() }
                     .buttonStyle(StripperPrimaryButtonStyle(compact: true))
                     .accessibilityIdentifier("stripper.addToDepot")
                 Button("Close") { model.askDiscardNaming = true }
