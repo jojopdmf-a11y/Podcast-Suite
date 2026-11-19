@@ -73,3 +73,72 @@ public enum TrimmerExportPlan {
         return mono
     }
 }
+
+/// The name field on TheCut's export sheet.
+/// A name the user typed stays when the choice changes.
+/// An empty field is not a custom name, so the next choice fills the default again.
+public struct TrimmerExportDraft: Equatable, Sendable {
+    public var scope: TrimmerExportScope
+    public var field: String
+    public var customized: Bool
+
+    public init(scope: TrimmerExportScope, field: String, customized: Bool) {
+        self.scope = scope
+        self.field = field
+        self.customized = customized
+    }
+}
+
+public enum TrimmerExportNaming {
+    /// The sheet opens on Full Mix, with that choice's default name filled in.
+    public static func opened(episode: String) -> TrimmerExportDraft {
+        TrimmerExportDraft(
+            scope: .fullMix,
+            field: TrimmerExportPlan.displayName(episode: episode, scope: .fullMix),
+            customized: false
+        )
+    }
+
+    /// Changing the choice refreshes the field unless the user has typed their own name.
+    public static func choosing(
+        _ scope: TrimmerExportScope,
+        in draft: TrimmerExportDraft,
+        episode: String
+    ) -> TrimmerExportDraft {
+        var next = draft
+        next.scope = scope
+        if draft.customized == false {
+            next.field = TrimmerExportPlan.displayName(episode: episode, scope: scope)
+        }
+        return next
+    }
+
+    /// Typing in the field. The current default, or only whitespace, is not a custom name.
+    public static func editing(
+        _ text: String,
+        in draft: TrimmerExportDraft,
+        episode: String
+    ) -> TrimmerExportDraft {
+        var next = draft
+        next.field = text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let standard = TrimmerExportPlan.displayName(episode: episode, scope: draft.scope)
+        next.customized = trimmed.isEmpty == false && trimmed != standard
+        return next
+    }
+
+    /// The list name handed to TheValet. Whitespace falls back to the default for the choice.
+    /// TheValet keeps this as the display name, aside from `/`, `\`, and control characters,
+    /// and it turns characters a file name cannot hold into spaces in the stored file.
+    public static func resolvedDisplayName(
+        field: String,
+        episode: String,
+        scope: TrimmerExportScope
+    ) -> String {
+        let trimmed = field.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return TrimmerExportPlan.displayName(episode: episode, scope: scope)
+        }
+        return trimmed
+    }
+}

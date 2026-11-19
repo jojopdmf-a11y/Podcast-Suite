@@ -28,6 +28,9 @@ struct TrimmerWorkspaceView: View {
     @State private var userAdjustedZoom = false
     @State private var didFitContent = false
     @State private var scrollBridge = CutScrollBridge()
+    @State private var showExportSheet = false
+    @State private var exportSheetConfirming = false
+    @State private var exportDraft = TrimmerExportDraft(scope: .fullMix, field: "", customized: false)
 
     private static let trackHeaderWidth: CGFloat = 112
 
@@ -44,6 +47,9 @@ struct TrimmerWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(LoungeTheme.background)
+        .sheet(isPresented: $showExportSheet) {
+            exportSheet
+        }
         .onAppear {
             bindUndo()
             editor.replace(session.trimmerDocument, clearUndo: true)
@@ -223,32 +229,108 @@ struct TrimmerWorkspaceView: View {
 
     private var exportControl: some View {
         let blocked = session.package == nil || shown.clips.isEmpty || session.trimmerExporting
-        return HStack(spacing: 2) {
-            Button("Export to TheValet") { exportCut(.fullMix) }
-                .buttonStyle(LoungeButtonStyle(prominent: true))
-                .disabled(blocked)
-                .accessibilityIdentifier("thecut.export")
-            Menu {
-                ForEach(TrimmerExportScope.allCases, id: \.self) { scope in
-                    Button(scope.menuTitle) { exportCut(scope) }
-                        .disabled(exportChoiceDisabled(scope))
-                }
-            } label: {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color(red: 0.03, green: 0.08, blue: 0.10))
-                    .frame(width: 22, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(LoungeTheme.cyan)
-                    )
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .disabled(blocked)
-            .help("Full Mix, or one track")
-            .accessibilityIdentifier("thecut.export.menu")
+        return Button("Export") {
+            exportDraft = TrimmerExportNaming.opened(episode: session.projectName)
+            exportSheetConfirming = false
+            showExportSheet = true
         }
+        .buttonStyle(LoungeButtonStyle(prominent: true))
+        .disabled(blocked)
+        .help("Choose the mix and name the file")
+        .accessibilityIdentifier("thecut.export")
+    }
+
+    private var exportSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Export")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(LoungeTheme.text)
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(TrimmerExportScope.allCases, id: \.self) { scope in
+                    exportChoiceRow(scope)
+                }
+            }
+            .accessibilityIdentifier("thecut.export.choices")
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Name")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LoungeTheme.textDim)
+                TextField("Name", text: exportNameBinding)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(LoungeTheme.text)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(LoungeTheme.field))
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(LoungeTheme.cyan.opacity(0.45), lineWidth: 1))
+                    .onSubmit { confirmExportSheet() }
+                    .accessibilityIdentifier("thecut.export.name")
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { showExportSheet = false }
+                    .buttonStyle(LoungeButtonStyle())
+                    .keyboardShortcut(.cancelAction)
+                    .accessibilityIdentifier("thecut.export.cancel")
+                Button("Export") { confirmExportSheet() }
+                    .buttonStyle(LoungeButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(exportChoiceDisabled(exportDraft.scope))
+                    .accessibilityIdentifier("thecut.export.confirm")
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .background(LoungeTheme.background)
+        .preferredColorScheme(.dark)
+        .onExitCommand { showExportSheet = false }
+        .accessibilityIdentifier("thecut.export.sheet")
+    }
+
+    private var exportNameBinding: Binding<String> {
+        Binding(
+            get: { exportDraft.field },
+            set: { newValue in
+                exportDraft = TrimmerExportNaming.editing(newValue, in: exportDraft, episode: session.projectName)
+            }
+        )
+    }
+
+    private func exportChoiceRow(_ scope: TrimmerExportScope) -> some View {
+        let selected = exportDraft.scope == scope
+        let enabled = exportChoiceDisabled(scope) == false
+        return Button {
+            exportDraft = TrimmerExportNaming.choosing(scope, in: exportDraft, episode: session.projectName)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(enabled ? LoungeTheme.cyan : LoungeTheme.textDim)
+                Text(scope.menuTitle)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(enabled ? LoungeTheme.text : LoungeTheme.textDim)
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityIdentifier("thecut.export.scope.\(scope.rawValue)")
+    }
+
+    private func confirmExportSheet() {
+        guard showExportSheet, exportSheetConfirming == false else { return }
+        let draft = exportDraft
+        guard exportChoiceDisabled(draft.scope) == false else { return }
+        exportSheetConfirming = true
+        let episode = session.projectName
+        showExportSheet = false
+        let name = TrimmerExportNaming.resolvedDisplayName(
+            field: draft.field,
+            episode: episode,
+            scope: draft.scope
+        )
+        exportCut(draft.scope, displayName: name)
     }
 
     private var board: some View {
@@ -1066,7 +1148,7 @@ struct TrimmerWorkspaceView: View {
         editor.apply(label: label, next)
     }
 
-    private func exportCut(_ scope: TrimmerExportScope) {
+    private func exportCut(_ scope: TrimmerExportScope, displayName: String) {
         guard !session.fixerRecording else {
             transport.message = "TheDecks is recording. Stop the take before exporting."
             return
@@ -1118,7 +1200,7 @@ struct TrimmerWorkspaceView: View {
             do {
                 let outcome = try await job.value
                 poll.cancel()
-                finishExport(outcome, scope: scope)
+                finishExport(outcome, scope: scope, displayName: displayName)
             } catch {
                 poll.cancel()
                 session.trimmerExporting = false
@@ -1128,10 +1210,13 @@ struct TrimmerWorkspaceView: View {
         }
     }
 
-    private func finishExport(_ outcome: TrimmerExporter.Outcome, scope: TrimmerExportScope) {
-        let title = TrimmerExportPlan.displayName(episode: session.projectName, scope: scope)
+    private func finishExport(
+        _ outcome: TrimmerExporter.Outcome,
+        scope: TrimmerExportScope,
+        displayName: String
+    ) {
         do {
-            let asset = try session.importTrimmerResult(from: outcome.fileURL, displayName: title)
+            let asset = try session.importTrimmerResult(from: outcome.fileURL, displayName: displayName)
             if TrimmerExportPlan.includesChapters(scope),
                let package = session.package,
                let audioURL = try? package.resolvedURL(for: asset) {
@@ -1142,7 +1227,7 @@ struct TrimmerWorkspaceView: View {
             try? FileManager.default.removeItem(at: outcome.fileURL)
             session.trimmerExporting = false
             exportProgress = nil
-            exportNotice = "Saved to TheValet: \(title)"
+            exportNotice = "Saved to TheValet: \(asset.displayName)"
             if outcome.peak > 1 {
                 session.alertMessage = "This cut peaks at \(TrimmerGain.peakDecibels(outcome.peak)), above 0 dB. It was saved as a 32-bit float file so nothing was clipped. TheRoof sets the final level."
             }

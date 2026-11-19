@@ -32,10 +32,6 @@ struct LimiterWorkspaceView: View {
             .padding(.top, 8)
             .padding(.bottom, 4)
 
-            if chapterSidecar.isEmpty == false {
-                chapterStrip
-            }
-
             LevelerRootView(
                 session: leveler,
                 mode: .lounge,
@@ -46,7 +42,8 @@ struct LimiterWorkspaceView: View {
                         try saveLeveledFile(url: url, displayName: name)
                     },
                     onControlsChanged: syncControls,
-                    onPlaybackWillStart: { session.stopDepotPlayback() }
+                    onPlaybackWillStart: { session.stopDepotPlayback() },
+                    belowOutput: chapterSidecar.isEmpty ? nil : AnyView(chapterCard)
                 )
             .padding(.horizontal, 8)
             .padding(.bottom, 8)
@@ -171,13 +168,40 @@ struct LimiterWorkspaceView: View {
         PodcastTimestampList.make(chapters: chapterSidecar, episodeDuration: chapterDuration)
     }
 
-    private var chapterStrip: some View {
+    /// Hidden when the selected file has no chapters file. An empty card would
+    /// sit under Export on every other file, and the column already has that room free.
+    private var chapterCard: some View {
         let list = chapterList
-        return HStack(alignment: .center, spacing: 8) {
-            Text("Chapters (\(chapterSidecar.count))")
-                .font(.system(size: 11, weight: .semibold))
+        let rows = chapterSidecar.sorted { lhs, rhs in
+            if lhs.start == rhs.start { return lhs.title < rhs.title }
+            return lhs.start < rhs.start
+        }
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Chapters (\(rows.count))")
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(LoungeTheme.text)
                 .accessibilityIdentifier("roof.chapters")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 3) {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { _, chapter in
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Text(TrimmerChapters.clock(chapter.start))
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(LoungeTheme.cyan)
+                                .frame(width: 68, alignment: .leading)
+                            Text(chapterTitle(chapter.title))
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(LoungeTheme.text)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: min(148, CGFloat(rows.count) * 20 + 4))
+            .accessibilityIdentifier("roof.chapters.list")
             Button("Copy timestamp list") { copyChapterList(list) }
                 .buttonStyle(LoungeButtonStyle())
                 .accessibilityIdentifier("roof.chapters.copy")
@@ -185,13 +209,15 @@ struct LimiterWorkspaceView: View {
                 Text(list.note)
                     .font(.system(size: 10))
                     .foregroundStyle(LoungeTheme.textDim)
-                    .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.bottom, 4)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private func chapterTitle(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Chapter" : trimmed
     }
 
     private func copyChapterList(_ list: PodcastTimestampList.Result) {
